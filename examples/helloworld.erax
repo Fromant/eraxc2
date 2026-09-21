@@ -1,0 +1,11 @@
+
+
+
+fn main(): i32 {
+
+    let text: string = "Hello, \"world\"!\nOn a new line";
+
+    std.print(text);
+
+    return 0;
+}
