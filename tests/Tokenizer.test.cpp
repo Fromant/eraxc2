@@ -261,6 +261,26 @@ TEST_CASE("C-like number suffixes are gone") {
     check_kinds(kinds(ts), {TokenType::Number, TokenType::Identifier, TokenType::EndOfFile});
 }
 
+TEST_CASE("digit separators must sit between digits") {
+    const std::vector<std::string_view> samples = {
+        "1_", "12_", "1__2", "1e10_", "1.5_", "0x1_", "0xFF_", "0b_10", "0x_1",
+    };
+    for (const auto s : samples) {
+        INFO("separator sample: " << s);
+        SourceLocation location;
+        const auto message = lex_error(s, location);
+        REQUIRE(message.find("separator") != std::string::npos);
+    }
+}
+
+TEST_CASE("digit separators still work properly placed") {
+    const std::vector<std::string_view> samples = {"1_000", "12_34_56", "1_0_0", "1e1_0", "1.5_0"};
+    for (const auto s : samples) {
+        INFO("separator sample: " << s);
+        REQUIRE(single_lexeme(s, TokenType::Number));
+    }
+}
+
 TEST_CASE("identifiers may contain digits, underscores and dollar signs") {
     const std::vector<std::string_view> samples = {"foo", "_x", "$el", "a$b", "bar1", "__"};
     for (const auto s : samples) {

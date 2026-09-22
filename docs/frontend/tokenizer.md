@@ -9,7 +9,7 @@ flowchart LR
     par["Parser → bytecode (planned)"]
     i["Tree-walking interpreter"]
     v["Bytecode VM"]
-    a["AoT via LLVM"]
+    a["AoT — native codegen"]
 
     src --> tok
     tok -->|"token stream"| par
@@ -184,7 +184,7 @@ Scanners are strict: the moment one fails, it sets the `LexError` and the whole 
 ### Char literals
 
 - Single-quoted, exactly **one character or one escape**: `'a'`, `'\n'`, `'\x41'`.
-- `''` is `empty character literal`; `'ab'` and `'a` are `character literal must contain exactly one character`; a closing quote missing at end of line is `unterminated character literal`.
+- `''` is `empty character literal`; `'ab'` and `'a` are `character literal must contain exactly one character`; a `'` with nothing after the opening quote before end of line or end of input is `unterminated character literal`.
 - Like strings, the text is the raw inner slice: `'\n'` → the two characters `\`, `n`.
 
 ### Numbers
@@ -212,6 +212,7 @@ flowchart TD
 - **Radix literals:** `0x`/`0X` (hex), `0b`/`0B` (binary), `0o`/`0O` (octal), digit separators allowed in all bases (`0xFF_FF`, `0b1_0`).
   - `0x` with no digit is `radix literal requires at least one digit`.
   - A digit that does not belong to the base (`0b12`, `0x1G`, `0o98`) is `invalid digit '<c>' in radix literal`.
+- **Separators sit between digits.** A `_` inside a number needs a digit immediately before and after it: `1_000`, `0xFF_FF`, `1e1_0`, `1.5_0` are one token, while `1_`, `0x1_`, `1__2`, `0b_10`, `0x_1` are `digit separator '_' must be placed between digits` errors.
 - **No C-style suffixes:** `64ul` lexes as `Number` `64` + `Identifier` `ul`.
 
 ### Identifiers
@@ -244,6 +245,7 @@ flowchart TD
 | `'ab'`, `'a`, `'\n a'`                           | `character literal must contain exactly one character`          | opening `'`        |
 | `0x`, `0b`, `0o` with no digit                   | `radix literal requires at least one digit`                    | the `0`            |
 | `0b12`, `0x1G`, `0o98`                           | `invalid digit '2' in radix literal`                           | the offending char |
+| `1_`, `0x1_`, `1__2`, `0b_10`                    | `digit separator '_' must be placed between digits`            | the offending `_`  |
 
 The CLI surfaces them as `file:row:col: error: message`:
 
@@ -307,5 +309,6 @@ Note the string token on line 6: the quotes are gone, `\"` and `\n` are kept raw
 
 - **Keywords remain identifiers.** Classification is a parser concern, which keeps this stage free of a keyword table.
 - **Maximal munch, dot stays alone.** Operators merge greedily while `.` never does — `?.`, `...`, and member access stay separate tokens for the parser to compose.
+- **Digit separators sit between digits.** A `_` in a number needs a digit on both sides — `1_000` is a number, `1_` / `0x_1` are lexer errors.
 - **Escapes are validated, not resolved.** String/char tokens keep raw inner text; `\x`/`\u` only need at least one hex digit here, the digit count is checked when the parser unescapes.
 - **No template literals yet.** The backtick is still an `unexpected character` error; it will allow raw newlines in strings when it lands.

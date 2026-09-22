@@ -213,7 +213,7 @@ private:
             consume();
             consume();
             const std::size_t before = pos_;
-            consume_digits(radix);
+            if (!consume_digits(radix)) return;
             if (pos_ == before) { fail("radix literal requires at least one digit", token_start_); return; }
             if (!at_end() && is_identifier_char(peek())) {
                 fail(std::string("invalid digit '") + peek() + "' in radix literal", loc_);
@@ -223,10 +223,10 @@ private:
             return;
         }
 
-        consume_digits(10);
+        if (!consume_digits(10)) return;
         if (peek() == '.' && is_digit(peek(1))) {
             consume();
-            consume_digits(10);
+            if (!consume_digits(10)) return;
         }
         if (peek() == 'e' || peek() == 'E') {
             std::size_t j = pos_ + 1;
@@ -234,21 +234,35 @@ private:
             if (j < source_.size() && is_digit(source_[j])) {
                 consume();
                 if (peek() == '+' || peek() == '-') consume();
-                consume_digits(10);
+                if (!consume_digits(10)) return;
             }
         }
         tokens_.push_back(make(TokenType::Number));
     }
 
-    void consume_digits(int radix) {
-        const auto valid = [radix](char c) {
-            if (c == '_') return true;
+    bool consume_digits(int radix) {
+        const auto digit = [radix](char c) {
             if (radix == 16) return is_hex_digit(c);
             if (radix == 2) return c == '0' || c == '1';
             if (radix == 8) return c >= '0' && c <= '7';
             return is_digit(c);
         };
-        while (!at_end() && valid(peek())) consume();
+        bool previous = pos_ > 0 && digit(source_[pos_ - 1]);
+        while (!at_end()) {
+            const char c = peek();
+            if (c == '_') {
+                if (!previous || !digit(peek(1))) {
+                    return fail("digit separator '_' must be placed between digits", loc_);
+                }
+                consume();
+                previous = false;
+                continue;
+            }
+            if (!digit(c)) break;
+            consume();
+            previous = true;
+        }
+        return true;
     }
 
     void scan_operator() {
