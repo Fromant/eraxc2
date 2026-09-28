@@ -43,7 +43,7 @@ struct Command {
 
 struct Function {
     Declaration decl;                // id + return type
-    std::vector<Declaration> params; // vregs 0..n-1, in order
+    std::vector<Declaration> params; // the leading vregs of this function's run, in order
     CFG cfg;                         // entry block is 0
 };
 
@@ -62,7 +62,7 @@ struct Program {
 ```
 
 - All collections are **ordered vectors** — deterministic iteration.
-- Print form: instant = bare integer, vreg = `$<id>`, global = `@<id>`, function = `&<id>`. Examples write each operand as `type value` (e.g. `i32 $3`, `u8 1`) and use names where it reads better.
+- Print form: instant = bare integer, vreg = `$<id>`, global = `@<id>`, function = `&<id>`, and the [VOID sentinel](#virtual-registers) renders as `VOID`. Examples write each operand as `type value` (e.g. `i32 $3`, `u8 1`) and use names where it reads better.
 - An operand's value is a **number and nothing else**. What the number means is the kind; its meaning is fully given by the operand itself — every backend reads the type from the bytes, nothing is resolved at load or execution time.
 - `Fn` operands (`&<id>`) carry the function's return type; `Global` (`@<id>`) carries the global's type.
 
@@ -122,10 +122,10 @@ Logical negation is `CMP_NE $dst $a 0`.
 
 | Op     | Shape                                   | Semantics                                                   | x64 analog |
 | ------ | --------------------------------------- | ----------------------------------------------------------- | ---------- |
-| `CALL` | `CALL dst &f a0 … an-1` (non-void) / `CALL &f a0 … an-1` (void) | Call `f`, pass `a0..an-1` as its params in order; result → `dst` / nothing | `call` |
+| `CALL` | `CALL dst &f a0 … an-1` | Call `f`, pass `a0..an-1` as its params in order; result → `dst`. A void callee is signaled by `dst` being the `VOID` sentinel: `CALL VOID &f a0 …`. | `call` |
 | `RET`  | `RET src` (non-void) / `RET` (void)     | Terminator: return `src` / nothing. A `RET` block has no edges | `ret` |
 
-`CALL` is not a special case — the callee (`&f`) is just another arg: `args[1]` when a result slot leads, `args[0]` for a void call. There are **no jump ops**; all branch flow lives on the CFG edges.
+`CALL` is not a special case — the callee (`&f`) is just `args[1]`, the result slot is `args[0]` (the `VOID` sentinel for void calls), and the arguments follow at `args[2..]`. Decoding a `CALL` never depends on the callee's signature; the *call itself* declares the shape. There are **no jump ops**; all branch flow lives on the CFG edges.
 
 ## Control flow
 
@@ -161,17 +161,18 @@ Execution: run a block's commands in order, then follow its exit — the single 
 
 ## Virtual registers
 
-- Dense per-function ids. Params occupy `0..n-1` in declaration order.
-- **One frame per call.** A function's vreg ids describe its call frame; every `CALL` sets up a fresh frame, copying the arguments into params `0..n-1`. Recursion and mutual recursion are therefore ordinary calls. Where a frame lives — memory stack, heap, or fully inlined — is a backend choice.
-- **Reaching definitions** is the whole discipline (deliberately non-SSA, no phis): a vreg read in a block must be defined on *every* path from entry to it. Params and globals count as defined at entry.
+- **One global namespace.** VReg ids are unique program-wide; each function owns a **contiguous run of ids**, its params in the run's leading slots. Once `&1` takes `$2..$3`, the next function takes the next ids — `&2` owns `$4..$5`, `&3` owns `$6..$8`, … — and no function ever touches another's run. Every function's frame size is therefore a compile-time constant.
+- **A stack of frames.** A function's run describes *one frame*. Every `CALL` pushes a fresh frame sized to the callee's run and copies the arguments into its leading slots; `RET` pops it. Recursion and mutual recursion are ordinary calls — each invocation reads its own frame. Where frames live (memory stack, heap, fully inlined) is a backend choice.
+- **The `VOID` sentinel.** `Operand{VReg, Void, u64(-1)}` is a phantom vreg that names "no slot". As a `CALL` result it means "this callee returns nothing, discard". It may appear *only* there — the validator rejects it anywhere else.
+- **Reaching definitions** is the whole discipline (deliberately non-SSA, no phis): a vreg read in a block must be defined on *every* path from entry to it. Params and globals count as defined at entry. The `VOID` sentinel takes no part in definitions.
 - Every expression temporary is a fresh vreg; a named local is one vreg, writable many times.
 
 ## Calls
 
 `CALL` is defined by what it produces, not by how a backend runs it.
 
-> Executing `CALL [$d &f $a0 … $an-1]` behaves exactly as if `f`'s CFG were pasted in place: `$a0..$an-1` fill `f`'s params `0..n-1` in order, its other vregs are fresh, and when it reaches `RET`, the returned value is written to `$d`. A void call is `CALL [&f $a0 …]` — no result slot.
-> A backend may implement this as a real stack frame, recursion, or full inlining — the contract is only that the observable result matches.
+> Executing `CALL [$d &f $a0 … $an-1]` behaves exactly as if `f`'s CFG were pasted in place with fresh (stacked) frames: `$a0..$an-1` fill `f`'s params in order, its other vregs are a fresh frame, and when it reaches `RET`, the returned value is written to `$d`. A void call writes the `VOID` sentinel instead of `$d`: `CALL [VOID &f $a0 …]` — no value comes back.
+> A backend may implement this as a real stack frame or full inlining — the contract is only that the observable result matches.
 
 The caller's argument vregs are untouched (the callee reads copies of the values). Argument order is the written order, so reordering is free.
 
@@ -179,6 +180,12 @@ The caller's argument vregs are untouched (the callee reads copies of the values
 
 ```
 CALL [i32 $3, &add3, i32 $1, i32 1, i32 $0]   ; r = add3(b, 1, a) — arg types are on the call
+```
+
+A void call — say a helper `log(x: i32)` with no return value — states its own shape with the sentinel:
+
+```
+CALL [VOID &log, i32 $3]                      ; VOID dst — no value comes back; &log must return void
 ```
 
 **Entrypoint**: `Program::entrypoint` — zero params, returns `i32`. No arguments in, process exit code out.
@@ -207,7 +214,7 @@ Cross-backend invariants. Every value in this contract is either defined here or
 
 | Backend     | Input           | Notes                                                                                |
 | ----------- | --------------- | ------------------------------------------------------------------------------------ |
-| Interpreter | JIR, in-process | A call frame is a plain array of slots indexed by vreg id; `CALL` allocates a fresh frame and copies the arguments in. |
+| Interpreter | JIR, in-process | A call frame is a plain array sized to the callee's vreg run, addressed by the local index (global id minus the run's base); `CALL` pushes a fresh frame and copies the arguments into the leading slots. |
 | VM          | `.jir` file     | The same engine, same frame semantics, running from a file. No JIT — the file *is* the program. |
 | AoT         | JIR → native    | Codegen concerns (instruction selection, frame layout, register allocation) are backend-internal and not part of this contract. |
 
@@ -220,7 +227,7 @@ Runs on every `Program` before any backend sees it:
 1. Entry block is 0; every block reachable; every edge's `from`/`to` valid; 0–2 outgoing edges per block; a two-edge block has exactly one conditional edge; a block has no outgoing edges iff it ends in `RET`; no jumps as ops.
 2. Commands: arity and operand roles match the op table; operand types are the explicit ones on each operand; ops requiring same-type operands get them, no implicit conversions.
 3. Definitions: every vreg read has a reaching definition from entry; every vreg has one consistent type across all its reads and writes.
-4. Calls: the callee — the `Fn` operand at `args[0]` for a void call, `args[1]` when a result slot leads — names a valid function; the remaining args are the arguments — count equals the callee's param count, arg types match, every arg vreg is defined; the result slot matches the callee's return type (`void` vs not).
+4. Calls: `args[1]` is the callee — a `Fn` operand naming a valid function — and `args[2..]` the arguments: count equals the callee's param count, arg types match, every arg vreg is defined. `args[0]` is the result slot: the `VOID` sentinel iff the callee returns void — a sentinel anywhere else is an error, and a non-void `dst` must match the callee's return type.
 5. Program: entrypoint exists, zero params, `i32` return.
 6. Init CFGs: the same rules as function CFGs, zero params.
 
