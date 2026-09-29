@@ -190,6 +190,38 @@ TEST_CASE("a constant expression is exact, and its value must fit") {
     CHECK(parse_error("fn main(): i32 { let x: i32 = 65536 * 65536; return 0; }") != "");
 }
 
+TEST_CASE("a constant above i64max is a bit pattern, not a value") {
+    // A constant is written in the `i64` range, so one wider than that has no value
+    // the parser can name -- only bits, and a fold at the operand width. The
+    // distinction is the whole reason there are two ways to fold.
+    CHECK(folded_bits("18446744073709551615", "u64") == 0xFFFFFFFFFFFFFFFFULL);
+    // Arithmetic on it wraps at 64 bits, which is a pattern, not an overflow: there is
+    // no value here to have left the range.
+    CHECK(folded_bits("18446744073709551615 + 1", "u64") == 0);
+    CHECK(folded_bits("18446744073709551615 * 2", "u64") == 0xFFFFFFFFFFFFFFFEULL);
+    // An operation on the pattern still reports a division it cannot do, because the
+    // trap is the machine's, and it is reached on the bit path rather than the exact one.
+    CHECK(parse_error("fn main(): i32 { let x: u64 = 18446744073709551615 / 0; return 0; }") ==
+          "division by zero in a constant expression");
+    // A pattern has no value to be out of range, so it is not range-checked: it goes
+    // into the position at the width the position asks for.
+    CHECK(folded_bits("4294967296", "u64") == 4294967296ULL);
+    // ... but a value that is exact *is* checked, and 4294967296 is one.
+    CHECK(parse_error("fn main(): i32 { let x: u8 = 4294967296; return 0; }") == "this constant does not fit u8");
+    // Unsigned division and modulus on a pattern are the machine's, so the operand
+    // type picks the form rather than the value's sign: a bit pattern of `u64max`
+    // is a large unsigned value, not -1.
+    CHECK(folded_bits("18446744073709551615 / 2", "u64") == 0x7FFFFFFFFFFFFFFFULL);
+    CHECK(folded_bits("18446744073709551615 / 1000", "u64") == 18446744073709551ULL);
+    CHECK(folded_bits("18446744073709551615 % 1000", "u64") == 615);
+    // ... while the same pattern read as a signed value is -1, and the position's
+    // own type is what chooses. A value that is not exact cannot be a negative one
+    // an unsigned type could hold, so this is the one place the two forms differ.
+    CHECK(folded_bits("18446744073709551615 / 2", "i64") == 0x7FFFFFFFFFFFFFFFULL);
+    // A comparison on a pattern is on the bits, which is the same either way.
+    CHECK(folded_bits("18446744073709551615 > 0", "bool") == 1);
+}
+
 TEST_CASE("a constant expression is one the parser can compute") {
     // A read is not one, and a call is not one.
     CHECK(parse_error("let a: i32 = x; fn main(): i32 { return 0; }") == "undeclared identifier 'x'");

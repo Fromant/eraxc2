@@ -152,12 +152,20 @@ ConstInt from_bits(std::uint64_t bits, Type type) {
     return constant;
 }
 
-/// The exact value of a constant fold, when there is one. `std::nullopt` means
-/// the result is only known as a wrapping bit pattern, which happens when a
-/// shift or a product leaves the `i64` range a constant is written in.
-std::expected<std::optional<ConstInt>, ParseError> fold_exact(Op op, SemType operand, SemType result,
-                                                             const ConstInt& a, const ConstInt& b,
-                                                             SourceLocation location) {
+/// The exact value of a constant expression, when it has one. This is a question
+/// about the source, not a fold: `fold::binary` answers in bit patterns and always
+/// has one, but the two answers are not the same. `0x80000000` is a value the
+/// source can name, or it is a value that left the `i64` range a constant is
+/// written in and wrapped, and only the value tells those apart.
+///
+/// So there are three answers, not two: the value, `std::nullopt` when only the
+/// bits are known (a shift or a product out of `i64` range), or a `ParseError`
+/// where the expression cannot be a constant at all. The value is what a range
+/// check, a folded `if`, and a division's sign all read, which is why the bits
+/// cannot stand in for it.
+std::expected<std::optional<ConstInt>, ParseError> exact_value(Op op, SemType operand, SemType result,
+                                                              const ConstInt& a, const ConstInt& b,
+                                                              SourceLocation location) {
     const Type operand_type = lower(operand);
     const Type result_type = lower(result);
     std::int64_t value = 0;
@@ -416,10 +424,15 @@ ExpressionParser::result ExpressionParser::combine(std::string_view op, Value& l
     if (op == "+") return apply(Op::Add, left.type, left, right, location);
     if (op == "-") return apply(Op::Sub, left.type, left, right, location);
     if (op == "*") return apply(Op::Mul, left.type, left, right, location);
-    // A placeholder has no type yet, and an exact fold folds numbers rather than bits, so
-    // it is done as the signed form. The two only differ for a negative operand, and a
-    // negative value is not one an unsigned type can be retyped to.
-    const bool arithmetic = left.retypeable || is_signed(left.type);
+    // A placeholder has no type yet, and an exact value folds as a number rather
+    // than as bits, so it is folded in the signed form. The two forms only differ
+    // for a negative operand, and a negative value is not one an unsigned type can
+    // be retyped to. A placeholder above `i64max` is not such a value: it has only
+    // a bit pattern, and a pattern is not signed or unsigned on its own -- `u64max`
+    // as bits is a large unsigned value, not -1. There the type decides, as it
+    // does everywhere else.
+    const bool exact_placeholder = left.retypeable && left.constant && left.constant->exact_known;
+    const bool arithmetic = exact_placeholder || is_signed(left.type);
     if (op == "/") return apply(arithmetic ? Op::Sdiv : Op::Udiv, left.type, left, right, location);
     if (op == "%") return apply(arithmetic ? Op::Smod : Op::Umod, left.type, left, right, location);
     if (op == "<<") return apply(Op::Shl, left.type, left, right, location);
@@ -442,11 +455,15 @@ ExpressionParser::result ExpressionParser::apply(Op op, SemType result, const Va
         const ConstInt& b = *right.constant;
         std::optional<ConstInt> folded;
         if (a.exact_known && b.exact_known) {
-            auto exact = fold_exact(op, operand_semtype, result, a, b, location);
+            auto exact = exact_value(op, operand_semtype, result, a, b, location);
             if (!exact) return std::unexpected(exact.error());
             folded = *exact;
         }
         if (!folded) {
+            // The bits are all that is left to fold: either an operand was already
+            // only a pattern, or the value outgrew the range a constant is written in.
+            // A division still has no answer here, and an overflow is a compile error
+            // even though the same operation only wraps when it runs.
             const middleend::fold::Result raw = middleend::fold::binary(op, operand_type, a.bits, b.bits);
             if (raw.failure) {
                 if (*raw.failure == middleend::fold::Failure::DivisionByZero) {
