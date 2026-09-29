@@ -101,6 +101,7 @@ Result shift(Op op, Type type, std::uint64_t left, std::uint64_t right) noexcept
 Range range_of(Type type) noexcept {
     if (!is_integer(type)) return {0, -1};
     if (is_signed(type)) return {signed_min(type), signed_max(type)};
+    if (size_of(type) == 8) return {0, std::numeric_limits<std::int64_t>::max()};
     return {0, static_cast<std::int64_t>(narrow(~std::uint64_t{0}, type))};
 }
 

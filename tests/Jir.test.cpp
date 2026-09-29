@@ -313,6 +313,29 @@ TEST_CASE("recycle hands a scope's cells back") {
     CHECK(first == 0);
 }
 
+TEST_CASE("a recycled cell is only reused at its own type") {
+    // One vreg id means one type for the whole function, so a cell allocated
+    // as i32 can never back an i8.
+    CfgBuilder builder;
+    const std::uint64_t low_water = builder.alloc(Type::I32);
+    builder.alloc(Type::I32);
+    builder.recycle(low_water);
+
+    CHECK(builder.alloc(Type::I8) == 2);
+    CHECK(builder.alloc(Type::I32) == low_water);
+}
+
+TEST_CASE("a rollback releases the cells it had handed out") {
+    CfgBuilder builder;
+    const auto mark = builder.mark();
+    const std::uint64_t rolled_back = builder.alloc(Type::I32);
+    builder.recycle(rolled_back);
+    builder.rollback(mark);
+
+    // The id is unallocated again, and hands out once more as a fresh cell.
+    CHECK(builder.alloc(Type::I32) == rolled_back);
+}
+
 TEST_CASE("folding wraps like the machine") {
     CHECK(fold::binary(Op::Add, Type::I8, 0x7F, 1).value.value() == 0x80);
     CHECK(fold::binary(Op::Sub, Type::U8, 0, 1).value.value() == 0xFF);
@@ -367,7 +390,8 @@ TEST_CASE("type ranges bound the literal checks") {
     CHECK(fold::range_of(Type::U8).max == 255);
     CHECK(fold::range_of(Type::U16).max == 65535);
     CHECK(fold::range_of(Type::I32).max == 2147483647);
-    CHECK(fold::range_of(Type::U64).max == -1);  // 2^64-1 does not fit an int64
+    // 2^64-1 is not an int64, so u64's range stops at i64max.
+    CHECK(fold::range_of(Type::U64).max == std::numeric_limits<std::int64_t>::max());
     CHECK(fold::range_of(Type::Void).max < 0);
 }
 

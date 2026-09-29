@@ -29,8 +29,10 @@ struct Range {
     std::int64_t max;
 };
 
-/// The representable value range of a type: `0..max` unsigned, `min..max`
-/// signed. `Type::Void` has none.
+/// The value range of a type as an `int64` pair: `0..max` unsigned, `min..max`
+/// signed. `u64`'s maximum is not an `int64`, so its `max` is capped at
+/// `i64max` and a range check has to allow the wider values itself;
+/// `Type::Void` has none, reported as an empty range.
 Range range_of(Type type) noexcept;
 
 /// Folds a binary op over two raw bit patterns. Comparisons produce `i8` 0/1.

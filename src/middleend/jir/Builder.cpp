@@ -13,7 +13,23 @@ CfgBuilder::CfgBuilder(std::size_t param_count) {
     cfg_.blocks.emplace_back();
 }
 
+CfgBuilder::CfgBuilder(std::vector<Type> params) {
+    for (std::size_t index = 0; index < params.size(); ++index) vreg_types_.push_back(params[index]);
+    next_vreg_ = params.size();
+    frame_size_ = std::max<std::size_t>(1, params.size());
+    cfg_.blocks.emplace_back();
+}
+
 std::uint64_t CfgBuilder::alloc(Type type) {
+    // A recycled cell is only reusable at its own type: one vreg id means one
+    // type across the whole function.
+    for (auto cell = free_.begin(); cell != free_.end(); ++cell) {
+        if (vreg_types_[*cell] == type) {
+            const std::uint64_t offset = *cell;
+            free_.erase(cell);
+            return offset;
+        }
+    }
     const std::uint64_t offset = next_vreg_++;
     vreg_types_.resize(next_vreg_, Type::Void);
     vreg_types_[offset] = type;
@@ -75,7 +91,15 @@ bool CfgBuilder::terminated() const noexcept {
 }
 
 void CfgBuilder::recycle(std::uint64_t high_water) noexcept {
-    next_vreg_ = high_water;
+    // The cells stay allocated — they are on the free list, not unallocated —
+    // so the frame keeps its high-water mark. Only their ids are handed back,
+    // and a cell that is already free is left alone: closing a scope recycles
+    // the cells of every scope inside it, one range at a time.
+    for (std::uint64_t offset = high_water; offset < next_vreg_; ++offset) {
+        if (vreg_types_[offset] == Type::Void) continue;
+        if (std::find(free_.begin(), free_.end(), offset) != free_.end()) continue;
+        free_.push_back(offset);
+    }
 }
 
 CfgBuilder::Mark CfgBuilder::mark() const noexcept {
@@ -93,6 +117,10 @@ void CfgBuilder::rollback(Mark mark) noexcept {
     current_ = mark.block;
     next_vreg_ = mark.vregs;
     vreg_types_.resize(mark.vregs, Type::Void);
+    // A rolled-back cell was never really allocated, so it cannot be free.
+    free_.erase(std::remove_if(free_.begin(), free_.end(),
+                               [mark](std::uint64_t offset) { return offset >= mark.vregs; }),
+                free_.end());
 }
 
 void CfgBuilder::prune() {

@@ -20,9 +20,13 @@ class CfgBuilder {
 public:
     /// \p param_count cells are already occupied by the params, in `$0..n-1`.
     explicit CfgBuilder(std::size_t param_count = 0);
+    /// The same, with each param's type recorded in its cell.
+    explicit CfgBuilder(std::vector<Type> params);
 
-    /// A fresh frame cell of type \p type. Vregs are never reused within a
-    /// scope; `recycle` is what hands a scope's cells back.
+    /// A frame cell of type \p type, reusing a recycled cell of that same type
+    /// when there is one — a vreg id means one type for the whole function
+    /// (`docs/middleend/JIR.md#validator`), so a cell is only ever reused at its
+    /// own type. Ids are never reused within a scope; `recycle` hands them back.
     std::uint64_t alloc(Type type);
 
     /// The type recorded for a vreg, or `Type::Void` if it has none.
@@ -57,8 +61,12 @@ public:
     /// never empty.
     std::size_t frame_size() const noexcept { return frame_size_; }
 
-    /// Hands a scope's cells back for reuse by later scopes. Ids that any
-    /// emitted command still names must not be recycled.
+    /// The first id no scope has handed out yet: a scope's high-water mark, and
+    /// everything from here on is that scope's to recycle.
+    std::uint64_t next_vreg() const noexcept { return next_vreg_; }
+
+    /// Hands a scope's cells back for reuse by later scopes, each at its own
+    /// type. Ids that any emitted command still names must not be recycled.
     void recycle(std::uint64_t high_water) noexcept;
 
     struct Mark {
@@ -90,6 +98,8 @@ private:
     Cfg cfg_;
     std::size_t current_ = 0;
     std::vector<Type> vreg_types_;
+    /// Recycled cell ids, each still carrying its own recorded type.
+    std::vector<std::uint64_t> free_;
     std::uint64_t next_vreg_ = 0;
     std::size_t frame_size_ = 1;
 };
