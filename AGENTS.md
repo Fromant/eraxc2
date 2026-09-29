@@ -37,7 +37,7 @@ No lint/formatter/typecheck config exists. `-Wall -Wextra` apply only to GNU/Cla
 - Keywords are **`Identifier` tokens** classified by the parser — do not add token kinds or a keyword table to the tokenizer.
 - Operators are maximal-munch runs validated against a whitelist at parse (`a+++++b` errors). Dots are never operator chars, so `?.`/`...` compose at parse; `::` lexes as two Colons and is banned (dot namespaces).
 - JIR: `CALL dst &f a0…` — `args[0]`=result slot, `args[1]`=callee, `args[2..]`=args; `EMPTY` sentinel is the only legal void result slot; shift counts mask to operand width; arithmetic wraps; div-by-zero is process death (no UB anywhere).
-- JIR prints a type with every operand (`i32 $3`, `u8 1`, `i32 @0`) so an instruction is self-describing.
+- JIR prints a type with every cell operand (`i32 $3`, `u8 1`), but not with a `@k`/`&k` id, which already names a cell the program table types.
 - `bool`/`char` lower to `i8`; no implicit conversions; assignment is a statement (not an expression); `break`/`continue` only in loops.
 - A literal takes the type of the position it fills, and only a *lone* one: the expected type is not threaded into the operands of an operator, which is what keeps `1 < 2` a `bool` and `let x: i32 = 1 + 2` an `i32` while `let x: bool = 1;` fails.
 - A folded test picks one CFG edge, so a constant `while (false)` drops its body and a constant `if` decides the definite-assignment intersection.

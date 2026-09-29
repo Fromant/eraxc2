@@ -67,8 +67,7 @@ additive       = multiplicative { ( "+" | "-" ) multiplicative } ;
 multiplicative = unary { ( "*" | "/" | "%" ) unary } ;
 unary          = ( "-" | "!" | "~" ) unary | postfix ;
 postfix        = primary | call ;
-call           = dotted-name "(" [ expr { "," expr } ] ")" ;
-dotted-name    = IDENT { "." IDENT } ;
+call           = IDENT "(" [ expr { "," expr } ] ")" ;
 primary        = INT | CHAR | "true" | "false" | IDENT | "(" expr ")" ;
 
 lvalue         = IDENT ;
@@ -81,7 +80,8 @@ Notes:
 
 - Every non-void `primary` `IDENT` is a **read** of a variable or global. An `IDENT` naming a parameter is also a read.
 - A `condition` is the grammar shape of every test (`if`, `while`, `do`'s trailing `while`, and `for`'s cond): an `expr` whose type must be `bool`. Which expressions are `bool` is a typing rule in `expressions.md`, so the grammar only pins the shape here.
-- `dotted-name` followed by `(` is a call of a (possibly namespaced) function. A dotted name **not** followed by `(` is a syntax error — there is no member access in v1.
+- A call names its callee with a bare `IDENT` followed by `(`. A `.` after a name is a syntax error:
+  v1 has no member access and no namespaces (`TODO.md` carries dot namespaces as future work).
 - `[` `]` lex but are not part of v1 (arrays are future work); using them is a syntax error.
 - `const-expr` is enforced additionally: it must be constant-foldable and contain no calls.
 

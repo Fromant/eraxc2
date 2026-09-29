@@ -7,7 +7,8 @@ Status: **WIP.** The lexer and the parser exist; the IR is specified and impleme
 - [x] Tokenizer (`src/frontend/tokenizer/`), pinned by `tests/Tokenizer.test.cpp`.
 - [x] Parser: single pass, source → JIR, no AST (`src/frontend/parser/`), pinned by `tests/Parser.test.cpp`. Statements, scopes, definite assignment, CFG lowering, constant folding, and diagnostics are in; `--jir` prints the result.
 - [x] Keyword classification (identifiers in the lexer; the parser decides).
-- [ ] String/char unescaping — `char` literals are done, `string` waits on the type existing.
+- [x] `char` literal unescaping — `\n`, `\t`, `\0`, `\\`, `\'`, `\xNN`, and `\uNNNN` decode in the parser.
+- [ ] `string` unescaping — waits on the `string` type existing.
 - [ ] `?.`/member access, `?:`, spread, ranges — the tokens compose at parse; the language side is "Beyond v1" below.
 
 ## Beyond v1 (future work)

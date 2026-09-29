@@ -31,8 +31,12 @@ docs/
   middleend/JIR.md         the shared IR contract
 TODO.md                    roadmap, serialization & format versioning
 tests/
-  Tokenizer.test.cpp       Catch2 test suite
-  Parser.test.cpp          parser tests: accepted programs and the JIR they lower to
+  Tokenizer.test.cpp       lexer tests
+  ParserTest.hpp           shared parser-test helpers (parse_ok / parse_error / ops_of)
+  Parser.test.cpp          parser headline cases, accepted programs and their JIR
+  Parser.literals.test.cpp literals, constant folding, and type ranges
+  Parser.globals.test.cpp  globals, declarations, control flow, and CFG lowering
+  Parser.errors.test.cpp   rejection messages and error locations
   Jir.test.cpp             JIR types, builder, folding, and validator
 examples/                  .erax programs — the syntax vision (evolving)
 main.cpp                   CLI: tokenizes a file or stdin, or lowers it to JIR
@@ -60,6 +64,20 @@ Or lower a program to IR — errors are reported as `file:row:col: error: text` 
 ```
 echo 'fn main(): i32 { return 0; }' | ./build/eraxc.exe --jir
 ```
+
+## Coverage
+
+The suite is instrumented with gcov, and one command runs it and prints a per-source table
+(GCC or Clang; the first configure needs network for Catch2):
+
+```
+cmake -S . -B build-cov -G Ninja -DERAX_COVERAGE=ON
+cmake --build build-cov --target coverage
+```
+
+The report lands in `build-cov/coverage.txt`. `branches visited` counts a branch once either
+outcome runs; `taken both ways` counts it only when both do, so that column is the one to
+push toward 100%.
 
 ## Example
 
