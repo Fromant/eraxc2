@@ -14,6 +14,9 @@ endif()
 
 add_library(erax
     src/frontend/tokenizer/Tokenizer.cpp
+    src/middleend/jir/Jir.cpp
+    src/middleend/jir/Builder.cpp
+    src/middleend/jir/Fold.cpp
 )
 target_include_directories(erax PUBLIC src)
 

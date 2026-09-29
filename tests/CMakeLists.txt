@@ -8,7 +8,10 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(Catch2)
 
-add_executable(erax_tests Tokenizer.test.cpp)
+add_executable(erax_tests
+    Tokenizer.test.cpp
+    Jir.test.cpp
+)
 target_link_libraries(erax_tests PRIVATE erax Catch2::Catch2WithMain)
 
 add_test(NAME erax_tests COMMAND erax_tests)
