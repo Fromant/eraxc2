@@ -97,16 +97,43 @@ std::uint64_t truncate(std::uint64_t bits, Type type) noexcept {
     return bits & ((std::uint64_t{1} << width) - 1);
 }
 
+/// The magnitude of `value`, without negating `i64min`, which has no positive
+/// counterpart and would not survive the round trip.
+std::uint64_t magnitude(std::int64_t value) noexcept {
+    return value < 0 ? ~static_cast<std::uint64_t>(value) + 1 : static_cast<std::uint64_t>(value);
+}
+
+/// Whether the product is a `u64`, the widest type a constant can be carried in.
+/// A product that leaves the `i64` range is still a `u64` until it leaves that one:
+/// `2^62 * 2^62` is `i64min` read as bits, and `2^32 * 2^32` is in no type at all.
+bool fits_u64(std::int64_t a, std::int64_t b) noexcept {
+    if (a == 0 || b == 0) return true;
+    const std::uint64_t left = magnitude(a);
+    const std::uint64_t right = magnitude(b);
+    const std::uint64_t limit = (a < 0) != (b < 0) ? std::uint64_t{1} << 63 : ~std::uint64_t{0};
+    return left <= limit / right;
+}
+
+/// A constant is written in the `i64` range, so folding it asks whether the result
+/// is still in that range. The test is on the operands' magnitudes, not on a round
+/// trip through the result: `i64max + 1` and `i64min - 1` both come back as
+/// themselves, so a round trip cannot tell them from a sum that fitted.
 bool checked_add(std::int64_t a, std::int64_t b, std::int64_t& out) noexcept {
-    const std::uint64_t sum = static_cast<std::uint64_t>(a) + static_cast<std::uint64_t>(b);
-    out = static_cast<std::int64_t>(sum);
-    return static_cast<std::uint64_t>(out) == sum;
+    constexpr std::int64_t max = std::numeric_limits<std::int64_t>::max();
+    constexpr std::int64_t min = std::numeric_limits<std::int64_t>::min();
+    if (b > 0 && a > max - b) return false;
+    if (b < 0 && a < min - b) return false;
+    out = a + b;
+    return true;
 }
 
 bool checked_sub(std::int64_t a, std::int64_t b, std::int64_t& out) noexcept {
-    const std::uint64_t difference = static_cast<std::uint64_t>(a) - static_cast<std::uint64_t>(b);
-    out = static_cast<std::int64_t>(difference);
-    return static_cast<std::uint64_t>(out) == difference;
+    constexpr std::int64_t max = std::numeric_limits<std::int64_t>::max();
+    constexpr std::int64_t min = std::numeric_limits<std::int64_t>::min();
+    if (b > 0 && a < min + b) return false;
+    if (b < 0 && a > max + b) return false;
+    out = a - b;
+    return true;
 }
 
 bool checked_mul(std::int64_t a, std::int64_t b, std::int64_t& out) noexcept {
@@ -114,13 +141,18 @@ bool checked_mul(std::int64_t a, std::int64_t b, std::int64_t& out) noexcept {
         out = 0;
         return true;
     }
-    if ((a == -1 && b == std::numeric_limits<std::int64_t>::min()) ||
-        (b == -1 && a == std::numeric_limits<std::int64_t>::min())) {
-        return false;
-    }
-    const std::uint64_t product = static_cast<std::uint64_t>(a) * static_cast<std::uint64_t>(b);
-    out = static_cast<std::int64_t>(product);
-    return static_cast<std::uint64_t>(out) == product;
+    const std::uint64_t left = magnitude(a);
+    const std::uint64_t right = magnitude(b);
+    // A negative result reaches one further than a positive one, because the sign
+    // bit is not a magnitude: `i64min` is `-(2^63)`, so `-(2^63)` is a value and
+    // `+(2^63)` is not.
+    const std::uint64_t limit = (a < 0) != (b < 0) ? std::uint64_t{1} << 63
+                                                   : (std::uint64_t{1} << 63) - 1;
+    if (left > limit / right) return false;
+    const std::uint64_t product = left * right;
+    out = (a < 0) != (b < 0) ? static_cast<std::int64_t>(~product + 1)
+                             : static_cast<std::int64_t>(product);
+    return true;
 }
 
 /// The number a folded bit pattern stands for, sign-extended for a signed type.
@@ -171,9 +203,24 @@ std::expected<std::optional<ConstInt>, ParseError> exact_value(Op op, SemType op
     std::int64_t value = 0;
 
     switch (op) {
+        // Leaving the `i64` range is not the same as leaving every range. An `i64` is
+        // a value a source can write, so an `i64` result is what a constant is checked
+        // against; a result above it is still a `u64` and is carried as bits until
+        // the position says which type it is. A result above *that* -- `2^32 * 2^32`
+        // is `2^64` -- is in no type at all, so it is an error here rather than a
+        // pattern that wraps to a number which looks like a legitimate one.
         case Op::Add: if (!checked_add(a.exact, b.exact, value)) return std::optional<ConstInt>{}; break;
         case Op::Sub: if (!checked_sub(a.exact, b.exact, value)) return std::optional<ConstInt>{}; break;
-        case Op::Mul: if (!checked_mul(a.exact, b.exact, value)) return std::optional<ConstInt>{}; break;
+        case Op::Mul:
+            if (!checked_mul(a.exact, b.exact, value)) {
+                if (!fits_u64(a.exact, b.exact)) {
+                    // The result is in no type, so there is no type to name here --
+                    // the position's own is the one the reader wrote.
+                    return std::unexpected(at("this constant expression is too large for any type", location));
+                }
+                return std::optional<ConstInt>{};
+            }
+            break;
         case Op::Sdiv:
         case Op::Smod:
             if (b.exact == 0) {
@@ -408,6 +455,14 @@ ExpressionParser::result ExpressionParser::combine(std::string_view op, Value& l
 
     if (op == "==" || op == "!=") {
         return apply(op == "==" ? Op::CmpEq : Op::CmpNe, SemType::Bool, left, right, location);
+    }
+    // A `bool` is not an integer, so it has no order: it is a type of its own that
+    // resolves to `i8` in the IR, where it is the same cell and the comparison would
+    // be well defined. That is exactly why the rule is here and not left to the
+    // machine. Equality is the exception, and it is answered above.
+    if (!is_integer(left.type)) {
+        return std::unexpected(
+            at(quoted + " is not defined for " + std::string{to_string(left.type)}, location));
     }
     if (op == "<") return apply(Op::CmpLt, SemType::Bool, left, right, location);
     if (op == "<=") return apply(Op::CmpLe, SemType::Bool, left, right, location);
