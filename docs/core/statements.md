@@ -11,11 +11,13 @@ The statement grammar is in `language.md#grammar`; this file gives each statemen
 - **`if` / `else`.** The condition (`condition` in the grammar) must be `bool`. `else` binds to the nearest `if`; `else if` is spelling for a nested `if`.
 - **`while` / `do` / `for`.** Conditions (`condition` in the grammar) are `bool`. `for` is C-shaped: `for (init; cond; step)` — *init* is a `let` (scoped to the loop; `= expr` is optional, as with any `let`) or an assignment, *cond* is `bool`, *step* is any expression. All three clauses are optional (a bare `for(;;)` is an infinite loop).
 - **`break` / `continue`.** Legal only inside a loop body (dynamically nested in `while`/`do`/`for`); `break` in a non-loop is an error. In the example, `break` inside an `if` inside a `for` is fine.
+- **Unreachable code is dropped, not rejected.** A statement that cannot execute — one after a `return`, or one in a loop whose body never falls through — is still parsed and fully checked, but it produces no code: the IR drops the blocks no edge can reach (see `docs/middleend/JIR.md`).
 
 ## Functions
 
 - Parameters are `IDENT : type`, comma-separated; the return type is `[ ":" type ]` — absent means `void`.
 - A function body is a single `block`. Recursion is ordinary: every call gets its own frame (see `docs/middleend/JIR.md`).
+- **Declaration order is free for functions.** A function may be called before it is declared, and may call itself. Only global initializers are restricted, to globals declared earlier.
 - Arguments are passed **by value** and evaluate left to right; the callee reads copies in its own frame.
 - A function sees only its own parameters/locals and the globals — never another function's locals.
 - **Entry point.** The program must declare exactly one `fn main(): i32` (no parameters). Its return value is the process exit code, and it runs after all global initializers have run. `main` is a rule on the *name* (it is not a reserved word); no other function may be named `main`.

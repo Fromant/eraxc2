@@ -13,6 +13,8 @@ Status: **WIP.** Only the lexer exists. The tokenizer spec is `docs/frontend/tok
 Source-level additions that are out of scope for v1 — listed here so the language contract (`docs/core/`) stays scope-clean:
 
 - `?:` (ternary), optional chaining (`?.`), spread (`...`), ranges, `::` namespace resolution (dots remain the namespace syntax), `const`/immutability, implicit widening.
+- Short-circuit `&&` / `||` — v1 evaluates both operands (see `docs/core/expressions.md`). It needs an op the current table has none of (a conditional-jump or select form), so it is a `.jir` version bump.
+- An `unreachable code` diagnostic — v1 parses dead code, checks it, and drops it.
 - Strings and string literals, floats — and with them the stdlib (`std.print`). `examples/helloworld.erax` is aspirational on `string`.
 - Machine-level futures — arrays/indices, pointers/references, objects/classes, closures — live in the JIR section below.
 

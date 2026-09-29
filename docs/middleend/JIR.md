@@ -30,6 +30,7 @@ Every operand is `(kind, type, value)` — self-describing; nothing is resolved 
 
 - A `VReg` id is an **offset within the current frame**, always `0 ≤ k < frame_size`.
 - A `Fn` operand carries the callee's return type; a `Global` operand carries the global's type.
+- An `Instant`'s value is the **raw bit pattern** of the cell it fills; its printed form is interpreted with the type's signedness (`i8 0xFF` prints as `i8 -1`).
 - The `EMPTY` sentinel is `(VReg, void, u64(-1))` — a phantom offset that names "no cell". It is legal only as the result slot of a `CALL`.
 
 ## Types
@@ -42,7 +43,7 @@ Every operand is `(kind, type, value)` — self-describing; nothing is resolved 
 | `i32` `u32`    | 4     |
 | `i64` `u64`    | 8     |
 
-- `bool`/`char` lower to `i8`.
+- `bool` lowers to `i8`; `char` lowers to `u8` — it is a `0–255` byte, so its comparisons and its `/ % << >>` are unsigned.
 - No implicit conversions: where an op requires matching types they must match exactly (the validator enforces this).
 
 ## Frames
@@ -50,7 +51,7 @@ Every operand is `(kind, type, value)` — self-describing; nothing is resolved 
 - VReg ids address the **current frame** only: `$k` is the cell at `fp + k`.
 - A `CALL` pushes a frame of the callee's `frame_size` cells and copies the arguments into its leading slots `$0..$n-1`; a `RET` pops it. Cells are consequently **killed on return** — locals live only while their function is on the stack.
 - Recursion is ordinary: each activation has its own cells, and the same id in a nested activation addresses a different cell. The stack cost of a path is the sum of the nested frames' sizes.
-- The frame layout is static: `frame_size` is a compile-time constant per function, so every activation costs a known number of cells.
+- The frame layout is static: `frame_size` is a compile-time constant per function, so every activation costs a known number of cells. A function that uses no vregs still has `frame_size` 1 — a frame is never empty.
 
 ## Commands and control flow
 
@@ -59,7 +60,7 @@ Every operand is `(kind, type, value)` — self-describing; nothing is resolved 
   - `0` — the block ends in `RET`;
   - `1` — unconditional;
   - `2` — a branch: one edge carries a `Condition`, the other is the fallthrough.
-- A `Condition` is `(cmp, a, b)` with `cmp ∈ CMP_EQ…CMP_GE` — e.g. "`x` is nonzero" is `(CMP_NE, x, 0)`. Execution follows the edge whose condition holds, else the fallthrough.
+- A `Condition` is `(cmp, a, b)` with `cmp ∈ CMP_EQ…CMP_GE` — the same ops as the `CMP_*` commands, drawn from the one op table — e.g. "`x` is nonzero" is `(CMP_NE, x, 0)`. Execution follows the edge whose condition holds, else the fallthrough.
 - There are **no jump commands**.
 
 ## Operations
@@ -85,6 +86,8 @@ Two's-complement, wrapping. Signedness of div/mod and `SAR` comes from the opera
 | `SHL` `SHR` `SAR`  | `SHL dst a b` | shift by `b`; `SHR` logical, `SAR` arithmetic |
 
 Divide-by-zero and `iMIN / -1` terminate the process (see [semantics](#runtime-semantics)).
+
+The source's logical operators lower to these bitwise ops on `i8` 0/1 operands, where the two meanings coincide: `&&` → `AND`, `||` → `OR`, `^^` → `XOR`. All three are **eager** — both operands are always evaluated, so no expression needs control flow and every expression lives in one block.
 
 ### Comparisons
 
@@ -119,13 +122,13 @@ A void callee is signaled by `dst` being the `EMPTY` sentinel: value is discarde
 **Example.** `fn add3(x: i32, y: i32, z: i32): i32 = x + y + z`; in `main`, `a=$0`, `b=$1`, `c=$2`:
 
 ```
-CALL [i32 $3, &add3, i32 $1, i32 1, i32 $0]   ; r = add3(b, 1, a)
+CALL i32 $3 &add3 i32 $1 i32 1 i32 $0   ; r = add3(b, 1, a)
 ```
 
 A void call — a helper `log(x: i32)` — states its own shape:
 
 ```
-CALL [EMPTY &log, i32 $3]                     ; EMPTY dst — no value comes back
+CALL EMPTY &log i32 $3                  ; EMPTY dst — no value comes back
 ```
 
 ## Globals and startup
@@ -148,7 +151,7 @@ Every value is defined in this contract or the program is rejected by the valida
 
 ## Validator
 
-Runs on every `Program` before any backend sees it:
+Runs on every `Program` before any backend sees it. A producer leaves the CFG canonical: it drops the blocks no edge can reach (the parser knows which source constructs cannot run) and never lets a path fall off the end of a function.
 
 1. **CFG**: entry block is 0; every block reachable; every edge's `from`/`to` valid; 0–2 outgoing edges per block; a two-edge block has exactly one conditional edge; no outgoing edges iff the block ends in `RET`.
 2. **Commands**: arity and operand roles match the op table; operand types are the explicit ones on each operand; ops requiring same-type operands get them; no implicit conversions.

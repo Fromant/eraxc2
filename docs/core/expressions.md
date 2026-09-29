@@ -24,7 +24,7 @@ Lowest to highest (operators on the same line are left-associative):
 
 ## Typing rules
 
-- `&&` / `||` take and produce `bool` and short-circuit on the left operand. `^^` (bool XOR) also takes and produces `bool`, but cannot short-circuit — both operands are always evaluated.
+- `&&`, `||`, and `^^` (bool XOR) all take and produce `bool`, and **all three are eager — both operands are always evaluated**. They lower to the bitwise `AND`/`OR`/`XOR` on `bool`, which is the same operation for 0/1 (see `docs/middleend/JIR.md`). There is no short-circuiting in v1.
 - `!` takes `bool`. `-` and `~` take integers. Bitwise `& \| ^ << >>` take integers.
 - `==` / `!=` accept any two same-typed values; `< <= > >=` accept two same-typed integers or chars.
 - Comparisons produce `bool`; a `bool` is not an integer, so `a < b < c`, `1 + true`, and an `i32` value as a condition are type errors. A condition (the grammar's `condition` in `if`/`while`/`do`/`for`, see `language.md#grammar`) must be `bool`.

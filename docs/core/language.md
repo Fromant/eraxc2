@@ -132,6 +132,7 @@ Type names, `true`, and `false` are reserved because they carry their meaning in
 - **Scoping.** A `block` (and a `for`'s init) opens a scope; enclosing scopes are visible, inner names shadow outer ones. A name is in scope from its declaration to the end of its block. Globals are visible everywhere, including inside functions and other global initializers — but a global initializer may reference only globals **declared earlier** in the file.
 - **Definite assignment.** Every read of a variable is preceded, on every execution path, by a write (`let` initializer or an assignment). Parameters and globals always have a value. This is enforced statically; it never produces runtime behavior.
 - **Runtime arithmetic.** All integer arithmetic wraps (two's complement), exactly as the IR defines. Division/modulo truncate toward zero; `x / 0` (and `imin / -1`) terminate the process — no UB. Shift counts are masked to the operand width (`count & (width-1)`), so no shift is undefined.
+- **Logical operators are eager.** `&&`, `||`, and `^^` always evaluate both operands; there is no short-circuiting.
 - **No undefined behavior.** Anything the rules don't define — reading an undefined variable, wrong type, mismatched arity, unknown operator — is a compile-time error, not runtime behavior.
 - **Determinism.** One evaluation order (left-to-right for the given associativity/precedence), single-threaded, no implicit state; the same program behaves identically on every backend.
 
@@ -141,10 +142,12 @@ The language lowers 1:1 to JIR:
 
 | Source | JIR |
 | ------ | --- |
-| `bool`, `char` | `i8` |
+| `bool` | `i8` |
+| `char` | `u8` |
 | `i8`…`u64` | same |
 | local / param | a vreg at a frame offset |
 | global | a `@` global, zeroed then set by its init |
 | expression temps | fresh vregs |
+| `&&` `\|\|` `^^` | `AND` `OR` `XOR` on `bool` (both operands always evaluated) |
 | `if`/`while`/`do`/`for` | CFG edges + `Condition` |
 | function call | `CALL` |
