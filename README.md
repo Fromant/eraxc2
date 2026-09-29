@@ -20,7 +20,10 @@ src/
   frontend/
     tokenizer/             Tokenizer, Token, SourceLocation, LexError
 docs/
-  core/language.md         the erax language contract (v1; spec; unbuilt)
+  core/language.md         language contract: grammar, operators, reserved words, semantics
+  core/types.md            types, literals, conversions
+  core/expressions.md      expressions and precedence
+  core/statements.md       statements, functions, globals
   frontend/tokenizer.md    tokenizer contract
   middleend/JIR.md         the shared IR contract (spec; unbuilt)
 TODO.md                    roadmap, serialization & format versioning
