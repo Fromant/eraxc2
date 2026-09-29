@@ -1,0 +1,50 @@
+# AGENTS.md
+
+erax, a TypeScript-like compiled language. **The tokenizer and the parser are implemented; the interpreter, VM, and AoT backend are not.** The parser lowers source straight to JIR with no AST and no exceptions; the specs in `docs/` are the contract, and most sessions are still spec-writing and cross-doc consistency.
+
+## Commands (Windows / PowerShell)
+
+```powershell
+cmake -S . -B build          # FetchContent pulls Catch2 v3.9.1 (needs network first time)
+cmake --build build
+ctest --test-dir build --output-on-failure
+.\build\erax_tests.exe                       # full Catch2 suite
+.\build\erax_tests.exe "number*"             # run matching tests (Catch2 wildcards)
+.\build\eraxc.exe examples\helloworld.erax   # tokenizes a file, prints a token dump
+.\build\eraxc.exe --jir examples\fib.erax    # lowers a program and prints the JIR
+echo 'let a: i32 = 1;' | .\build\eraxc.exe    # or stdin; errors as file:row:col
+```
+
+No lint/formatter/typecheck config exists. `-Wall -Wextra` apply only to GNU/Clang builds.
+
+## Layout
+
+- `docs/core/` — the erax language contract (v1): `language.md` (grammar, operator set, keywords, semantics) + `types.md`, `expressions.md`, `statements.md`.
+- `docs/frontend/tokenizer.md` — lexical contract; `src/frontend/tokenizer/` is pinned by `tests/Tokenizer.test.cpp`.
+- `src/frontend/parser/` — the implemented parser: `ProgramParser` (statements, CFG, flow/definite assignment), `ExpressionParser` (precedence, literals, calls, folding), `ParseContext` (symbols, scopes, token cursor), `SemType`, `Value`. Pinned by `tests/Parser.test.cpp`.
+- `docs/middleend/JIR.md` — the shared IR contract (stack-framed, register-style); `src/middleend/jir/` implements the types, builder, and constant folding.
+- `TODO.md` — **roadmap + `.jir` serialization/versioning, and all "not in v1" / future-work content.** Future work must live here, never in the spec docs.
+- `examples/helloworld.erax` — aspirational (uses `string`/`std.print`, which are not v1).
+
+## Doc conventions (hard rules from the session)
+
+- Language specs are scope-clean: anything "beyond v1" goes in `TODO.md`, not in a spec doc.
+- The four `docs/core/` files cross-link (`language.md#grammar`, etc.); keep anchors, terminology, and rule statements consistent across `core/`, `tokenizer.md`, and `JIR.md` whenever editing a rule. Grep the docs after changes for leftover stale names (e.g. past renames: `VOID` sentinel → `EMPTY`, `Not in v1` → TODO).
+- Docs describe a contract that the parser must enforce; type constraints live in prose (e.g. the grammar's `condition` nonterminal is shape-only; "must be `bool`" is a typing rule in `expressions.md`). The code implements the docs — when they disagree, the docs are usually the stale side, but say so before flipping either.
+
+## Language/IR facts to not re-litigate
+
+- Keywords are **`Identifier` tokens** classified by the parser — do not add token kinds or a keyword table to the tokenizer.
+- Operators are maximal-munch runs validated against a whitelist at parse (`a+++++b` errors). Dots are never operator chars, so `?.`/`...` compose at parse; `::` lexes as two Colons and is banned (dot namespaces).
+- JIR: `CALL dst &f a0…` — `args[0]`=result slot, `args[1]`=callee, `args[2..]`=args; `EMPTY` sentinel is the only legal void result slot; shift counts mask to operand width; arithmetic wraps; div-by-zero is process death (no UB anywhere).
+- JIR prints a type with every operand (`i32 $3`, `u8 1`, `i32 @0`) so an instruction is self-describing.
+- `bool`/`char` lower to `i8`; no implicit conversions; assignment is a statement (not an expression); `break`/`continue` only in loops.
+- A literal takes the type of the position it fills, and only a *lone* one: the expected type is not threaded into the operands of an operator, which is what keeps `1 < 2` a `bool` and `let x: i32 = 1 + 2` an `i32` while `let x: bool = 1;` fails.
+- A folded test picks one CFG edge, so a constant `while (false)` drops its body and a constant `if` decides the definite-assignment intersection.
+- Tests compare programs by final global state + entrypoint return code; no stdout in v0.1.
+
+## Style
+
+- C++23, no extensions. Project style: 4-space indent, no trailing punctuation comments unless clarifying; follow the existing tokenizer/test file style.
+- **No exceptions, anywhere in the front end or the driver.** Every fallible step returns `std::expected<T, E>`, and parse errors carry a `SourceLocation`; `main` reports them and returns `EXIT_FAILURE`. Do not add `throw`/`try`/`catch` or `std::optional`-then-throw patterns.
+- Repo history commits each completed change directly to `main` with short imperative messages (e.g. `core: …`, `JIR: …`); no PRs.
