@@ -21,7 +21,8 @@ src/
     tokenizer/             Tokenizer, Token, SourceLocation, LexError
 docs/
   frontend/tokenizer.md    tokenizer contract
-  middleend/JIR.md         the shared IR contract (v0.1, planned)
+  middleend/JIR.md         the shared IR contract (spec; unbuilt)
+TODO.md                    roadmap, serialization & format versioning
 tests/
   Tokenizer.test.cpp       Catch2 test suite
 examples/                  .erax programs — the syntax vision (evolving)
