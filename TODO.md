@@ -20,6 +20,16 @@ Source-level additions that are out of scope for v1 — listed here so the langu
 - An `unreachable code` diagnostic — v1 parses dead code, checks it, and drops it.
 - Strings and string literals, floats — and with them the stdlib (`std.print`). `examples/helloworld.erax` is aspirational on `string`.
 - Machine-level futures — arrays/indices, pointers/references, objects/classes, closures — live in the JIR section below.
+- **`const` / immutability.** v1 has no `const` keyword and no immutable binding: `let` declares a local or global whose initializer may or may not be a constant expression, and it stays assignable (`a = 2;`). There is no way to *say* a name must never change, which is the thing a constant expression is otherwise so careful about. See `docs/core/types.md#constants` for what "constant" currently means.
+- **Literal / singleton types.** `let b: i32 = 0;` gives `b` the type `i32`, not the value `0`. A type system that tracked the value — so `b` has type `0` and a later `b = 2` is an error until the use — would catch the divide-by-a-literal-zero and the accidental-overflow class of bug at compile time instead of at the trap, and it is the natural end state of the constants work in `types.md#constants`. It costs a real type-inference term and is far past v1.
+- **Wider integers (`i128`/`i256`) and arbitrary precision.** The question that decides whether it is cheap or not: a *cell* is one 64-bit word in the IR (`JIR.md#types`), so a value wider than a machine word is not one cell, and every assumption below is keyed to a single word. In order of how much it costs:
+  1. `Operand::value`, `ConstInt::bits`, and the `EMPTY` sentinel are one `uint64_t` — a value of `2^64` is exactly the case `types.md#constants` classifies as *in no type*.
+  2. `fold::narrow` masks with a width taken from the type, and `size_of` returns a small count; both assume a value fits a word, and `i128` is the first type that breaks it.
+  3. A frame is a fixed number of cells and `frame_size` is a compile-time constant per function (`JIR.md#frames`), so a 2-cell value has to be laid out and copied by every frame operation, not just by the arithmetic.
+  4. The `i64` evaluation range in `types.md#constants` is the front end's exact-arithmetic domain; widening it is a real change there, and is where the `2^64` bug above came from.
+  5. Shift masking, `to_signed`/`reinterpret`, printing, and `.jir` serialization all carry the word assumption.
+
+  Adding the *types* to the enums is easy; making them mean something is not. The clean version is to give the front end a value type that is independent of the widest machine type (so `ConstInt` stops being a `uint64_t` in a struct) before adding any type wider than a word.
 
 ## JIR — v0.1 scope
 
