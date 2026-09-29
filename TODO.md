@@ -1,12 +1,14 @@
 # erax TODO / roadmap
 
-Status: **WIP.** Only the lexer exists. The tokenizer spec is `docs/frontend/tokenizer.md`; the IR spec is `docs/middleend/JIR.md` (specified, not built).
+Status: **WIP.** The lexer and the parser exist; the IR is specified and implemented but never executed. The tokenizer spec is `docs/frontend/tokenizer.md`; the IR spec is `docs/middleend/JIR.md`.
 
 ## Front-end
 
 - [x] Tokenizer (`src/frontend/tokenizer/`), pinned by `tests/Tokenizer.test.cpp`.
-- [ ] Parser: single pass, source → JIR, no AST. String/char unescaping happens here.
-- [ ] Keyword classification (identifiers today; the parser decides).
+- [x] Parser: single pass, source → JIR, no AST (`src/frontend/parser/`), pinned by `tests/Parser.test.cpp`. Statements, scopes, definite assignment, CFG lowering, constant folding, and diagnostics are in; `--jir` prints the result.
+- [x] Keyword classification (identifiers in the lexer; the parser decides).
+- [ ] String/char unescaping — `char` literals are done, `string` waits on the type existing.
+- [ ] `?.`/member access, `?:`, spread, ranges — the tokens compose at parse; the language side is "Beyond v1" below.
 
 ## Beyond v1 (future work)
 
@@ -20,8 +22,8 @@ Source-level additions that are out of scope for v1 — listed here so the langu
 
 ## JIR — v0.1 scope
 
-- [ ] Integer types, globals, functions, calls (incl. recursion), control flow.
-- [ ] Validator per the IR spec.
+- [x] Integer types, globals, functions, calls (incl. recursion), control flow — `src/middleend/jir/` builds and prints them; the parser emits them.
+- [ ] Validator per the IR spec (`JIR.md#validator`) — the builder asserts the structural invariants in debug builds; the seven checks are not a separate pass yet.
 - [ ] Interpreter: the stack-machine engine (one cell array + frame pointer).
 
 ## JIR — later scope

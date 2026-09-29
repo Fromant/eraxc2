@@ -23,11 +23,13 @@ Every operand is `(kind, type, value)` — self-describing; nothing is resolved 
 | Operand | Print        | Value means                                   |
 | ------- | ------------ | --------------------------------------------- |
 | Instant | `type value` (e.g. `i32 5`, `u8 1`) | the immediate                          |
-| VReg    | `$k`         | cell `fp + k` in the current frame            |
-| Global  | `@k`         | cell `k` in the process-wide globals array    |
+| VReg    | `type $k` (e.g. `i32 $3`) | cell `fp + k` of that type in the current frame |
+| Global  | `type @k` (e.g. `i32 @0`) | cell `k` of the process-wide globals array |
 | Fn      | `&k`         | function id `k`                               |
 | EMPTY   | `EMPTY`      | the empty sentinel — names "no cell" (see [calls](#calls)) |
 
+- Every operand prints its type, so a printed instruction is self-describing: a cell's type comes from the
+  instruction that names it, never from a separate table.
 - A `VReg` id is an **offset within the current frame**, always `0 ≤ k < frame_size`.
 - A `Fn` operand carries the callee's return type; a `Global` operand carries the global's type.
 - An `Instant`'s value is the **raw bit pattern** of the cell it fills; its printed form is interpreted with the type's signedness (`i8 0xFF` prints as `i8 -1`).
@@ -97,7 +99,7 @@ The source's logical operators lower to these bitwise ops on `i8` 0/1 operands, 
 | -------------------------------------------------------- | -------------- | ----------------- |
 | `CMP_EQ` `CMP_NE` `CMP_LT` `CMP_LE` `CMP_GT` `CMP_GE`    | `CMP_EQ dst a b` | `dst = (a op b)` |
 
-Logical negation is `CMP_NE $dst $a 0`.
+Logical negation is `CMP_NE i8 $dst i8 $a i8 0`.
 
 ### Control
 
