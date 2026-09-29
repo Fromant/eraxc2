@@ -43,13 +43,15 @@ assign-stmt    = lvalue assign-op expr ";" ;
 expr-stmt      = expr ";" ;
 return-stmt    = "return" [ expr ] ";" ;
 
-if-stmt        = "if" "(" expr ")" block [ "else" ( if-stmt | block ) ] ;
-while-stmt     = "while" "(" expr ")" block ;
-do-stmt        = "do" block "while" "(" expr ")" ";" ;
+if-stmt        = "if" "(" condition ")" block [ "else" ( if-stmt | block ) ] ;
+while-stmt     = "while" "(" condition ")" block ;
+do-stmt        = "do" block "while" "(" condition ")" ";" ;
 for-stmt       = "for" "(" [ for-init ] ";" [ for-cond ] ";" [ for-step ] ")" block ;
 for-init       = "let" IDENT ":" type [ "=" expr ] | lvalue assign-op expr ;
-for-cond       = expr ;
+for-cond       = condition ;
 for-step       = expr ;
+
+condition      = expr ;    // must be `bool` — see expressions.md
 
 expr           = or ;
 or             = logxor { "||" logxor } ;
@@ -78,6 +80,7 @@ const-expr     = expr limited to literals, the unary `-`/`!`/`~`, arithmetic and
 Notes:
 
 - Every non-void `primary` `IDENT` is a **read** of a variable or global. An `IDENT` naming a parameter is also a read.
+- A `condition` is the grammar shape of every test (`if`, `while`, `do`'s trailing `while`, and `for`'s cond): an `expr` whose type must be `bool`. Which expressions are `bool` is a typing rule in `expressions.md`, so the grammar only pins the shape here.
 - `dotted-name` followed by `(` is a call of a (possibly namespaced) function. A dotted name **not** followed by `(` is a syntax error — there is no member access in v1.
 - `[` `]` lex but are not part of v1 (arrays are future work); using them is a syntax error.
 - `const-expr` is enforced additionally: it must be constant-foldable and contain no calls.

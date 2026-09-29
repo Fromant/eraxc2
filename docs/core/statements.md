@@ -8,8 +8,8 @@ The statement grammar is in `language.md#grammar`; this file gives each statemen
 - **Assignment.** `lvalue op expr`; `lvalue` is a variable or global declared in an enclosing (or the same) scope. `a += 1` reads `a`, writes it, and is equivalent to `a = a + 1` (so `a` must already be definite-assigned). Assignments are statements, not expressions — `a = b = c` and `x = (a += 2)` are parse errors.
 - **Expression statements.** Any expression may be a statement; its value is discarded (`x;`, `5;`, `foo();`). Assignment forms are the idiomatic way to get a mutation.
 - **`return`.** In a non-void function, `return expr` on every path (reaching-return check) with `expr` of exactly the return type. In a void function, `return;` or falling off the end. `return expr` in a void function is an error.
-- **`if` / `else`.** Condition must be `bool`. `else` binds to the nearest `if`; `else if` is spelling for a nested `if`.
-- **`while` / `do` / `for`.** Conditions are `bool`. `for` is C-shaped: `for (init; cond; step)` — *init* is a `let` (scoped to the loop; `= expr` is optional, as with any `let`) or an assignment, *cond* is `bool`, *step* is any expression. All three clauses are optional (a bare `for(;;)` is an infinite loop).
+- **`if` / `else`.** The condition (`condition` in the grammar) must be `bool`. `else` binds to the nearest `if`; `else if` is spelling for a nested `if`.
+- **`while` / `do` / `for`.** Conditions (`condition` in the grammar) are `bool`. `for` is C-shaped: `for (init; cond; step)` — *init* is a `let` (scoped to the loop; `= expr` is optional, as with any `let`) or an assignment, *cond* is `bool`, *step* is any expression. All three clauses are optional (a bare `for(;;)` is an infinite loop).
 - **`break` / `continue`.** Legal only inside a loop body (dynamically nested in `while`/`do`/`for`); `break` in a non-loop is an error. In the example, `break` inside an `if` inside a `for` is fine.
 
 ## Functions
