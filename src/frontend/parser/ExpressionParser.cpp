@@ -127,14 +127,21 @@ bool checked_mul(std::int64_t a, std::int64_t b, std::int64_t& out) noexcept {
 /// Exact unless the pattern is a `u64` above `i64max`.
 ConstInt from_bits(std::uint64_t bits, Type type) {
     ConstInt constant{type, truncate(bits, type), 0, false};
-    if (type == Type::U64) {
+    const std::uint64_t width = middleend::size_of(type) * 8;
+    if (width == 64) {
+        // An `i64` is every 64-bit pattern read as a number; only a `u64` can be one
+        // that has no number at all.
+        if (middleend::is_signed(type)) {
+            constant.exact = static_cast<std::int64_t>(constant.bits);
+            constant.exact_known = true;
+            return constant;
+        }
         if (constant.bits <= static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max())) {
             constant.exact = static_cast<std::int64_t>(constant.bits);
             constant.exact_known = true;
         }
         return constant;
     }
-    const std::uint64_t width = middleend::size_of(type) * 8;
     const std::uint64_t sign = std::uint64_t{1} << (width - 1);
     if ((constant.bits & sign) != 0) {
         constant.exact = static_cast<std::int64_t>(constant.bits) - static_cast<std::int64_t>(std::uint64_t{1} << width);
@@ -300,6 +307,7 @@ ExpressionParser::result ExpressionParser::binary_level(operand_level operand, s
     // operator's result has the operator's own type, so nothing here may be typed
     // by it until it is known that there is no operator at all. That is what keeps
     // `1 < 2` a `bool` in a `bool` position instead of typing its operands `bool`.
+    const SourceLocation start = context().cursor.location();
     auto first = (this->*operand)(std::nullopt);
     if (!first) return first;
     Value left = *first;
@@ -339,9 +347,11 @@ ExpressionParser::result ExpressionParser::binary_level(operand_level operand, s
 
     // A lone operand is the whole expression, so a literal in it takes the type of
     // the position it fills. Anything else already has a type of its own, and the
-    // statement that wanted one — a `let`, a return, a test — is what checks it.
-    if (!combined_any && expected && left.retypeable && left.type != *expected) {
-        auto typed = retype(left, *expected, context().cursor.location());
+    // statement that wanted one — a `let`, a return, a test — is what checks it. The
+    // retyping happens even where the placeholder's default type already reads as the
+    // wanted one, because it is the retyping that checks the value against it.
+    if (!combined_any && expected && left.retypeable) {
+        auto typed = retype(left, *expected, start);
         if (!typed) return std::unexpected(typed.error());
     }
     return left;
@@ -406,25 +416,33 @@ ExpressionParser::result ExpressionParser::combine(std::string_view op, Value& l
     if (op == "+") return apply(Op::Add, left.type, left, right, location);
     if (op == "-") return apply(Op::Sub, left.type, left, right, location);
     if (op == "*") return apply(Op::Mul, left.type, left, right, location);
-    if (op == "/") return apply(is_signed(left.type) ? Op::Sdiv : Op::Udiv, left.type, left, right, location);
-    if (op == "%") return apply(is_signed(left.type) ? Op::Smod : Op::Umod, left.type, left, right, location);
+    // A placeholder has no type yet, and an exact fold folds numbers rather than bits, so
+    // it is done as the signed form. The two only differ for a negative operand, and a
+    // negative value is not one an unsigned type can be retyped to.
+    const bool arithmetic = left.retypeable || is_signed(left.type);
+    if (op == "/") return apply(arithmetic ? Op::Sdiv : Op::Udiv, left.type, left, right, location);
+    if (op == "%") return apply(arithmetic ? Op::Smod : Op::Umod, left.type, left, right, location);
     if (op == "<<") return apply(Op::Shl, left.type, left, right, location);
     // A signed shift right is arithmetic; an unsigned one — which is every
     // `char`, a 0-255 byte — is logical.
-    return apply(is_signed(left.type) ? Op::Sar : Op::Shr, left.type, left, right, location);
+    return apply(arithmetic ? Op::Sar : Op::Shr, left.type, left, right, location);
 }
 
 ExpressionParser::result ExpressionParser::apply(Op op, SemType result, const Value& left, const Value& right,
                                                  SourceLocation location) {
-    const Type operand_type = lower(left.type);
-    const Type result_type = lower(result);
-
     if (left.constant && right.constant) {
+        // A constant is folded at the width its bits actually carry, which for a placeholder
+        // is the full `u64` and not the default type it reports. Its range is not checked
+        // either: a placeholder has no type until the expression takes the one it fills.
+        const bool placeholder = result == left.type && left.retypeable && right.retypeable;
+        const SemType operand_semtype = lift(left.constant->type);
+        const Type operand_type = lower(operand_semtype);
+        const Type result_type = placeholder ? operand_type : lower(result);
         const ConstInt& a = *left.constant;
         const ConstInt& b = *right.constant;
         std::optional<ConstInt> folded;
         if (a.exact_known && b.exact_known) {
-            auto exact = fold_exact(op, left.type, result, a, b, location);
+            auto exact = fold_exact(op, operand_semtype, result, a, b, location);
             if (!exact) return std::unexpected(exact.error());
             folded = *exact;
         }
@@ -439,13 +457,13 @@ ExpressionParser::result ExpressionParser::apply(Op op, SemType result, const Va
             }
             folded = from_bits(*raw.value, result_type);
         }
-        if (folded->exact_known && !folded->fits(result_type)) {
+        if (!placeholder && folded->exact_known && !folded->fits(result_type)) {
             return std::unexpected(at("constant expression overflows " + std::string{to_string(result)}, location));
         }
-        return Value{result, Operand::instant(result_type, folded->bits), folded,
-                     result == left.type && left.retypeable && right.retypeable};
+        return Value{result, Operand::instant(result_type, folded->bits), folded, placeholder};
     }
 
+    const Type result_type = lower(result);
     const std::uint64_t destination = context().builder.alloc(result_type);
     context().builder.emit(op, {Operand::vreg(result_type, destination), left.as_operand(), right.as_operand()});
     return Value{result, Operand::vreg(result_type, destination), std::nullopt, false};
@@ -453,12 +471,19 @@ ExpressionParser::result ExpressionParser::apply(Op op, SemType result, const Va
 
 ExpressionParser::result ExpressionParser::apply_unary(Op op, SemType type, const Value& operand,
                                                        SourceLocation location) {
-    const Type operand_type = lower(type);
     if (operand.constant) {
+        // As in `apply`: a placeholder is folded at the width its bits carry and is not
+        // range-checked, because its type is still the position's to decide.
+        const bool placeholder = operand.retypeable;
+        const Type operand_type = operand.constant->type;
         std::optional<ConstInt> folded;
-        if (op == Op::Neg && operand.constant->exact_known) {
+        if (operand.constant->exact_known) {
             std::int64_t value = 0;
-            if (checked_sub(0, operand.constant->exact, value)) folded = ConstInt::of(value, operand_type);
+            if (op == Op::Neg && checked_sub(0, operand.constant->exact, value)) {
+                folded = ConstInt::of(value, operand_type);
+            }
+            // `~x` is `-x - 1`, so like a negation it keeps the value exact.
+            if (op == Op::Not) folded = ConstInt::of(~operand.constant->exact, operand_type);
         }
         if (!folded) {
             const middleend::fold::Result raw = middleend::fold::unary(op, operand_type, operand.constant->bits);
@@ -468,15 +493,16 @@ ExpressionParser::result ExpressionParser::apply_unary(Op op, SemType type, cons
             }
             folded = from_bits(*raw.value, operand_type);
         }
-        if (folded->exact_known && !folded->fits(operand_type)) {
+        if (!placeholder && folded->exact_known && !folded->fits(operand_type)) {
             return std::unexpected(at("constant expression overflows " + std::string{to_string(type)}, location));
         }
-        return Value{type, Operand::instant(operand_type, folded->bits), folded, operand.retypeable};
+        return Value{type, Operand::instant(operand_type, folded->bits), folded, placeholder};
     }
 
-    const std::uint64_t destination = context().builder.alloc(operand_type);
-    context().builder.emit(op, {Operand::vreg(operand_type, destination), operand.as_operand()});
-    return Value{type, Operand::vreg(operand_type, destination), std::nullopt, false};
+    const Type result_type = lower(type);
+    const std::uint64_t destination = context().builder.alloc(result_type);
+    context().builder.emit(op, {Operand::vreg(result_type, destination), operand.as_operand()});
+    return Value{type, Operand::vreg(result_type, destination), std::nullopt, false};
 }
 
 ExpressionParser::result ExpressionParser::integer_literal(const Token& token, std::optional<SemType> expected) {
@@ -494,15 +520,18 @@ ExpressionParser::result ExpressionParser::integer_literal(const Token& token, s
     auto parsed = parse_number(token.text);
     if (!parsed) return std::unexpected(at(parsed.error(), token.location));
 
-    const SemType type = expected.value_or(default_literal_type);
-    const ConstInt constant = ConstInt::bits_of(*parsed, lower(type));
-    if (!constant.fits(lower(type))) {
+    // With no expected type the literal is only a placeholder: the position it fills decides
+    // its type later, so there is nothing to check it against yet and its bits are held at
+    // full width — `let x: u64 = 4294967296;` must not lose the value to the default type.
+    // The check belongs to the retyping that follows, which names the real type.
+    const Type held = lower(expected.value_or(SemType::U64));
+    const ConstInt constant = ConstInt::bits_of(*parsed, held);
+    if (expected && !constant.fits(held)) {
         return std::unexpected(
-            at("'" + token.text + "' does not fit " + std::string{to_string(type)}, token.location));
+            at("'" + token.text + "' does not fit " + std::string{to_string(*expected)}, token.location));
     }
-    // A literal in a position with no expected type is only a placeholder: the
-    // real type may still come from the other side of an operator.
-    return Value{type, Operand::instant(lower(type), constant.bits), constant, !expected.has_value()};
+    return Value{expected.value_or(default_literal_type), Operand::instant(held, constant.bits), constant,
+                 !expected.has_value()};
 }
 
 ExpressionParser::result ExpressionParser::unary_expression(std::optional<SemType> expected) {
@@ -647,26 +676,18 @@ ExpressionParser::result ExpressionParser::primary(std::optional<SemType> expect
         return std::unexpected(at("'" + name + "' is a reserved word", location));
     }
 
-    std::string full_name = name;
+    // A dot would be the start of a namespace or a member access, and v1 has
+    // neither: a name is one identifier.
     cursor.take();
-    while (cursor.at(TokenType::Dot)) {
-        cursor.take();
-        auto part = expect_identifier(cursor);
-        if (!part) return std::unexpected(part.error());
-        full_name += "." + *part;
+    if (cursor.at(TokenType::Dot)) {
+        return std::unexpected(at("'.' is not part of a name in v1", location));
     }
     if (cursor.at(TokenType::LParen)) {
-        if (full_name != name && context().find_function(full_name) == nullptr) {
-            return std::unexpected(at("'.' is only part of a function name in v1", location));
-        }
-        if (context().find_function(full_name) == nullptr) {
-            return std::unexpected(at("call to undeclared function '" + full_name + "'", location));
+        if (context().find_function(name) == nullptr) {
+            return std::unexpected(at("call to undeclared function '" + name + "'", location));
         }
         cursor.take();
-        return call(full_name, location);
-    }
-    if (full_name != name) {
-        return std::unexpected(at("'.' is only part of a function name in v1", location));
+        return call(name, location);
     }
     if (context().find_function(name) != nullptr) {
         return std::unexpected(at("'" + name + "' is a function and can only be called", location));

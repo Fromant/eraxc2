@@ -8,7 +8,8 @@ namespace {
 
 std::string signed_text(std::uint64_t bits, std::size_t width) {
     const std::size_t used = width * 8;
-    std::uint64_t value = used == 64 ? bits : bits & ((std::uint64_t{1} << used) - 1);
+    if (used == 64) return std::to_string(static_cast<std::int64_t>(bits));
+    std::uint64_t value = bits & ((std::uint64_t{1} << used) - 1);
     const std::uint64_t sign = std::uint64_t{1} << (used - 1);
     if ((value & sign) != 0) value |= ~((std::uint64_t{1} << used) - 1);
     return std::to_string(static_cast<std::int64_t>(value));

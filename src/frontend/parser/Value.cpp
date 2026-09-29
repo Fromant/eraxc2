@@ -62,6 +62,9 @@ void Value::retype(SemType type) noexcept {
     if (!constant) return;
     constant->type = lower(type);
     constant->bits = truncate(constant->bits, constant->type);
+    // A placeholder carries its constant in an instant, and the type it prints with is
+    // the one it now has, not the width it was held at.
+    if (operand.kind == middleend::OperandKind::Instant) operand.type = constant->type;
 }
 
 }  // namespace erax::frontend

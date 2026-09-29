@@ -204,9 +204,6 @@ ProgramParser::step ProgramParser::declare_function(TokenCursor& cursor) {
         return std::unexpected(ParseError{"'" + found.name + "' is already declared", found.location});
     }
     if (found.name == "main") {
-        if (has_entrypoint_) {
-            return std::unexpected(ParseError{"only one 'main' is allowed", found.location});
-        }
         if (!found.params.empty() || found.return_type != SemType::I32) {
             return std::unexpected(
                 ParseError{"the entry point must be 'fn main(): i32'", found.location});

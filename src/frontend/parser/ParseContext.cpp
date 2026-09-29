@@ -152,9 +152,10 @@ void TokenCursor::skip_to_sync() {
 }
 
 std::expected<std::string, ParseError> expect_identifier(TokenCursor& cursor) {
+    // A name is wanted here, whatever is in front of us: naming the token that is there
+    // would say "expected a number" where a `1` is written instead of what a name is.
     if (!cursor.at(TokenType::Identifier)) {
-        return std::unexpected(
-            ParseError{"expected " + expected_text(cursor.current().type), cursor.location()});
+        return std::unexpected(ParseError{"expected " + expected_text(TokenType::Identifier), cursor.location()});
     }
     const std::string& text = cursor.current().text;
     if (keyword_of(text) != Keyword::None) {
