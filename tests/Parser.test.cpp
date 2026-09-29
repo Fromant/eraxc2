@@ -1,57 +1,14 @@
-#include <catch2/catch_test_macros.hpp>
-#include <catch2/catch_tostring.hpp>
-
 #include <algorithm>
 #include <cstddef>
 #include <string>
 #include <string_view>
 #include <vector>
 
-#include "frontend/parser/ProgramParser.hpp"
-#include "frontend/tokenizer/Tokenizer.hpp"
-#include "middleend/jir/Jir.hpp"
+#include "ParserTest.hpp"
 
 using namespace erax::frontend;
 using namespace erax::middleend;
-
-namespace {
-
-using Program = erax::middleend::Program;
-
-/// Parses a whole program the way the driver does, so a test reads like a file.
-Program parse_ok(std::string_view source) {
-    auto tokens = Tokenizer{}.tokenize(source, "test.erax");
-    REQUIRE(tokens.has_value());
-    auto program = ProgramParser{*tokens}.parse();
-    REQUIRE(program.has_value());
-    return *program;
-}
-
-/// The message of the first error, which is all a program ever reports: the parse
-/// is all-or-nothing, so there is no second one to look at.
-std::string parse_error(std::string_view source) {
-    auto tokens = Tokenizer{}.tokenize(source, "test.erax");
-    REQUIRE(tokens.has_value());
-    auto program = ProgramParser{*tokens}.parse();
-    REQUIRE_FALSE(program.has_value());
-    return program.error().message;
-}
-
-const Cfg& body_of(const Program& program, std::size_t id) { return program.functions[id].cfg; }
-
-/// Every shipped block is either closed by a `Ret` or has an edge, so no code can
-/// fall off the end of the frame.
-bool every_block_ends(const Cfg& cfg) {
-    for (const BasicBlock& block : cfg.blocks) {
-        if (block.edge_count() > 0) continue;
-        if (block.commands.empty() || block.commands.back().op != Op::Ret) return false;
-    }
-    return true;
-}
-
-bool is_ret(const Command& command) { return command.op == Op::Ret; }
-
-}  // namespace
+using namespace erax::test;
 
 TEST_CASE("a program lowers to globals, functions, and an entrypoint") {
     const Program program = parse_ok("let g: i32 = 1; fn main(): i32 { return g; }");

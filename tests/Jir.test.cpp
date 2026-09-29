@@ -383,6 +383,42 @@ TEST_CASE("folded negation and bitwise not") {
     CHECK(fold::unary(Op::Neg, Type::I8, 0x80).value.value() == 0x80);
 }
 
+TEST_CASE("folding bitwise operators masks to the type") {
+    CHECK(fold::binary(Op::And, Type::U8, 0xFF, 0x0F).value.value() == 0x0F);
+    CHECK(fold::binary(Op::Or, Type::U8, 0xF0, 0x0F).value.value() == 0xFF);
+    CHECK(fold::binary(Op::Xor, Type::U8, 0xFF, 0x0F).value.value() == 0xF0);
+    // The result is narrowed back to the operand width.
+    CHECK(fold::binary(Op::Or, Type::I8, 0x80, 0x80).value.value() == 0x80);
+}
+
+TEST_CASE("folding increments and decrements") {
+    CHECK(fold::unary(Op::Inc, Type::I32, 41).value.value() == 42);
+    CHECK(fold::unary(Op::Dec, Type::I32, 43).value.value() == 42);
+    // The wrap is the machine's too: it does not trap.
+    CHECK(fold::unary(Op::Inc, Type::U8, 0xFF).value.value() == 0);
+    CHECK(fold::unary(Op::Dec, Type::U8, 0).value.value() == 0xFF);
+}
+
+TEST_CASE("every comparison folds, signed and unsigned") {
+    CHECK(fold::binary(Op::CmpEq, Type::I32, 3, 3).value.value() == 1);
+    CHECK(fold::binary(Op::CmpNe, Type::I32, 3, 4).value.value() == 1);
+    CHECK(fold::binary(Op::CmpLt, Type::I32, 3, 4).value.value() == 1);
+    CHECK(fold::binary(Op::CmpLe, Type::I32, 4, 4).value.value() == 1);
+    CHECK(fold::binary(Op::CmpGt, Type::I32, 5, 4).value.value() == 1);
+    CHECK(fold::binary(Op::CmpGe, Type::I32, 4, 4).value.value() == 1);
+    // Signedness decides: 0xFF is -1 signed and 255 unsigned.
+    CHECK(fold::binary(Op::CmpLt, Type::I8, 0xFF, 0).value.value() == 1);
+    CHECK(fold::binary(Op::CmpLt, Type::U8, 0xFF, 0).value.value() == 0);
+}
+
+TEST_CASE("folding rejects an op it does not know") {
+    CHECK_FALSE(fold::binary(Op::Ret, Type::I32, 0, 0).value.has_value());
+    CHECK(fold::binary(Op::Ret, Type::I32, 0, 0).failure == fold::Failure::SignedOverflow);
+    CHECK_FALSE(fold::unary(Op::Mov, Type::I32, 0).value.has_value());
+    // A shift or a comparison never traps, so it always has a value.
+    CHECK(fold::binary(Op::Shr, Type::I32, 1, 0).value.has_value());
+}
+
 TEST_CASE("type ranges bound the literal checks") {
     CHECK(fold::range_of(Type::I8).min == -128);
     CHECK(fold::range_of(Type::I8).max == 127);

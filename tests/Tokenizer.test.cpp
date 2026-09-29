@@ -617,3 +617,48 @@ TEST_CASE("a small program lexes as expected") {
                                                   "let", "x",    "=",   "hi",  ";",  "return", "0",
                                                   ";",   "}",    ""});
 }
+
+TEST_CASE("a token type has a name, for a diagnostic to use") {
+    CHECK(to_string(TokenType::EndOfFile) == "end of file");
+    CHECK(to_string(TokenType::Identifier) == "identifier");
+    CHECK(to_string(TokenType::Number) == "number");
+    CHECK(to_string(TokenType::String) == "string");
+    CHECK(to_string(TokenType::Char) == "char");
+    CHECK(to_string(TokenType::Operator) == "operator");
+    CHECK(to_string(TokenType::Semicolon) == "';'");
+    CHECK(to_string(TokenType::Colon) == "':'");
+    CHECK(to_string(TokenType::Comma) == "','");
+    CHECK(to_string(TokenType::Dot) == "'.'");
+    CHECK(to_string(TokenType::LParen) == "'('");
+    CHECK(to_string(TokenType::RParen) == "')'");
+    CHECK(to_string(TokenType::LBracket) == "'['");
+    CHECK(to_string(TokenType::RBracket) == "']'");
+    CHECK(to_string(TokenType::LBrace) == "'{'");
+    CHECK(to_string(TokenType::RBrace) == "'}'");
+    CHECK(to_string(static_cast<TokenType>(999)) == "unknown");
+}
+
+TEST_CASE("a token describes itself and compares by kind and text") {
+    const auto ts = lex_ok("x = 1");
+
+    CHECK(ts[0] == ts[0]);
+    CHECK_FALSE(ts[0] == ts[2]);
+    // The description names the kind, the text, and where it is.
+    CHECK(ts[0].describe() == "identifier 'x' at 1:1");
+    CHECK(ts[1].describe() == "operator '=' at 1:3");
+    CHECK(ts[2].describe() == "number '1' at 1:5");
+    CHECK(ts[3].describe() == "end of file '' at 1:6");
+}
+
+TEST_CASE("a location string names the file only when it has one") {
+    SourceLocation bare;
+    bare.row = 2;
+    bare.col = 7;
+    CHECK(bare.to_string() == "2:7");
+
+    SourceLocation named;
+    named.file = "main.era";
+    named.row = 3;
+    named.col = 4;
+    CHECK(named.to_string() == "main.era:3:4");
+}
