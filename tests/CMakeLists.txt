@@ -11,6 +11,7 @@ FetchContent_MakeAvailable(Catch2)
 add_executable(erax_tests
     Tokenizer.test.cpp
     Jir.test.cpp
+    Parser.test.cpp
 )
 target_link_libraries(erax_tests PRIVATE erax Catch2::Catch2WithMain)
 

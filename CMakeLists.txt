@@ -14,6 +14,11 @@ endif()
 
 add_library(erax
     src/frontend/tokenizer/Tokenizer.cpp
+    src/frontend/parser/SemType.cpp
+    src/frontend/parser/Value.cpp
+    src/frontend/parser/ParseContext.cpp
+    src/frontend/parser/ExpressionParser.cpp
+    src/frontend/parser/ProgramParser.cpp
     src/middleend/jir/Jir.cpp
     src/middleend/jir/Builder.cpp
     src/middleend/jir/Fold.cpp
