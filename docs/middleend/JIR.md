@@ -26,11 +26,11 @@ Every operand is `(kind, type, value)` — self-describing; nothing is resolved 
 | VReg    | `$k`         | cell `fp + k` in the current frame            |
 | Global  | `@k`         | cell `k` in the process-wide globals array    |
 | Fn      | `&k`         | function id `k`                               |
-| VOID    | `VOID`       | the void sentinel (see [frames](#frames))     |
+| EMPTY   | `EMPTY`      | the empty sentinel — names "no cell" (see [calls](#calls)) |
 
 - A `VReg` id is an **offset within the current frame**, always `0 ≤ k < frame_size`.
 - A `Fn` operand carries the callee's return type; a `Global` operand carries the global's type.
-- The `VOID` sentinel is `(VReg, void, u64(-1))` — a phantom offset that names "no cell". It is legal only as the result slot of a `CALL`.
+- The `EMPTY` sentinel is `(VReg, void, u64(-1))` — a phantom offset that names "no cell". It is legal only as the result slot of a `CALL`.
 
 ## Types
 
@@ -114,7 +114,7 @@ Executing `CALL dst &f a0 …`:
 3. run `f`'s CFG;
 4. on `RET`, write the returned value to `dst` in the caller's frame and pop the frame.
 
-A void callee is signaled by `dst` being the `VOID` sentinel: value is discarded (a sentinel anywhere else is a validator error).
+A void callee is signaled by `dst` being the `EMPTY` sentinel: value is discarded (a sentinel anywhere else is a validator error).
 
 **Example.** `fn add3(x: i32, y: i32, z: i32): i32 = x + y + z`; in `main`, `a=$0`, `b=$1`, `c=$2`:
 
@@ -125,7 +125,7 @@ CALL [i32 $3, &add3, i32 $1, i32 1, i32 $0]   ; r = add3(b, 1, a)
 A void call — a helper `log(x: i32)` — states its own shape:
 
 ```
-CALL [VOID &log, i32 $3]                      ; VOID dst — no value comes back
+CALL [EMPTY &log, i32 $3]                     ; EMPTY dst — no value comes back
 ```
 
 ## Globals and startup
@@ -154,7 +154,7 @@ Runs on every `Program` before any backend sees it:
 2. **Commands**: arity and operand roles match the op table; operand types are the explicit ones on each operand; ops requiring same-type operands get them; no implicit conversions.
 3. **Frames**: every vreg id `< frame_size`; params are `$0..n-1` in order.
 4. **Definitions**: every vreg read has a reaching definition from entry (params and globals count as defined at entry); every vreg has one consistent type across all reads and writes.
-5. **Calls**: `args[1]` is a `Fn` operand naming a valid function; `args[2..]` count and types match the callee's params and are all defined; `args[0]` is the `VOID` sentinel iff the callee returns void — a sentinel anywhere else is an error, and a non-void `dst` matches the callee's return type.
+5. **Calls**: `args[1]` is a `Fn` operand naming a valid function; `args[2..]` count and types match the callee's params and are all defined; `args[0]` is the `EMPTY` sentinel iff the callee returns void — a sentinel anywhere else is an error, and a non-void `dst` matches the callee's return type.
 6. **Program**: entrypoint exists, zero params, `i32` return.
 7. **Init CFGs**: the same rules as function CFGs, zero params.
 

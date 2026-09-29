@@ -8,6 +8,14 @@ Status: **WIP.** Only the lexer exists. The tokenizer spec is `docs/frontend/tok
 - [ ] Parser: single pass, source → JIR, no AST. String/char unescaping happens here.
 - [ ] Keyword classification (identifiers today; the parser decides).
 
+## Beyond v1 (future work)
+
+Source-level additions that are out of scope for v1 — listed here so the language contract (`docs/core/`) stays scope-clean:
+
+- `?:` (ternary), optional chaining (`?.`), spread (`...`), ranges, `::` namespace resolution (dots remain the namespace syntax), `const`/immutability, implicit widening.
+- Strings and string literals, floats — and with them the stdlib (`std.print`). `examples/helloworld.erax` is aspirational on `string`.
+- Machine-level futures — arrays/indices, pointers/references, objects/classes, closures — live in the JIR section below.
+
 ## JIR — v0.1 scope
 
 - [ ] Integer types, globals, functions, calls (incl. recursion), control flow.

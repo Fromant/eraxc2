@@ -52,7 +52,8 @@ for-cond       = expr ;
 for-step       = expr ;
 
 expr           = or ;
-or             = and { "||" and } ;
+or             = logxor { "||" logxor } ;
+logxor         = and { "^^" and } ;
 and            = bitor { "&&" bitor } ;
 bitor          = bitxor { "|" bitxor } ;
 bitxor         = bitand { "^" bitand } ;
@@ -91,7 +92,7 @@ A tokenizer `Operator` token is legal only if its full text is one of:
 < <= > >=         relational
 == !=             equality
 & | ^             bitwise
-&& ||             logical
+|| ^^ &&          logical
 = += -= *= /= %= &= |= ^= <<= >>=    assignment (statement-level)
 ! ~               unary (single-character)
 ```
@@ -144,7 +145,3 @@ The language lowers 1:1 to JIR:
 | expression temps | fresh vregs |
 | `if`/`while`/`do`/`for` | CFG edges + `Condition` |
 | function call | `CALL` |
-
-## Not in v1
-
-`string` and string literals, floats, arrays/indices, pointers/references, objects/classes, closures, `?:`, optional chaining (`?.`), spread `...`, ranges, namespace/`::` resolution (dots are fine), `const`/immutability, implicit widening, and the stdlib (`std.print` comes with strings). The `examples/helloworld.erax` file is aspirational on `string`.
