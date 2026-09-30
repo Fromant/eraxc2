@@ -24,8 +24,9 @@ struct ConstInt {
     /// do not, and are checked against their type by width instead.
     bool exact_known = false;
 
+    /// The value as a number, read as `type`. An exact one is the number itself; a
+    /// `u64` above `i64max` has no exact reading, so it is its bits interpreted.
     std::int64_t signed_value() const noexcept;
-    std::uint64_t unsigned_value() const noexcept;
 
     /// The value is representable in `type`: an exact one must lie in the type's
     /// range, an inexact one can only be a `u64`.

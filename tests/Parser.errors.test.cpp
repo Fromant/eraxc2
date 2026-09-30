@@ -62,6 +62,123 @@ TEST_CASE("a local is declared once per scope") {
     CHECK(commands_of(program, 0)[0].args[1].value == 2);
 }
 
+TEST_CASE("a name is bound once, and the message says which kind") {
+    // A duplicate local, a duplicate parameter and a duplicate global all say the same
+    // thing, because they are all the same mistake: one name, bound twice.
+    CHECK(parse_error("fn main(): i32 { let x: i32 = 1; let x: i32 = 2; return 0; }") ==
+          "'x' is already declared in this scope");
+    CHECK(parse_error("fn f(x: i32, x: i32): i32 { return x; } fn main(): i32 { return 0; }") ==
+          "'x' is already declared in this scope");
+    // A global and a function are at the top of a program rather than in a scope, so
+    // they are 'already declared' and not 'in this scope' -- there is no scope to name.
+    CHECK(parse_error("let g: i32 = 1; let g: i32 = 2; fn main(): i32 { return 0; }") ==
+          "'g' is already declared");
+    CHECK(parse_error("fn f(): i32 { return 0; } fn f(): i32 { return 0; } fn main(): i32 { return 0; }") ==
+          "'f' is already declared");
+    // `main` is no exception, so two entrypoints are a duplicate and not a feature.
+    CHECK(parse_error("fn main(): i32 { return 0; } fn main(): i32 { return 0; }") ==
+          "'main' is already declared");
+    // Shadowing an *outer* local is allowed, so the message only ever fires for the
+    // scope the name was introduced in.
+    parse_ok("fn main(): i32 { let x: i32 = 1; if (true) { let x: i32 = 2; } return x; }");
+}
+
+TEST_CASE("a call names a function that exists, or says which one it wanted") {
+    // A call to a name nothing is declared as is a name error, not a type error, so it
+    // is reported at the call and names the callee.
+    CHECK(parse_error("fn main(): i32 { return nope(1); }") == "call to undeclared function 'nope'");
+    CHECK(parse_error("fn main(): i32 { return nope(); }") == "call to undeclared function 'nope'");
+    // ... and it fires whether or not there are arguments to get wrong first.
+    CHECK(parse_error("fn main(): i32 { return nope(1, 2, 3); }") ==
+          "call to undeclared function 'nope'");
+    // A name that is a local is not a function, so the same message says it is not one.
+    CHECK(parse_error("fn main(): i32 { let f: i32 = 0; return f(); }") ==
+          "call to undeclared function 'f'");
+    // A function that is declared is callable, so this is about the signature instead.
+    CHECK(parse_error("fn f(): i32 { return 0; } fn main(): i32 { return f(1); }") !=
+          "call to undeclared function 'f'");
+}
+
+TEST_CASE("a for header is init; test; step, and each part says what it wanted") {
+    // The three parts are separated, so a missing `;` is caught at the next part
+    // rather than being read as part of the one before it.
+    CHECK(parse_error("fn main(): i32 { for (let = 0; i < 1; i = i + 1) { } return 0; }") ==
+          "expected an identifier");
+    CHECK(parse_error("fn main(): i32 { let i: i32 = 0; for (i = 1 i < 2; i = i + 1) { } return 0; }") ==
+          "expected ';'");
+    // The step is an assignment, not an expression, so a bare expression there is an
+    // error rather than a write the loop only sometimes does.
+    CHECK(parse_error("fn main(): i32 { let i: i32 = 0; for (i = 0; i < 2; i + 1) { } return 0; }") ==
+          "expected an assignment operator");
+    // ... and a missing `)` is caught after it.
+    CHECK(parse_error("fn main(): i32 { let i: i32 = 0; for (i = 0; i < 2; i = i + 1 { } return 0; }") ==
+          "expected ')'");
+    CHECK(parse_error("fn main(): i32 { let i: i32 = 0; for i = 0; i < 2; i = i + 1) { } return 0; }") ==
+          "expected '('");
+    // A body that is never closed is a missing `}`, and it is reported at the function
+    // rather than at the loop, because the loop's own `}` never arrives.
+    CHECK(parse_error("fn main(): i32 { let i: i32 = 0; for (i = 0; i < 2; i = i + 1) { return 0; }") ==
+          "unterminated function body");
+    CHECK(parse_error("fn main(): i32 { let i: i32 = 0; while (i < 2) { i = i + 1; return 0; }") ==
+          "unterminated function body");
+    // A `for` with no test is an infinite loop, so it is legal and has no exit edge of
+    // its own: only a `break` gets out.
+    const Program forever =
+        parse_ok("fn main(): i32 { let i: i32 = 0; for (i = 0;;i = i + 1) { if (i > 3) { break; } } return i; }");
+    CHECK(ops_of(forever, 0).size() > 4);
+    // The empty init is legal too, and then the first `;` is the one that ends it.
+    parse_ok("fn main(): i32 { let i: i32 = 0; for (; i < 2; i = i + 1) { } return i; }");
+}
+
+TEST_CASE("a void call has no value, and the arithmetic says so") {
+    // A call that returns nothing is not an operand. The type is named on both sides,
+    // which is the accurate reading: `void` is what the call has, `i32` is what the
+    // `+` needs.
+    CHECK(parse_error("fn f() { } fn main(): i32 { let x: i32 = f() + 1; return 0; }") ==
+          "expected a value of type void, not u32");
+    CHECK(parse_error("fn f() { } fn main(): i32 { let x: i32 = 1; if (f() > 1) { return 1; } return 0; }") ==
+          "expected a value of type void, not u32");
+    // A unary operator names the operator and the void it was given, which is the more
+    // useful pair of the two, so the two wordings differ.
+    CHECK(parse_error("fn f() { } fn main(): i32 { let x: i32 = -f(); return 0; }") ==
+          "'-' is not defined for void");
+    CHECK(parse_error("fn f() { } fn main(): i32 { let x: bool = !f(); return 0; }") ==
+          "'!' is defined on 'bool', but got void");
+    // A void value on its own is fine, which is what a statement of `f();` is.
+    parse_ok("fn f() { } fn main(): i32 { f(); return 0; }");
+}
+
+TEST_CASE("a bool is not an integer, whichever way it is used") {
+    // A bool in an integer position is a type mismatch, and the message names both.
+    CHECK(parse_error("fn main(): i32 { let x: i32 = true; return 0; }") ==
+          "expected a value of type i32, not bool");
+    CHECK(parse_error("fn main(): i32 { let x: u8 = false; return 0; }") ==
+          "expected a value of type u8, not bool");
+    // As an operand of a bitwise operator it is named as the operand's type, not as a
+    // mismatch with the result, because `|` is not a bool operator to begin with.
+    CHECK(parse_error("fn main(): i32 { let a: bool = true; let b: bool = false; let c: i8 = a | b; return 0; }") ==
+          "'|' is not defined for bool");
+    CHECK(parse_error("fn main(): i32 { let a: bool = true; let b: bool = false; let c: i8 = a & b; return 0; }") ==
+          "'&' is not defined for bool");
+    CHECK(parse_error("fn main(): i32 { let a: bool = true; let b: bool = false; let c: i8 = a ^ b; return 0; }") ==
+          "'^' is not defined for bool");
+    // An integer in a bool position is the same error from the other side.
+    CHECK(parse_error("fn main(): i32 { let x: bool = 1; return 0; }") != "");
+    CHECK(parse_error("fn main(): i32 { let x: i8 = 1; let y: bool = x; return 0; }") != "");
+}
+
+TEST_CASE("an escape sequence is one of the ones the language names") {
+    // An escape is a lexical rule, so it is rejected before the parser sees the
+    // literal: `any_error` is the helper for a source the tokenizer refuses.
+    CHECK(any_error("fn main(): i32 { let c: char = '\\q'; return 0; }") ==
+          "invalid escape sequence '\\q'");
+    CHECK(any_error("fn main(): i32 { let c: char = '\\'; return 0; }") != "");
+    CHECK(any_error("fn main(): i32 { let s: string = \"a\\qb\"; return 0; }") != "");
+    // The named ones are the C set, and they are the only ones.
+    parse_ok("fn main(): i32 { let a: char = '\\n'; let b: char = '\\t'; let c: char = '\\r';"
+             " let d: char = '\\0'; let e: char = '\\\\'; let f: char = '\\''; return 0; }");
+}
+
 TEST_CASE("the cursor names what it wanted to see") {
     // Each expectation says what the token is, by its own name.
     CHECK(parse_error("fn main(): i32 { let x = 1; return 0; }") == "expected ':'");

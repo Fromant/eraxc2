@@ -104,12 +104,6 @@ bool TokenCursor::match_op(std::string_view text) {
     return true;
 }
 
-bool TokenCursor::match_keyword(Keyword keyword) {
-    if (!at_keyword(keyword)) return false;
-    take();
-    return true;
-}
-
 bool TokenCursor::else_follows() const {
     std::size_t index = index_ + 1;
     if (index >= tokens_->size() || (*tokens_)[index].type != TokenType::LBrace) return false;

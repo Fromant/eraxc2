@@ -63,7 +63,6 @@ public:
     /// Consumes the token if it is there; reports nothing if it is not.
     bool match(TokenType type);
     bool match_op(std::string_view text);
-    bool match_keyword(Keyword keyword);
 
     /// Skips to just past the next `;` at this nesting level, or past the `}`
     /// that closes it, so a recovery scan lands on the next statement or item.

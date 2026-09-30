@@ -292,6 +292,65 @@ TEST_CASE("two exact values are compared as numbers, not as patterns") {
     CHECK(folded_bits("1 << 63 < 0", "bool") == 0);
 }
 
+TEST_CASE("the logical operators are on bool, and eager") {
+    // `^^` is exclusive or, and it is the only operator that needs two different
+    // operators' definitions at once: both `&&`/`||` and `^^` on `bool`, and `&&`,
+    // `||`, `^^` on integers as bitwise and/or/xor.
+    CHECK(folded_bits("true ^^ true", "bool") == 0);
+    CHECK(folded_bits("true ^^ false", "bool") == 1);
+    CHECK(folded_bits("false ^^ false", "bool") == 0);
+    CHECK(folded_bits("true && true", "bool") == 1);
+    CHECK(folded_bits("true && false", "bool") == 0);
+    CHECK(folded_bits("false || true", "bool") == 1);
+    CHECK(folded_bits("false || false", "bool") == 0);
+    // On integers they are the bitwise operators, so the names overlap but the
+    // spelling does not: `^` is xor and `^^` is not an operator at all.
+    CHECK(parse_error("fn main(): i32 { let x: i8 = 6 ^^ 3; return 0; }") ==
+          "'^^' is defined on 'bool' operands");
+    // A comparison result is a `bool`, so it is an operand of these.
+    CHECK(folded_bits("(1 < 2) ^^ (2 < 1)", "bool") == 1);
+    // They are eager: both sides are evaluated whatever the left one says, so there
+    // is no constant to fold away on the strength of the left alone.
+    const Program eager = parse_ok("fn main(): i32 { let a: i32 = 1; if (false && a > 0) { return 1; } return 0; }");
+    CHECK(count_of(ops_of(eager, 0), Op::Ret) == 2);
+    // ... and `false && x` is not `false` at compile time, so the test is not folded.
+    const Program not_folded =
+        parse_ok("fn main(): i32 { let a: i32 = 1; if (false && a > 0) { return 1; } return 0; }");
+    CHECK(has_op(ops_of(not_folded, 0), Op::And));
+}
+
+TEST_CASE("an unsigned division is unsigned throughout") {
+    // The signed and unsigned forms differ, so the operand's type is what picks one,
+    // and a `u64` above `i64max` is the case where the difference is visible: read as
+    // `u64` it is the largest value there is, read as `i64` it is -1.
+    CHECK(folded_bits("18446744073709551615 / 2", "u64") == 9223372036854775807ULL);
+    CHECK(folded_bits("18446744073709551615 % 2", "u64") == 1);
+    // The same literal in a signed position is a different number, and is a value.
+    CHECK(folded_signed("-1 / 2") == 0);
+    CHECK(folded_signed("-1 % 2") == -1);
+    // Every unsigned width divides as itself, with no sign to carry.
+    CHECK(folded_bits("255 / 7", "u8") == 36);
+    CHECK(folded_bits("255 % 7", "u8") == 3);
+    CHECK(folded_bits("65535 / 255", "u16") == 257);
+    CHECK(folded_bits("4294967295 / 65536", "u32") == 65535);
+    CHECK(folded_bits("0 / 5", "u32") == 0);
+    CHECK(folded_bits("5 / 1", "u32") == 5);
+    // A `char` is a byte, so it divides unsigned too.
+    CHECK(folded_bits("255 / 16", "char") == 15);
+    CHECK(folded_bits("255 % 16", "char") == 15);
+    // An unsigned division by zero has no answer, and the message is the same one a
+    // signed division gives: the divisor is zero whichever way it is read.
+    CHECK(parse_error("fn main(): i32 { let x: u8 = 255 / 0; return 0; }") ==
+          "division by zero in a constant expression");
+    CHECK(parse_error("fn main(): i32 { let x: u8 = 255 % 0; return 0; }") ==
+          "division by zero in a constant expression");
+    // `i64min / -1` is `2^63`, which no signed type holds and `u64` does.
+    CHECK(folded_bits("((-9223372036854775807) - 1) / -1", "u64") == 0x8000000000000000ULL);
+    CHECK(parse_error("fn main(): i32 { let x: i64 = ((-9223372036854775807) - 1) / -1; return 0; }") != "");
+    // A wider `imin / -1` is a value in that type and not a constant overflow.
+    CHECK(folded_signed("-2147483647 - 1", "i32") == -2147483648LL);
+}
+
 TEST_CASE("a bool has no order, but it does have equality") {
     // `<`, `<=`, `>` and `>=` are defined on integers and chars. `bool` lowers to
     // `i8`, where the comparison would be perfectly well defined, so this is a rule

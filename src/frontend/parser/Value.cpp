@@ -30,11 +30,6 @@ std::int64_t ConstInt::signed_value() const noexcept {
     return exact_known ? exact : reinterpret(bits, type);
 }
 
-std::uint64_t ConstInt::unsigned_value() const noexcept {
-    if (exact_known) return static_cast<std::uint64_t>(exact);
-    return truncate(bits, type);
-}
-
 bool ConstInt::fits(middleend::Type type) const noexcept {
     if (!middleend::is_integer(type)) return false;
     if (type == middleend::Type::U64) return true;
