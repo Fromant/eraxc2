@@ -1,0 +1,12 @@
+// A global, and an assignment to it.
+//
+// The initialiser is a constant expression, so `0` is folded here at parse time and
+// stored in the program's global table rather than run at startup. `let` names the
+// global; it does not make it immutable, which is what the two assignments below do.
+let counter: i32 = 0;
+
+fn main(): i32 {
+    counter = counter + 1;
+    counter = counter * 2;
+    return counter;
+}

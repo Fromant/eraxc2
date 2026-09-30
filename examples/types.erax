@@ -1,0 +1,25 @@
+// Every type the language has, one value of each.
+//
+// A `char` is a byte: one character in single quotes, or an escape from the C set
+// (`\n`, `\t`, `\r`, `\0`, `\\`, `\'`, `\"`, `\xNN`, `\uNNNN`). A `bool` is `true` or
+// `false` and is not an integer, so it has equality but no order -- `a < b` on two
+// bools is an error, while `a == b` is fine.
+//
+// The boundary values are here because they are the ones that pin the rules down:
+// `-9223372036854775807 - 1` is `i64min` written so the parser sees a subtraction
+// rather than a literal it might read as a positive, and `18446744073709551615` is
+// `u64max`, a value no signed type holds.
+fn main(): i32 {
+    let a: i8 = -128;
+    let b: u8 = 255;
+    let c: i16 = -32768;
+    let d: u16 = 65535;
+    let e: i32 = -2147483648;
+    let f: u32 = 4294967295;
+    let g: i64 = -9223372036854775807 - 1;
+    let h: u64 = 18446744073709551615;
+    let i: bool = true;
+    let j: char = 'A';
+    let k: char = '\n';
+    return 0;
+}

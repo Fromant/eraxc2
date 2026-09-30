@@ -1,0 +1,19 @@
+// A folded test is decided at parse time, not at run time.
+//
+// `while (true)` has a constant test, so the parser keeps the body (it is reachable)
+// and still emits no `CMP` for the test itself -- there is nothing to compare. A
+// constant `while (false)` would drop its body entirely.
+//
+// `while (i > 3)` *is* a real branch, so this is a loop with two blocks and a back
+// edge. `break` leaves it; there is no condition to fold here because `i` is a name,
+// not a literal.
+fn main(): i32 {
+    let i: i32 = 0;
+    while (true) {
+        i = i + 1;
+        if (i > 3) {
+            break;
+        }
+    }
+    return i;
+}

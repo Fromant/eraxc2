@@ -1,0 +1,15 @@
+// A loop, and what it lowers to.
+//
+// The test `i < 10` is not a constant, so it becomes a real branch: `CMP_LT` writes a
+// `bool` (an `i8`) and `if CMP_NE` picks the next block from it. The four blocks are
+// the loop's own: init, test, body, step -- and the step block links back to the test,
+// which is what makes it a loop rather than a jump.
+//
+//   $0  sum      $1  i        $2  the test      $3/$4  scratch for the step
+fn main(): i32 {
+    let sum: i32 = 0;
+    for (let i: i32 = 0; i < 10; i = i + 1) {
+        sum = sum + i;
+    }
+    return sum;
+}

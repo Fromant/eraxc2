@@ -1,0 +1,5 @@
+// The smallest program there is: the entrypoint returns an exit code, and `i32` is
+// what the driver gets back. There is nothing to do and nothing is printed.
+fn main(): i32 {
+    return 0;
+}

@@ -1,0 +1,22 @@
+// A call, and what `CALL dst &f a0…` means.
+//
+//   args[0]  dst    the slot the result goes in
+//   args[1]  &f     the callee, here `&0` for `fib`
+//   args[2..]       the arguments, in order
+//
+// `fib(n - 1) + fib(n - 2)` is two calls into two fresh slots and then an `ADD`, so
+// nothing is evaluated in place and nothing is nested: every operator gets its own
+// destination slot.
+//
+// A constant argument is still a constant: `fib(10)` below folds `10 - 1` only when it
+// is written out, so the argument here is a plain `MOV` from a literal.
+fn fib(n: i32): i32 {
+    if (n < 2) {
+        return n;
+    }
+    return fib(n - 1) + fib(n - 2);
+}
+
+fn main(): i32 {
+    return fib(10);
+}
