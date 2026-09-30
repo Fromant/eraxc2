@@ -54,6 +54,12 @@ The third state is the one that is easy to get wrong, because wrapping a value t
 
 **A placeholder.** An untargeted literal is held at the full `u64` width rather than at the type it is first read as, and takes the type of the position it fills. This is what keeps `1 < 2` a `bool` (a comparison's own type wins) while `let x: i32 = 1 + 2;` is an `i32`. Only a *lone* literal is a placeholder — the expected type is not threaded into the operands of an operator, which is why `let x: i64 = 1 + 2;` is an `i64` by its position and `1 + 2` alone is a `u32`.
 
+### A comparison reads values, not patterns
+
+Two exact values are compared **as numbers**, which is the only reading that gets a negative literal right: `-1 < 1` read as bits is `0xFFFF... < 1`, and that answers false. Signed and unsigned comparison agree whenever both values are non-negative, so this is also right for a genuinely unsigned operand.
+
+When one side is a `u64` with no `i64` value, it has no signed reading at all, so the comparison is the unsigned one — the same `u64` reading the value has everywhere else. `1 << 63 > 0` is true; `1 << 63 < 0` is false.
+
 ### Negation: the same operation, two outcomes
 
 Negating a value is worth calling out because the two spellings differ, and both are correct:

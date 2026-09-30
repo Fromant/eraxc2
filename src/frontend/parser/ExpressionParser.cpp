@@ -103,55 +103,76 @@ std::uint64_t magnitude(std::int64_t value) noexcept {
     return value < 0 ? ~static_cast<std::uint64_t>(value) + 1 : static_cast<std::uint64_t>(value);
 }
 
-/// Whether the product is a `u64`, the widest type a constant can be carried in.
-/// A product that leaves the `i64` range is still a `u64` until it leaves that one:
-/// `2^62 * 2^62` is `i64min` read as bits, and `2^32 * 2^32` is in no type at all.
-bool fits_u64(std::int64_t a, std::int64_t b) noexcept {
-    if (a == 0 || b == 0) return true;
+/// The type a fold is done in. Most operations read their bits the same way whatever
+/// the operand reports, but `Sdiv`, `Smod` and `Sar` read them as a signed number, and
+/// an untargeted literal reports itself `u64` -- so without this, `imin / -1` divides
+/// two unsigned values and answers `0`. Only the signedness is taken from the op; the
+/// width is the operand's, which for a placeholder is the `u64` it is held at.
+Type fold_type_of(Op op, Type operand) noexcept {
+    switch (op) {
+        case Op::Sdiv:
+        case Op::Smod:
+        case Op::Sar:
+            switch (operand) {
+                case Type::U8: return Type::I8;
+                case Type::U16: return Type::I16;
+                case Type::U32: return Type::I32;
+                case Type::U64: return Type::I64;
+                default: return operand;
+            }
+        default: return operand;
+    }
+}
+
+/// A result that has left the `i64` range a constant is written in, held as a sign and
+/// a magnitude. Two's complement has no room for a value past the width of its own
+/// cell, and a wrapped one comes back looking small and legitimate: `2^64` wraps to
+/// `0`, and `i64min - 1` wraps to `i64max`. A sign and a magnitude do not wrap, which
+/// is what lets the range of every type be asked directly instead of guessed at per
+/// operator.
+struct Wide {
+    bool negative = false;
+    std::uint64_t magnitude = 0;
+};
+
+/// Which of the three states in `types.md#constants` a result is in: a value, a `u64`
+/// that has no `i64` value, or a number that is in no type at all.
+enum class Reach { Value, Bits, NoType };
+
+Reach reach_of(const Wide& wide) noexcept {
+    const std::uint64_t i64_sign = std::uint64_t{1} << 63;
+    // A negative result is an unsigned value nowhere, so once it is below `i64min`
+    // there is no type left to carry it. `i64min` itself is the sign bit as a
+    // magnitude, so `-(2^63)` is a value and `+(2^63)` is not.
+    if (wide.negative) return wide.magnitude <= i64_sign ? Reach::Value : Reach::NoType;
+    return wide.magnitude < i64_sign ? Reach::Value : Reach::Bits;
+}
+
+/// `a` combined with `b` by `op`, as a sign and a magnitude. `op` is `+`, `-` or `*`.
+/// Fails only when the magnitude itself outgrows a `u64`, which is reachable by
+/// multiplication and is in no type whatever the sign.
+bool wide_of(Op op, std::int64_t a, std::int64_t b, Wide& out) noexcept {
+    constexpr std::uint64_t top = ~std::uint64_t{0};
     const std::uint64_t left = magnitude(a);
     const std::uint64_t right = magnitude(b);
-    const std::uint64_t limit = (a < 0) != (b < 0) ? std::uint64_t{1} << 63 : ~std::uint64_t{0};
-    return left <= limit / right;
-}
-
-/// A constant is written in the `i64` range, so folding it asks whether the result
-/// is still in that range. The test is on the operands' magnitudes, not on a round
-/// trip through the result: `i64max + 1` and `i64min - 1` both come back as
-/// themselves, so a round trip cannot tell them from a sum that fitted.
-bool checked_add(std::int64_t a, std::int64_t b, std::int64_t& out) noexcept {
-    constexpr std::int64_t max = std::numeric_limits<std::int64_t>::max();
-    constexpr std::int64_t min = std::numeric_limits<std::int64_t>::min();
-    if (b > 0 && a > max - b) return false;
-    if (b < 0 && a < min - b) return false;
-    out = a + b;
-    return true;
-}
-
-bool checked_sub(std::int64_t a, std::int64_t b, std::int64_t& out) noexcept {
-    constexpr std::int64_t max = std::numeric_limits<std::int64_t>::max();
-    constexpr std::int64_t min = std::numeric_limits<std::int64_t>::min();
-    if (b > 0 && a < min + b) return false;
-    if (b < 0 && a > max + b) return false;
-    out = a - b;
-    return true;
-}
-
-bool checked_mul(std::int64_t a, std::int64_t b, std::int64_t& out) noexcept {
-    if (a == 0 || b == 0) {
-        out = 0;
+    if (op == Op::Mul) {
+        if (left != 0 && right > top / left) return false;
+        out = {(a < 0) != (b < 0), left * right};
         return true;
     }
-    const std::uint64_t left = magnitude(a);
-    const std::uint64_t right = magnitude(b);
-    // A negative result reaches one further than a positive one, because the sign
-    // bit is not a magnitude: `i64min` is `-(2^63)`, so `-(2^63)` is a value and
-    // `+(2^63)` is not.
-    const std::uint64_t limit = (a < 0) != (b < 0) ? std::uint64_t{1} << 63
-                                                   : (std::uint64_t{1} << 63) - 1;
-    if (left > limit / right) return false;
-    const std::uint64_t product = left * right;
-    out = (a < 0) != (b < 0) ? static_cast<std::int64_t>(~product + 1)
-                             : static_cast<std::int64_t>(product);
+    // A sum and a difference of two `i64` reach `2^64`, so even here the magnitude can
+    // outgrow a `u64` -- but only at exactly `2^64`, which the carry test catches.
+    if (op == Op::Add ? (a < 0) != (b < 0) : (a < 0) == (b < 0)) {
+        // The operands disagree in sign, so the larger magnitude wins the sign.
+        if (left >= right) {
+            out = {op == Op::Add ? a < 0 : b < 0, left - right};
+        } else {
+            out = {op == Op::Add ? b < 0 : a < 0, right - left};
+        }
+        return true;
+    }
+    if (left > top - right) return false;
+    out = {a < 0, left + right};
     return true;
 }
 
@@ -203,32 +224,38 @@ std::expected<std::optional<ConstInt>, ParseError> exact_value(Op op, SemType op
     std::int64_t value = 0;
 
     switch (op) {
-        // Leaving the `i64` range is not the same as leaving every range. An `i64` is
-        // a value a source can write, so an `i64` result is what a constant is checked
-        // against; a result above it is still a `u64` and is carried as bits until
-        // the position says which type it is. A result above *that* -- `2^32 * 2^32`
-        // is `2^64` -- is in no type at all, so it is an error here rather than a
-        // pattern that wraps to a number which looks like a legitimate one.
-        case Op::Add: if (!checked_add(a.exact, b.exact, value)) return std::optional<ConstInt>{}; break;
-        case Op::Sub: if (!checked_sub(a.exact, b.exact, value)) return std::optional<ConstInt>{}; break;
-        case Op::Mul:
-            if (!checked_mul(a.exact, b.exact, value)) {
-                if (!fits_u64(a.exact, b.exact)) {
-                    // The result is in no type, so there is no type to name here --
-                    // the position's own is the one the reader wrote.
-                    return std::unexpected(at("this constant expression is too large for any type", location));
-                }
-                return std::optional<ConstInt>{};
+        // A constant is folded in the `i64` range, and leaving that range is not one
+        // thing but three. A result inside it is a value. A result above it is still
+        // a `u64` and is carried as bits until the position says which type it is. A
+        // result below `i64min`, or past `u64max` whichever way it went, is in no type
+        // at all -- and wrapping it would produce a number that looks legitimate in
+        // every position, which is the one answer a constant must never give.
+        case Op::Add:
+        case Op::Sub:
+        case Op::Mul: {
+            Wide wide;
+            const Reach reach = wide_of(op, a.exact, b.exact, wide) ? reach_of(wide) : Reach::NoType;
+            if (reach == Reach::NoType) {
+                // There is no type to name in the message, because there is none: the
+                // result is not too big for the position, it is too big for the language.
+                return std::unexpected(at("this constant expression is too large for any type", location));
             }
+            if (reach == Reach::Bits) return std::optional<ConstInt>{};
+            value = wide.negative ? static_cast<std::int64_t>(~wide.magnitude + 1)
+                                  : static_cast<std::int64_t>(wide.magnitude);
             break;
+        }
         case Op::Sdiv:
         case Op::Smod:
             if (b.exact == 0) {
                 return std::unexpected(at("division by zero in a constant expression", location));
             }
             if (a.exact == std::numeric_limits<std::int64_t>::min() && b.exact == -1) {
-                return std::unexpected(
-                    at("constant expression overflows " + std::string{to_string(result)}, location));
+                // The quotient is `2^63`: a `u64` value and no signed one, and the same
+                // number `1 << 63` reaches. It is returned as bits rather than left to a
+                // fold, because the signed division that would have to produce it traps
+                // on exactly this pair, and the position decides which type it fills.
+                return ConstInt::bits_of(std::uint64_t{1} << 63, Type::U64);
             }
             value = op == Op::Sdiv ? a.exact / b.exact : a.exact % b.exact;
             break;
@@ -246,16 +273,19 @@ std::expected<std::optional<ConstInt>, ParseError> exact_value(Op op, SemType op
             }
             break;
         case Op::Shl: {
-            // A negative value has no exact shifted form, and a count of 63 or
-            // more leaves the i64 range for anything but zero.
+            // A negative value has no exact shifted form, and a count of 63 or more
+            // leaves the i64 range for anything but zero.
             const std::uint64_t amount = static_cast<std::uint64_t>(b.exact) & middleend::shift_mask(operand_type);
             if (a.exact == 0) {
                 value = 0;
                 break;
             }
-            if (a.exact < 0 || amount >= 63 || !checked_mul(a.exact, std::int64_t{1} << amount, value)) {
+            const std::uint64_t left = a.exact < 0 ? 0 : static_cast<std::uint64_t>(a.exact);
+            if (a.exact < 0 || amount >= 63 ||
+                left > static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max()) >> amount) {
                 return std::optional<ConstInt>{};
             }
+            value = static_cast<std::int64_t>(left << amount);
             break;
         }
         case Op::Shr:
@@ -278,9 +308,18 @@ std::expected<std::optional<ConstInt>, ParseError> exact_value(Op op, SemType op
         case Op::CmpLe:
         case Op::CmpGt:
         case Op::CmpGe: {
-            const middleend::fold::Result compared =
-                middleend::fold::binary(op, operand_type, a.bits, b.bits);
-            return ConstInt::of(compared.value.value_or(0), result_type);
+            // Two exact values are compared as numbers, and that is the only reading
+            // that gets a negative literal right: `-1 < 1` read as bits is
+            // `0xFFFF.. < 1` and answers false. Signed and unsigned comparison agree
+            // whenever both values are non-negative, so this is also right for an
+            // operand that is genuinely unsigned.
+            const bool answer = op == Op::CmpEq   ? a.exact == b.exact
+                                : op == Op::CmpNe ? a.exact != b.exact
+                                : op == Op::CmpLt ? a.exact < b.exact
+                                : op == Op::CmpLe ? a.exact <= b.exact
+                                : op == Op::CmpGt ? a.exact > b.exact
+                                                   : a.exact >= b.exact;
+            return ConstInt::of(answer ? 1 : 0, result_type);
         }
         case Op::Mov:
         case Op::Ret:
@@ -519,7 +558,7 @@ ExpressionParser::result ExpressionParser::apply(Op op, SemType result, const Va
             // only a pattern, or the value outgrew the range a constant is written in.
             // A division still has no answer here, and an overflow is a compile error
             // even though the same operation only wraps when it runs.
-            const middleend::fold::Result raw = middleend::fold::binary(op, operand_type, a.bits, b.bits);
+            const middleend::fold::Result raw = middleend::fold::binary(op, fold_type_of(op, operand_type), a.bits, b.bits);
             if (raw.failure) {
                 if (*raw.failure == middleend::fold::Failure::DivisionByZero) {
                     return std::unexpected(at("division by zero in a constant expression", location));
@@ -550,9 +589,10 @@ ExpressionParser::result ExpressionParser::apply_unary(Op op, SemType type, cons
         const Type operand_type = operand.constant->type;
         std::optional<ConstInt> folded;
         if (operand.constant->exact_known) {
-            std::int64_t value = 0;
-            if (op == Op::Neg && checked_sub(0, operand.constant->exact, value)) {
-                folded = ConstInt::of(value, operand_type);
+            // A negation of `i64min` is `2^63`, which has no `i64` value, so it falls
+            // through to the bits and the position's range check is what rejects it.
+            if (op == Op::Neg && operand.constant->exact != std::numeric_limits<std::int64_t>::min()) {
+                folded = ConstInt::of(0 - operand.constant->exact, operand_type);
             }
             // `~x` is `-x - 1`, so like a negation it keeps the value exact.
             if (op == Op::Not) folded = ConstInt::of(~operand.constant->exact, operand_type);
