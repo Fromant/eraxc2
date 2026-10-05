@@ -1,6 +1,6 @@
 # erax TODO / roadmap
 
-Status: **WIP.** The lexer and the parser exist; the IR is specified and implemented but never executed. The tokenizer spec is `docs/frontend/tokenizer.md`; the IR spec is `docs/middleend/JIR.md`.
+Status: **WIP.** The lexer and the parser exist; the IR is specified and implemented, validated, and executed by the reference interpreter. The tokenizer spec is `docs/frontend/tokenizer.md`; the IR spec is `docs/middleend/JIR.md`.
 
 ## Front-end
 
@@ -38,7 +38,7 @@ Source-level additions that are out of scope for v1 — listed here so the langu
 
 - [x] Integer types, globals, functions, calls (incl. recursion), control flow — `src/middleend/jir/` builds and prints them; the parser emits them.
 - [x] Validator per the IR spec (`JIR.md#validator`) — `src/middleend/jir/Validator.{hpp,cpp}` runs the seven checks on every `Program` the driver lowers; it collects all errors rather than stopping at the first, so one run names everything wrong.
-- [ ] Interpreter: the stack-machine engine (one cell array + frame pointer).
+- [x] Interpreter: the stack-machine engine (one cell array + frame pointer) — `src/interp/Interpreter.{hpp,cpp}` runs a validated `Program` to completion and reports the final global state plus the entrypoint's return code; `eraxc --run file.erax` is the driver. Arithmetic is `fold::binary`/`fold::unary`, the same code the parser folds constants with, so a folded answer and a computed one cannot drift.
 
 ## JIR — later scope
 

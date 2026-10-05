@@ -16,7 +16,10 @@ add_executable(erax_tests
     Parser.literals.test.cpp
     Parser.globals.test.cpp
     Parser.errors.test.cpp
+    Interpreter.test.cpp
 )
 target_link_libraries(erax_tests PRIVATE erax Catch2::Catch2WithMain)
+# The interpreter tests run the shipped examples, so they need to find them.
+target_compile_definitions(erax_tests PRIVATE ERAX_EXAMPLES_DIR="${CMAKE_SOURCE_DIR}/examples")
 
 add_test(NAME erax_tests COMMAND erax_tests)

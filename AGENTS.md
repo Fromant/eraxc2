@@ -1,6 +1,6 @@
 # AGENTS.md
 
-erax, a TypeScript-like compiled language. **The tokenizer and the parser are implemented; the interpreter, VM, and AoT backend are not.** The parser lowers source straight to JIR with no AST and no exceptions; the specs in `docs/` are the contract, and most sessions are still spec-writing and cross-doc consistency.
+erax, a TypeScript-like compiled language. **The tokenizer, the parser, and the JIR reference interpreter are implemented; the VM and the AoT backend are not.** The parser lowers source straight to JIR with no AST and no exceptions; the specs in `docs/` are the contract, and most sessions are still spec-writing and cross-doc consistency.
 
 ## Commands (Windows / PowerShell)
 
@@ -12,6 +12,7 @@ ctest --test-dir build --output-on-failure
 .\build\erax_tests.exe "number*"             # run matching tests (Catch2 wildcards)
 .\build\eraxc.exe examples\helloworld.erax   # tokenizes a file, prints a token dump
 .\build\eraxc.exe --jir examples\fib.erax    # lowers a program and prints the JIR
+.\build\eraxc.exe --run examples\fib.erax    # runs it; the exit code is the entrypoint's return
 echo 'let a: i32 = 1;' | .\build\eraxc.exe    # or stdin; errors as file:row:col
 ```
 
@@ -22,7 +23,8 @@ No lint/formatter/typecheck config exists. `-Wall -Wextra` apply only to GNU/Cla
 - `docs/core/` — the erax language contract (v1): `language.md` (grammar, operator set, keywords, semantics) + `types.md`, `expressions.md`, `statements.md`.
 - `docs/frontend/tokenizer.md` — lexical contract; `src/frontend/tokenizer/` is pinned by `tests/Tokenizer.test.cpp`.
 - `src/frontend/parser/` — the implemented parser: `ProgramParser` (statements, CFG, flow/definite assignment), `ExpressionParser` (precedence, literals, calls, folding), `ParseContext` (symbols, scopes, token cursor), `SemType`, `Value`. Pinned by `tests/Parser.test.cpp`.
-- `docs/middleend/JIR.md` — the shared IR contract (stack-framed, register-style); `src/middleend/jir/` implements the types, builder, and constant folding.
+- `docs/middleend/JIR.md` — the shared IR contract (stack-framed, register-style); `src/middleend/jir/` implements the types, builder, constant folding, and the validator.
+- `src/interp/Interpreter.{hpp,cpp}` — the reference executor: one cell array, a frame pointer walking it, `fold` arithmetic, and the machine's own limits. Pinned by `tests/Interpreter.test.cpp`, which also runs `examples/` as the conformance corpus. Its results are what a backend is compared to.
 - `TODO.md` — **roadmap + `.jir` serialization/versioning, and all "not in v1" / future-work content.** Future work must live here, never in the spec docs.
 - `examples/helloworld.erax` — aspirational (uses `string`/`std.print`, which are not v1).
 
@@ -37,6 +39,8 @@ No lint/formatter/typecheck config exists. `-Wall -Wextra` apply only to GNU/Cla
 - Keywords are **`Identifier` tokens** classified by the parser — do not add token kinds or a keyword table to the tokenizer.
 - Operators are maximal-munch runs validated against a whitelist at parse (`a+++++b` errors). Dots are never operator chars, so `?.`/`...` compose at parse; `::` lexes as two Colons and is banned (dot namespaces).
 - JIR: `CALL dst &f a0…` — `args[0]`=result slot, `args[1]`=callee, `args[2..]`=args; `EMPTY` sentinel is the only legal void result slot; shift counts mask to operand width; arithmetic wraps; div-by-zero is process death (no UB anywhere).
+- A loop tests in a block of its own, so the block a `while`/`for` is written in runs once and a back edge cannot re-run it.
+- The interpreter reuses `fold::binary`/`fold::unary` for arithmetic, so folding and execution cannot drift; a cell is one raw `u64` bit pattern, never a host type.
 - JIR prints a type with every cell operand (`i32 $3`, `u8 1`), but not with a `@k`/`&k` id, which already names a cell the program table types.
 - `bool`/`char` lower to `i8`; no implicit conversions; assignment is a statement (not an expression); `break`/`continue` only in loops.
 - A literal takes the type of the position it fills, and only a *lone* one: the expected type is not threaded into the operands of an operator, which is what keeps `1 < 2` a `bool` and `let x: i32 = 1 + 2` an `i32` while `let x: bool = 1;` fails.

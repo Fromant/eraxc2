@@ -38,6 +38,7 @@ add_library(erax
     src/middleend/jir/Builder.cpp
     src/middleend/jir/Fold.cpp
     src/middleend/jir/Validator.cpp
+    src/interp/Interpreter.cpp
 )
 target_include_directories(erax PUBLIC src)
 

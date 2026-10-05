@@ -169,8 +169,17 @@ A branch test is a `CMP_*` on two values of one type, and its operands are read 
 
 Signedness is in the op's name, so the operands have to agree: `SDIV`, `SMOD`, `SAR` signed; `UDIV`, `UMOD` unsigned. `SHL` and `SHR` are defined either way. A comparison answers `i8` regardless of what it compares, since its signedness comes from its operands.
 
-## Execution model (possible implementation)
+## Execution model
 
 - **Interpreter / VM**: one array of cells; a frame pointer (plus a stack pointer) walks frames — `CALL` pushes, `RET` pops. The engine is a stack machine and nothing else.
 - **AoT**: frames map to native stack frames; vregs resolve to frame-pointer-relative addresses; instruction selection, frame layout, and register allocation are backend concerns.
 - Serialized `.jir` format, magic, and versioning: see `TODO.md`.
+
+The interpreter of `src/interp/` is this contract made executable, and its results are what a backend is compared against. It is where the parts of the contract that leave room to the executor are pinned down:
+
+- **A cell is one `u64`** holding the raw bit pattern of whatever type the IR gave it. A value is never held in a host type, so narrowing and wrapping are the IR's business: an `i32` cell is zero-extended, and `i32 -1` is `0xFFFFFFFF`.
+- **Arithmetic is the same code that folds constants** (`fold::binary`/`fold::unary`), so a folded answer and a computed one cannot drift apart.
+- **A global initializer is a frame of its own** — the IR gives it no `frame_size`, so the machine gives it the cells its vregs name, and it runs before the entrypoint exists.
+- **The machine validates first.** Every operand is read through an index, so a program the validator rejects never reaches the cell array; it comes back as a list of errors instead.
+- **Limits are the machine's, not the IR's.** A frame's size and how deep recursion may go are not in this contract, so an executor has to say where it stops rather than asking the host for memory it may not have. The reference interpreter counts both the entrypoint's own frame and the initializers', and reports three ways to stop: a stack deeper than the limit, a frame wider than the whole cell array, and a cell array with no room left.
+- **What a run leaves behind is the observable result** and nothing else: final global state (one cell per global, in declaration order) plus the entrypoint's `i32` return. A trap keeps the call stack it happened on, because the IR is nameless and the stack is the only way to say where a program was.
