@@ -630,9 +630,12 @@ std::expected<ProgramParser::Flow, ParseError> ProgramParser::while_statement() 
     TokenCursor& cursor = context_.cursor;
     cursor.take();
     if (auto open = expect(cursor, TokenType::LParen); !open) return std::unexpected(open.error());
-    // The test is read in the block the loop starts in, which is where a
-    // `continue` goes, so a re-entered loop evaluates it again.
-    const std::size_t cond_block = context_.builder.current();
+    // The test gets a block of its own, which is where a `continue` goes, so that
+    // re-entering the loop evaluates the test again and nothing else: the block the
+    // loop was written in runs once.
+    const std::size_t cond_block = context_.builder.new_block();
+    if (!context_.builder.terminated()) context_.builder.link_next(cond_block);
+    context_.builder.set_current(cond_block);
     auto test = condition();
     if (!test) return std::unexpected(test.error());
     if (auto close = expect(cursor, TokenType::RParen); !close) return std::unexpected(close.error());

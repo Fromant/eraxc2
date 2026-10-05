@@ -246,9 +246,10 @@ TEST_CASE("an else if is an else holding an if") {
 }
 
 TEST_CASE("a folded test picks the edge the value says") {
-    // `while (1 > 2)` runs zero times, so its body is dropped rather than kept.
+    // `while (1 > 2)` runs zero times, so its body is dropped rather than kept, and
+    // the loop's test still has a block of its own to fold its one edge in.
     const Program loop = parse_ok("fn main(): i32 { let i: i32 = 0; while (1 > 2) { i = i + 1; } return i; }");
-    CHECK(body_of(loop, 0).size() == 2);
+    CHECK(body_of(loop, 0).size() == 3);
     for (const BasicBlock& block : body_of(loop, 0).blocks) {
         for (const Command& command : block.commands) CHECK(command.op != Op::Add);
     }

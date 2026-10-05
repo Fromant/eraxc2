@@ -244,6 +244,39 @@ TEST_CASE("a test that folds keeps one edge") {
     CHECK(cfg.size() == 3);
 }
 
+TEST_CASE("a loop tests in a block of its own, so its prefix runs once") {
+    // The block a `while` is written in is not the block the loop comes back to: a
+    // back edge into it would run `let i = 0` again on every iteration, and
+    // `i = i + 1` would never end.
+    const Program program = parse_ok("fn main(): i32 { let i: i32 = 0; while (i < 3) { i = i + 1; } return i; }");
+    const Cfg& cfg = body_of(program, 0);
+    const std::size_t header = first_block_with(program, 0, Op::CmpLt);
+    REQUIRE(header != cfg.size());
+    CHECK(header != 0);
+    // The entry block only sets `i` up and hands over; the test is in the header.
+    REQUIRE(cfg.blocks[0].commands.size() == 1);
+    CHECK(cfg.blocks[0].commands[0].op == Op::Mov);
+    CHECK(cfg.blocks[0].commands[0].args[0].value == 0);
+    CHECK(cfg.blocks[0].next == header);
+    // The body links back to the header, not to the entry.
+    const std::size_t body = first_block_with(program, 0, Op::Add);
+    REQUIRE(body != cfg.size());
+    CHECK(cfg.blocks[body].next == header);
+    // A `while` as a whole function body has an empty block in front of the header,
+    // because the header is a block of its own all the same.
+    const Program bare = parse_ok("fn f(n: i32) { while (n > 0) { n = n - 1; } } fn main(): i32 { return 0; }");
+    const Cfg& alone = body_of(bare, 0);
+    const std::size_t alone_header = first_block_with(bare, 0, Op::CmpGt);
+    const std::size_t alone_body = first_block_with(bare, 0, Op::Sub);
+    REQUIRE(alone_header != alone.size());
+    REQUIRE(alone_body != alone.size());
+    CHECK(alone_header == 1);
+    CHECK(cfg.size() == 4);
+    CHECK(alone.blocks[0].commands.empty());
+    CHECK(alone.blocks[0].next == alone_header);
+    CHECK(alone.blocks[alone_body].next == alone_header);
+}
+
 TEST_CASE("unreachable code is dropped, not rejected") {
     // The code after a `return` is still parsed and checked, but nothing can
     // reach it, so it is not in the CFG.
