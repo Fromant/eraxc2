@@ -4,14 +4,107 @@ TypeScript-like programming language with a static type system.
 
 One language, three ways to run it:
 
-1. **Interpreter** — raw source, fast iteration, runs anywhere (JS-style).
-2. **Bytecode VM** — the front-end compiles to a stable bytecode, JIR (`docs/middleend/JIR.md`); the VM executes it (Java/C#-style). Pre-compiled and portable, no JIT needed.
+1. **Reference interpreter** — runs JIR in this process, one cell array at a time. This is what `eraxc --run` does, and its results are the ones every other backend is compared against.
+2. **Bytecode VM** — the front-end compiles to a stable bytecode, JIR (`docs/middleend/JIR.md`); the VM executes a *serialized* form of it (Java/C#-style). Pre-compiled and portable, no JIT needed.
 3. **AoT compiler** — native code generation for peak performance (C++-level). Coming much later; the backend itself is not part of the shared contract.
 
 All three share one front-end (lexer → parser → JIR), so the same `.erax` programs must produce identical results on every backend. That shared contract is what makes the language cheap to test.
 
-> **Status: WIP.** The tokenizer and the parser both exist: the parser lowers a program straight to JIR and
-> `--jir` prints it. No interpreter, no VM, no AoT backend yet.
+> **Status: WIP.** The tokenizer, the parser, and the reference interpreter all exist: the parser lowers a
+> program straight to JIR, `--jir` prints it, and `--run` executes it. The validator and the interpreter
+> both run on everything the driver lowers. No bytecode VM, no AoT backend yet.
+
+## Using eraxc
+
+`eraxc` is the driver. It reads one `.erax` file, or stdin when no file is given, and one flag says how far to take it:
+
+| Command | What it does |
+| ------- | ------------ |
+| `.\build\eraxc.exe file.erax` | Tokenize and print the token stream — the lexer's view of the source |
+| `.\build\eraxc.exe --jir file.erax` | Lower to JIR and print it — the parser's and validator's view |
+| `.\build\eraxc.exe --run file.erax` | Run it: final globals on stdout, **exit code = the entrypoint's `i32` return** |
+| `.\build\eraxc.exe --help` | Usage |
+
+Every failure exits `1`. A source error quotes its location (`file:row:col:`), a rejected IR or a trap quotes
+the place in the IR instead, because that is all the IR has to go on.
+
+Start with the tokenizer — no build step, just what the source lexes as:
+
+```powershell
+.\build\eraxc.exe examples\fib.erax
+```
+
+```
+identifier 'fn' examples\fib.erax:13:1
+identifier 'fib' examples\fib.erax:13:4
+'(' '(' examples\fib.erax:13:7
+identifier 'n' examples\fib.erax:13:8
+':' ':' examples\fib.erax:13:9
+identifier 'i32' examples\fib.erax:13:11
+')' ')' examples\fib.erax:13:14
+...
+end of file '' examples\fib.erax:22:2
+```
+
+Every token carries the kind, the text, and where it was — that dump is what you read when the lexer is
+the thing in question, and the location is what every later error is quoted against.
+
+Then lower it. This is what a backend is handed, and what the validator checked first:
+
+```powershell
+.\build\eraxc.exe --jir examples\sum_to_ten.erax
+```
+
+```
+function 0: () -> i32, frame 5
+  0:
+    MOV i32 $0 i32 0
+    MOV i32 $1 i32 0
+    -> 1
+  1:
+    CMP_LT i8 $2 i32 $1 i32 10
+    if CMP_NE i8 $2, i8 0 then 3
+    -> 2
+  2:
+    RET i32 $0
+  3:
+    ADD i32 $4 i32 $0 i32 $1
+    MOV i32 $0 i32 $4
+    -> 4
+  4:
+    ADD i32 $3 i32 $1 i32 1
+    MOV i32 $1 i32 $3
+    -> 1
+entrypoint: 0
+```
+
+Blocks are numbered, `-> n` is the fall-through edge, and block 1 is the loop's own header: block 4 jumps
+back to it, so nothing before it re-runs.
+
+Then run it. The exit code is the program's own result, so it composes with everything else in a shell:
+
+```powershell
+.\build\eraxc.exe --run examples\fib.erax   # prints nothing, exits 55
+.\build\eraxc.exe --run examples\globals.erax
+global 0: i32 0x2                          # the final global state
+# exits 2
+```
+
+A program with no globals prints nothing at all — final global state plus exit code is the whole observable result in v0.1. Stdin works everywhere a file does, which is the fastest way to try a snippet:
+
+```powershell
+'fn main(): i32 { return 7; }' | .\build\eraxc.exe --run   # exits 7
+```
+
+Errors stop it wherever they are — in the source, in the IR, or at run time:
+
+```powershell
+'fn main(): i32 { let b: bool = 1; return 0; }' | .\build\eraxc.exe --run
+<stdin>:1:32: error: expected a value of type bool, not an integer literal
+
+'fn main(): i32 { let z: i32 = 0; return 7 / z; }' | .\build\eraxc.exe --run
+error: function 0, block 0, 1 frame deep: division by zero
+```
 
 ## Layout
 
@@ -21,7 +114,8 @@ src/
   frontend/
     tokenizer/             Tokenizer, Token, SourceLocation, LexError
     parser/                ProgramParser: source -> JIR, no AST (SemType, Value, ParseContext)
-  middleend/jir/           Type, Op, Operand, Cfg, Builder, constant folding, printing
+  middleend/jir/           Type, Op, Operand, Cfg, Builder, constant folding, printing, Validator
+  interp/                  Interpreter: the reference executor (one cell array + frame pointer)
 docs/
   core/language.md         language contract: grammar, operators, reserved words, semantics
   core/types.md            types, literals, conversions
@@ -37,9 +131,11 @@ tests/
   Parser.literals.test.cpp literals, constant folding, and type ranges
   Parser.globals.test.cpp  globals, declarations, control flow, and CFG lowering
   Parser.errors.test.cpp   rejection messages and error locations
-  Jir.test.cpp             JIR types, builder, folding, and validator
-examples/                  .erax programs — the syntax vision (evolving)
-main.cpp                   CLI: tokenizes a file or stdin, or lowers it to JIR
+  Jir.test.cpp             JIR types, builder, and folding
+  Validator.test.cpp       the seven validator checks, one rule broken at a time
+  Interpreter.test.cpp     what programs do when they run, plus the examples/ corpus
+examples/                  .erax programs — the syntax vision and the conformance corpus
+main.cpp                   CLI: tokenize a file or stdin, lower it to JIR, or run it
 ```
 
 ## Building
@@ -52,18 +148,7 @@ cmake --build build
 ctest --test-dir build --output-on-failure
 ```
 
-Run the tokenizer on source:
-
-```
-./build/eraxc.exe examples/helloworld.erax
-echo 'let a: i32 = 1;' | ./build/eraxc.exe
-```
-
-Or lower a program to IR — errors are reported as `file:row:col: error: text` either way:
-
-```
-echo 'fn main(): i32 { return 0; }' | ./build/eraxc.exe --jir
-```
+The first configure fetches Catch2, so it needs network once. After that, `.\build\eraxc.exe --help` lists the driver.
 
 ## Coverage
 
@@ -92,21 +177,24 @@ fn main(): i32 {
 }
 ```
 
-A program the parser accepts today:
+A program the parser accepts today, and the interpreter runs — this is `examples/fib.erax`, minus its
+comment header:
 
 ```erax
 fn fib(n: i32): i32 {
-    if (n < 2) { return n; }
+    if (n < 2) {
+        return n;
+    }
     return fib(n - 1) + fib(n - 2);
 }
 
 fn main(): i32 {
-    let total: i32 = 0;
-    for (let i: i32 = 0; i < 10; i = i + 1) {
-        total = total + fib(i);
-    }
-    return total;
+    return fib(10);
 }
+```
+
+```powershell
+.\build\eraxc.exe --run examples\fib.erax    # prints nothing, exits 55
 ```
 
 ## Limitations / next steps
@@ -120,6 +208,10 @@ fn main(): i32 {
 - Digit separators must sit between digits — `1_000` is fine, `1_` and `0x_1` are lexer errors.
 - The language is v1-incomplete on purpose: no `string`, no standard library, no float, no `?.`/member access, no
   `match`, no user types. The parser rejects them with a clear error rather than guessing.
+- No output: a program cannot print anything yet, so `--run` reports its result only through globals and the exit
+  code. `std.print` arrives with strings.
+- The interpreter bounds its own recursion and cell array (`Limits`, in `src/interp/Interpreter.hpp`) and reports
+  `StackExhausted` rather than growing until the host gives out.
 
 ## Design decisions
 
@@ -128,4 +220,10 @@ fn main(): i32 {
   gets hairy.
 - **All-or-nothing parsing.** A program is either fully lowered to a `Program` or rejected with one
   `file:row:col: error:` — no partial results, no exceptions anywhere in the front end.
+- **Validate before running.** Every operand is read through an index, so the machine asks the validator first: a
+  program it rejects never reaches the cell array.
+- **One folder, one answer.** The interpreter's arithmetic is `fold::binary`/`fold::unary`, the same code the parser
+  folds constants with, so a folded answer and a computed one cannot drift apart.
+- **A cell is one `u64`.** A value is never held in a host type, so wrapping and narrowing are the IR's business:
+  an `i32` cell is zero-extended, and `i32 -1` is `0xFFFFFFFF`.
 - **Shared test corpus.** Programs under `examples/` double as the conformance suite: same files, every backend, identical observable result — final global state plus the entrypoint's return code. No stdout in v0.1; the stdlib (and `std.print`) arrives with strings.
