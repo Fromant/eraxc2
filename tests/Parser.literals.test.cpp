@@ -70,25 +70,38 @@ TEST_CASE("a radix literal is read in its own base") {
     CHECK(any_error("fn main(): i32 { let x: u8 = 0b1012; return 0; }") != "");
 }
 
-TEST_CASE("a u64 constant is exact up to i64max and a bit pattern above it") {
-    // Below `i64max` a constant is an exact value, so folding can be exact.
-    CHECK(folded_bits("9223372036854775807", "u64") == 9223372036854775807ULL);
+TEST_CASE("the widest literals are values of the type that names them") {
+    // The position types a lone literal, and the position is the widest one there is.
     CHECK(folded_bits("9223372036854775807", "i64") == 9223372036854775807ULL);
-    // Above it, only the bit pattern is known, and it is still a valid u64.
-    CHECK(folded_bits("18446744073709551615", "u64") == 18446744073709551615ULL);
-    // ... and the widest type is the only one it fits.
+    // `u64max` is a value of `u64` and no narrower type, so it needs a `u64` suffix to
+    // be read at all: without one it is a lone literal in a position that types it.
+    CHECK(folded_bits("18446744073709551615u64", "u64") == 18446744073709551615ULL);
     CHECK(parse_error("fn main(): i32 { let x: i64 = 18446744073709551615; return 0; }") ==
-          "this constant does not fit i64");
+          "'18446744073709551615' does not fit i64");
     CHECK(parse_error("fn main(): i32 { let x: u32 = 4294967296; return 0; }") ==
-          "this constant does not fit u32");
-    // A literal is not checked against the default type it is first read as: the type
-    // of the position it fills is the one that counts, even at the far end.
+          "'4294967296' does not fit u32");
     CHECK(folded_bits("4294967296", "u64") == 4294967296ULL);
     CHECK(folded_bits("4294967296", "i64") == 4294967296ULL);
-    // `i64min` has no literal, but it can be written as an expression of exact ones.
-    CHECK(folded_signed("-9223372036854775807 - 1", "i64") == -9223372036854775807 - 1);
-    CHECK(folded_signed("-2147483647 - 1", "i32") == -2147483647 - 1);
-    CHECK(folded_bits("-8", "i8") == 0xF8);
+    // A suffix names the type instead of the position, which is how the values no
+    // signed literal reaches are written: `2^63` is a `u64` and is written as one.
+    CHECK(folded_bits("9223372036854775808u64", "u64") == 0x8000000000000000ULL);
+    // A minimum is spelled under a unary `-`, and the literal there is the magnitude.
+    CHECK(folded_signed("-9223372036854775808i64", "i64") == -9223372036854775807LL - 1);
+    CHECK(folded_signed("-2147483648i32", "i32") == -2147483647LL - 1);
+    CHECK(folded_signed("-128i8", "i8") == -128);
+    CHECK(folded_bits("-128i8", "i8") == 0x80);
+    // An unsigned type has no negative side, so `-` is not defined on one at all.
+    CHECK(parse_error("fn main(): i32 { let x: u8 = -1; return 0; }") == "'-' is not defined for u8");
+    // A suffix does not smuggle the sign past that: the suffix names the type the
+    // literal is read in, and `-1i8` is still a negation of an `i8` value.
+    CHECK(parse_error("fn main(): i32 { let x: u8 = -1i8; return 0; }") == "'-' is not defined for u8");
+    // A magnitude that needs the negative half and does not have it is out of range,
+    // not a truncation: `200` is not `imin` in an `i8`.
+    CHECK(parse_error("fn main(): i32 { let x: i8 = -200; return 0; }") == "'200' does not fit i8");
+    // The type belongs to the whole expression, so a `-` in front of an operator is not
+    // one: the operands are `i32` and the sum is an `i32` that no `i8` can hold.
+    CHECK(parse_error("fn main(): i32 { let x: i8 = -128 + 0; return 0; }") ==
+          "expected a value of type i8, not i32");
 }
 
 TEST_CASE("a char literal is an escape sequence or a code point") {
@@ -132,139 +145,131 @@ TEST_CASE("a char literal is an escape sequence or a code point") {
 TEST_CASE("a constant expression is exact, and its value must fit") {
     // The value has to be representable in the type it takes, which is not the same
     // thing as its bits fitting: 256 is a perfectly good 0 in eight bits.
-    CHECK(folded_bits("127", "i8") == 127);
-    CHECK(parse_error("fn main(): i32 { let x: i8 = 128; return 0; }") == "this constant does not fit i8");
-    CHECK(parse_error("fn main(): i32 { let x: u8 = 255 + 1; return 0; }") == "this constant does not fit u8");
-    CHECK(parse_error("fn main(): i32 { let x: i32 = 2147483647 + 1; return 0; }") ==
+    CHECK(folded_bits("127i8", "i8") == 127);
+    CHECK(parse_error("fn main(): i32 { let x: i8 = 128; return 0; }") == "'128' does not fit i8");
+    CHECK(parse_error("fn main(): i32 { let x: u8 = 255u8 + 1u8; return 0; }") == "this constant does not fit u8");
+    CHECK(parse_error("fn main(): i32 { let x: i32 = 2147483647i32 + 1i32; return 0; }") ==
           "this constant does not fit i32");
     // A negative value is not an unsigned one, even where its bits would fit.
-    CHECK(parse_error("fn main(): i32 { let x: u8 = -1; return 0; }") == "this constant does not fit u8");
-    // The whole expression is checked, not each literal in it: a literal is only a
-    // placeholder until the expression it is in has a type.
-    CHECK(folded_bits("100 + 27", "i8") == 127);
-    CHECK(parse_error("fn main(): i32 { let x: i8 = 100 + 28; return 0; }") == "this constant does not fit i8");
+    CHECK(parse_error("fn main(): i32 { let x: u8 = -1; return 0; }") == "'-' is not defined for u8");
+    // The whole expression is checked, not each literal in it: a literal under a binary
+    // operator is typed by its neighbour, and the fold is in that type.
+    CHECK(folded_bits("100i8 + 27i8", "i8") == 127);
+    CHECK(parse_error("fn main(): i32 { let x: i8 = 100i8 + 28i8; return 0; }") == "this constant does not fit i8");
+    // ... and without a suffix there is no neighbour to type them, so the operator is
+    // in `i32` whatever the position says, and the position is what objects.
+    CHECK(parse_error("fn main(): i32 { let x: i8 = 100 + 27; return 0; }") ==
+          "expected a value of type i8, not i32");
     // A parenthesized expression is the expression in it, so it takes the type too.
-    parse_ok("fn main(): i32 { let x: i8 = (1 + 2); return 0; }");
-    CHECK(parse_error("fn main(): i32 { let x: i8 = (300 + 2); return 0; }") == "this constant does not fit i8");
-    // Every integer operator folds, on the type the position gives it.
-    CHECK(folded_bits("0xF0 | 0x0F", "u8") == 0xFF);
-    CHECK(folded_bits("0xFF & 0x0F", "u8") == 0x0F);
-    CHECK(folded_bits("0xFF ^ 0x0F", "u8") == 0xF0);
-    CHECK(folded_signed("-7 / 2") == -3);
-    CHECK(folded_signed("-7 % 2") == -1);
-    CHECK(folded_bits("255 / 16", "u8") == 15);
-    CHECK(folded_bits("255 % 16", "u8") == 15);
-    CHECK(folded_signed("100 * -3") == -300);
+    parse_ok("fn main(): i32 { let x: i8 = (1i8 + 2i8); return 0; }");
+    CHECK(parse_error("fn main(): i32 { let x: i8 = (127i8 + 2i8); return 0; }") == "this constant does not fit i8");
+    // Every integer operator folds, in the type of its operands.
+    CHECK(folded_bits("0xF0u8 | 0x0Fu8", "u8") == 0xFF);
+    CHECK(folded_bits("0xFFu8 & 0x0Fu8", "u8") == 0x0F);
+    CHECK(folded_bits("0xFFu8 ^ 0x0Fu8", "u8") == 0xF0);
+    CHECK(folded_signed("-7i32 / 2i32") == -3);
+    CHECK(folded_signed("-7i32 % 2i32") == -1);
+    CHECK(folded_bits("255u8 / 16u8", "u8") == 15);
+    CHECK(folded_bits("255u8 % 16u8", "u8") == 15);
+    CHECK(folded_signed("100i32 * -3i32") == -300);
     // Division and modulus by zero have no answer at all, typed or not.
-    CHECK(parse_error("fn main(): i32 { let x: i32 = 1 / 0; return 0; }") ==
+    CHECK(parse_error("fn main(): i32 { let x: i32 = 1i32 / 0i32; return 0; }") ==
           "division by zero in a constant expression");
-    CHECK(parse_error("fn main(): i32 { let x: u32 = 1 % 0; return 0; }") ==
+    CHECK(parse_error("fn main(): i32 { let x: u32 = 1u32 % 0u32; return 0; }") ==
           "division by zero in a constant expression");
     // A negation and a `~` keep the value exact, so they are range-checked like one.
     // `i32min` is a constant, so negating it overflows at parse time...
-    CHECK(parse_error("fn main(): i32 { let x: i32 = -(-2147483647 - 1); return 0; }") ==
+    CHECK(parse_error("fn main(): i32 { let x: i32 = -(-2147483647i32 - 1i32); return 0; }") ==
           "this constant does not fit i32");
-    CHECK(folded_signed("~5") == -6);
-    CHECK(parse_error("fn main(): i32 { let x: i8 = -(-127 - 1); return 0; }") == "this constant does not fit i8");
+    CHECK(folded_signed("~5i32") == -6);
+    CHECK(parse_error("fn main(): i32 { let x: i8 = -(-127i8 - 1i8); return 0; }") == "this constant does not fit i8");
     // ... but negating a value read at runtime only wraps, which is the JIR's rule.
     parse_ok("fn main(): i32 { let x: i8 = -128; let y: i8 = -x; return 0; }");
-    CHECK(parse_error("fn main(): i32 { let x: u8 = ~0; return 0; }") == "this constant does not fit u8");
-    // A shift count masks to the width the fold is done in. A placeholder folds at the
-    // 64-bit width a constant is written in, so the result is exact and the position's
-    // own range check is what rejects it if that result does not fit.
-    CHECK(folded_bits("1 << 66", "u64") == 4);
-    CHECK(folded_bits("1 << 62", "u64") == 1ULL << 62);
-    CHECK(parse_error("fn main(): i32 { let x: u32 = 1 << 33; return 0; }") ==
-          "this constant does not fit u32");
-    CHECK(folded_bits("1 << 40", "i64") == 1ULL << 40);
-    CHECK(folded_signed("-8 >> 1") == -4);
-    CHECK(folded_signed("-1 >> 1") == -1);
-    CHECK(folded_bits("0 << 31", "i32") == 0);
-    CHECK(folded_bits("7 << 0", "i32") == 7);
-    // An unsigned right shift is logical, and a `char` is unsigned.
-    CHECK(folded_bits("255 >> 4", "char") == 15);
-    CHECK(folded_bits("255 >> 4", "u8") == 15);
+    // `~` is the same on both signednesses and never leaves the range, so on an
+    // unsigned one it is 255 and not an error.
+    CHECK(folded_bits("~0u8", "u8") == 255);
+    // A shift count masks to the width the fold is done in, so a constant shifted past
+    // its own width is a shift of the count that is left, not an overflow.
+    CHECK(folded_bits("1i64 << 66i64", "i64") == 4);
+    CHECK(folded_bits("1i64 << 62i64", "i64") == 1ULL << 62);
+    CHECK(folded_bits("1i64 << 40i64", "i64") == 1ULL << 40);
+    CHECK(folded_signed("-8i32 >> 1i32") == -4);
+    CHECK(folded_signed("-1i32 >> 1i32") == -1);
+    CHECK(folded_bits("0i32 << 31i32", "i32") == 0);
+    CHECK(folded_bits("7i32 << 0i32", "i32") == 7);
+    // An unsigned right shift is logical, and a `char` is unsigned -- but a `char` is
+    // its own type, so it is the `u8` suffix in a `u8` position that says so here.
+    CHECK(folded_bits("255u8 >> 4u8", "u8") == 15);
     // A product that leaves the width the expression is checked in is not a constant
     // that can be used there, but the same product in a wider type is.
-    CHECK(folded_bits("65536 * 65536", "i64") == 4294967296ULL);
-    CHECK(parse_error("fn main(): i32 { let x: i32 = 65536 * 65536; return 0; }") != "");
+    CHECK(folded_bits("65536i64 * 65536i64", "i64") == 4294967296ULL);
+    CHECK(parse_error("fn main(): i32 { let x: i32 = 65536i32 * 65536i32; return 0; }") ==
+          "this constant does not fit i32");
 }
 
-TEST_CASE("a constant is a value, a u64, or in no type at all") {
-    // `types.md#constants` calls these the three states, and the third is the one
-    // that has to be told apart: a value in no type wraps into a number that fits
-    // everywhere, so the mistake is silent and the answer is plausible.
+TEST_CASE("a constant that outgrows every type says so rather than wrapping") {
+    // A constant is exact arithmetic on numbers, so the only thing that can happen to
+    // one besides a value is a magnitude past `u64max` -- and there is no type to name
+    // in the error. Wrapping it would produce a number that fits everywhere, which is
+    // exactly the silent mistake the exactness is there to prevent.
     //
     // 2^32 * 2^32 is 2^64, which is one past the widest type there is.
-    CHECK(parse_error("fn main(): i32 { let x: i64 = 4294967296 * 4294967296; return 0; }") ==
+    CHECK(parse_error("fn main(): i32 { let x: u64 = 4294967296u64 * 4294967296u64; return 0; }") ==
           "this constant expression is too large for any type");
     // The type of the position cannot rescue it: there is no type to name in the error,
     // and asking for the widest one does not make it fit.
-    CHECK(parse_error("fn main(): i32 { let x: u64 = 4294967296 * 4294967296; return 0; }") ==
+    CHECK(parse_error("fn main(): i32 { let x: i64 = 4294967296u64 * 4294967296u64; return 0; }") ==
           "this constant expression is too large for any type");
-    CHECK(parse_error("fn main(): i32 { let x: i32 = 4294967296 * 4294967296; return 0; }") ==
+    // A sum can outgrow a `u64` as well as a product: `u64max + 1` is `2^64`.
+    CHECK(parse_error("fn main(): i32 { let x: u64 = 18446744073709551615u64 + 1u64; return 0; }") ==
           "this constant expression is too large for any type");
-    CHECK(parse_error("fn main(): i32 { let x: i64 = 3037000500 * 3037000500; return 0; }") ==
-          "this constant does not fit i64");
-    // Just under the boundary the product is a `u64` value and is usable there:
-    // 2^32 * 2^31 is 2^63, which is a value no signed type holds.
-    CHECK(folded_bits("4294967296 * 2147483648", "u64") == 0x8000000000000000ULL);
-    CHECK(parse_error("fn main(): i32 { let x: i64 = 4294967296 * 2147483648; return 0; }") ==
-          "this constant does not fit i64");
-    // One factor higher and it is 2^64, which is in no type.
-    CHECK(parse_error("fn main(): i32 { let x: u64 = 4294967296 * 4294967296; return 0; }") ==
-          "this constant expression is too large for any type");
-    // ... and a lone `2^63` is the same number reached the other way.
-    CHECK(folded_bits("1 << 63", "u64") == 0x8000000000000000ULL);
+    // One factor lower and it is `2^63`, which is a `u64` value and no signed one.
+    CHECK(folded_bits("4294967296u64 * 2147483648u64", "u64") == 0x8000000000000000ULL);
+    CHECK(parse_error("fn main(): i32 { let x: i64 = 4294967296u64 * 2147483648u64; return 0; }") ==
+          "expected a value of type i64, not u64");
+    // 3037000500 squared is 2^63-ish, past `i64max` but inside `u64max`, so it is a
+    // `u64` constant and the position has to be a `u64` to hold it.
+    CHECK(folded_bits("3037000500u64 * 3037000500u64", "u64") == 9223372037000250000ULL);
+    CHECK(parse_error("fn main(): i32 { let x: i64 = 3037000500u64 * 3037000500u64; return 0; }") ==
+          "expected a value of type i64, not u64");
     // The signed product that stays in range is an ordinary constant.
-    CHECK(folded_signed("1000 * -1000", "i64") == -1000000);
-    // 3037000500 squared is 2^63-ish, past `i64max` but inside `u64max`: the middle
-    // state, a value the widest type holds and no signed one.
-    CHECK(folded_bits("3037000500 * 3037000500", "u64") == 9223372037000250000ULL);
-    CHECK(parse_error("fn main(): i32 { let x: i64 = 3037000500 * 3037000500; return 0; }") ==
-          "this constant does not fit i64");
-    // One factor higher and the magnitude is past `u64max`, whichever way the signs go.
-    CHECK(parse_error("fn main(): i32 { let x: u64 = -4294967296 * 4294967296; return 0; }") ==
-          "this constant expression is too large for any type");
+    CHECK(folded_signed("1000i64 * -1000i64", "i64") == -1000000);
 
-    // A sum that leaves `i64` upwards is a `u64` value and reads back as one.
-    CHECK(folded_bits("9223372036854775807 + 1", "u64") == 0x8000000000000000ULL);
-    CHECK(parse_error("fn main(): i32 { let x: i64 = 9223372036854775807 + 1; return 0; }") ==
+    // `i64min` is a value, so the sum that produces it is not a constant overflow but
+    // an exact one, and one step further down is out of every type's range.
+    CHECK(folded_signed("-9223372036854775807i64 - 1i64", "i64") == -9223372036854775807LL - 1);
+    CHECK(parse_error("fn main(): i32 { let x: i64 = -9223372036854775807i64 - 1i64 - 1i64; return 0; }") ==
           "this constant does not fit i64");
-    // A difference that leaves `i64` downwards is below every type: `i64min - 1` is
-    // -2^63 - 1, and its bits read back as a large positive number that looks fine.
-    CHECK(parse_error("fn main(): i32 { let x: i64 = -9223372036854775807 - 1 - 1; return 0; }") != "");
-    CHECK(parse_error("fn main(): i32 { let x: u64 = -9223372036854775807 - 1 - 1; return 0; }") != "");
-    // `i64min` itself is a value, so the sum that produces it is a representability error.
-    CHECK(folded_signed("-9223372036854775807 - 1", "i64") == -9223372036854775807LL - 1);
-    // `i64min / -1` is `2^63`, which is a `u64` value and no signed one -- the same
-    // number `1 << 63` reaches, so it carries as bits and the position decides.
-    CHECK(folded_bits("((-9223372036854775807) - 1) / -1", "u64") == 0x8000000000000000ULL);
-    CHECK(parse_error("fn main(): i32 { let x: i64 = ((-9223372036854775807) - 1) / -1; return 0; }") ==
+    // `imin / -1` is `2^(w-1)`, which the type does not hold, so the fold reports it
+    // rather than producing the number the machine cannot.
+    CHECK(parse_error("fn main(): i32 { let x: i64 = ((-9223372036854775807i64) - 1i64) / -1i64; return 0; }") ==
           "this constant does not fit i64");
+    CHECK(parse_error("fn main(): i32 { let x: i64 = -2147483647i32 - 1i32; return 0; }") ==
+          "expected a value of type i64, not i32");
+    CHECK(folded_signed("-2147483647i32 - 1i32", "i32") == -2147483648LL);
     // Read at runtime it is the machine's problem and wraps instead.
-    parse_ok("fn main(): i32 { let x: i64 = -9223372036854775807 - 1; let y: i64 = x / -1; return 0; }");
+    parse_ok("fn main(): i32 { let x: i64 = -9223372036854775807i64 - 1i64; let y: i64 = x / -1; return 0; }");
 }
 
 TEST_CASE("two exact values are compared as numbers, not as patterns") {
     // Read as bits, `-1` is `0xFFFF...` and the largest value there is, so every one
     // of these folded the wrong way round. The bits are a `u64` until an operator needs
     // to know the sign, and a comparison does.
-    CHECK(folded_bits("-1 < 1", "bool") == 1);
-    CHECK(folded_bits("-1 > 1", "bool") == 0);
-    CHECK(folded_bits("-1 >= 1", "bool") == 0);
-    CHECK(folded_bits("1 > -1", "bool") == 1);
-    CHECK(folded_bits("-1 == -1", "bool") == 1);
-    CHECK(folded_bits("-1 != -2", "bool") == 1);
-    CHECK(folded_bits("-2 <= -1", "bool") == 1);
-    CHECK(folded_bits("-1 <= -1", "bool") == 1);
+    CHECK(folded_bits("-1i32 < 1i32", "bool") == 1);
+    CHECK(folded_bits("-1i32 > 1i32", "bool") == 0);
+    CHECK(folded_bits("-1i32 >= 1i32", "bool") == 0);
+    CHECK(folded_bits("1i32 > -1i32", "bool") == 1);
+    CHECK(folded_bits("-1i32 == -1i32", "bool") == 1);
+    CHECK(folded_bits("-1i32 != -2i32", "bool") == 1);
+    CHECK(folded_bits("-2i32 <= -1i32", "bool") == 1);
+    CHECK(folded_bits("-1i32 <= -1i32", "bool") == 1);
     // A negative against a positive, in both orders, at more than one width.
-    CHECK(folded_bits("-128 < 1", "bool") == 1);
-    CHECK(folded_bits("-32768 < 1", "bool") == 1);
-    CHECK(folded_bits("-1 < 2147483648", "bool") == 1);
+    CHECK(folded_bits("-128i8 < 1i8", "bool") == 1);
+    CHECK(folded_bits("-32768i16 < 1i16", "bool") == 1);
+    CHECK(folded_bits("-1i64 < 2147483648i64", "bool") == 1);
     // Two negatives order by magnitude, and `-1` is the largest.
-    CHECK(folded_bits("-1 < -2", "bool") == 0);
-    CHECK(folded_bits("-2 < -1", "bool") == 1);
+    CHECK(folded_bits("-1i32 < -2i32", "bool") == 0);
+    CHECK(folded_bits("-2i32 < -1i32", "bool") == 1);
     // A folded test takes the edge it names, and drops the other. A true condition
     // keeps the then-block and loses the code after it; a false one is the reverse.
     // The only difference left is which constant the surviving `return` carries.
@@ -274,10 +279,10 @@ TEST_CASE("two exact values are compared as numbers, not as patterns") {
         }
         return ~std::uint64_t{0};
     };
-    const Program taken = parse_ok("fn main(): i32 { if (-1 < 1) { return 1; } return 0; }");
+    const Program taken = parse_ok("fn main(): i32 { if (-1i32 < 1i32) { return 1; } return 0; }");
     CHECK(ret_value(taken) == 1);
     CHECK(count_of(ops_of(taken, 0), Op::Ret) == 1);
-    const Program skipped = parse_ok("fn main(): i32 { if (-1 > 1) { return 1; } return 0; }");
+    const Program skipped = parse_ok("fn main(): i32 { if (-1i32 > 1i32) { return 1; } return 0; }");
     CHECK(ret_value(skipped) == 0);
     CHECK(count_of(ops_of(skipped, 0), Op::Ret) == 1);
     // A genuinely unsigned operand is compared as unsigned, and because `a` and `b` are
@@ -288,8 +293,8 @@ TEST_CASE("two exact values are compared as numbers, not as patterns") {
     CHECK(has_op(ops_of(unsigned_gt, 0), Op::CmpGt));
     CHECK(count_of(ops_of(unsigned_gt, 0), Op::Ret) == 2);
     // A `u64` above `i64max` has no signed reading, so it compares as the `u64` it is.
-    CHECK(folded_bits("1 << 63 > 0", "bool") == 1);
-    CHECK(folded_bits("1 << 63 < 0", "bool") == 0);
+    CHECK(folded_bits("1u64 << 63u64 > 0u64", "bool") == 1);
+    CHECK(folded_bits("1u64 << 63u64 < 0u64", "bool") == 0);
 }
 
 TEST_CASE("the logical operators are on bool, and eager") {
@@ -323,32 +328,35 @@ TEST_CASE("an unsigned division is unsigned throughout") {
     // The signed and unsigned forms differ, so the operand's type is what picks one,
     // and a `u64` above `i64max` is the case where the difference is visible: read as
     // `u64` it is the largest value there is, read as `i64` it is -1.
-    CHECK(folded_bits("18446744073709551615 / 2", "u64") == 9223372036854775807ULL);
-    CHECK(folded_bits("18446744073709551615 % 2", "u64") == 1);
-    // The same literal in a signed position is a different number, and is a value.
-    CHECK(folded_signed("-1 / 2") == 0);
-    CHECK(folded_signed("-1 % 2") == -1);
+    CHECK(folded_bits("18446744073709551615u64 / 2u64", "u64") == 9223372036854775807ULL);
+    CHECK(folded_bits("18446744073709551615u64 % 2u64", "u64") == 1);
+    // A signed position is a different number, and is a value.
+    CHECK(folded_signed("-1i32 / 2i32") == 0);
+    CHECK(folded_signed("-1i32 % 2i32") == -1);
     // Every unsigned width divides as itself, with no sign to carry.
-    CHECK(folded_bits("255 / 7", "u8") == 36);
-    CHECK(folded_bits("255 % 7", "u8") == 3);
-    CHECK(folded_bits("65535 / 255", "u16") == 257);
-    CHECK(folded_bits("4294967295 / 65536", "u32") == 65535);
-    CHECK(folded_bits("0 / 5", "u32") == 0);
-    CHECK(folded_bits("5 / 1", "u32") == 5);
-    // A `char` is a byte, so it divides unsigned too.
-    CHECK(folded_bits("255 / 16", "char") == 15);
-    CHECK(folded_bits("255 % 16", "char") == 15);
+    CHECK(folded_bits("255u8 / 7u8", "u8") == 36);
+    CHECK(folded_bits("255u8 % 7u8", "u8") == 3);
+    CHECK(folded_bits("65535u16 / 255u16", "u16") == 257);
+    CHECK(folded_bits("4294967295u32 / 65536u32", "u32") == 65535);
+    CHECK(folded_bits("0u32 / 5u32", "u32") == 0);
+    CHECK(folded_bits("5u32 / 1u32", "u32") == 5);
+    // A `char` is a byte, so a division on `char` values is the unsigned one -- but a
+    // `char` is a type of its own and there is no `char` suffix, so a *constant* `char`
+    // division cannot be written: the operands would both be `i32`. Two `char` names
+    // divide unsigned, which the test on the emitted command covers.
+    parse_ok("fn main(): i32 { let a: char = 255; let b: char = 16; let c: char = a / b; return 0; }");
+    CHECK(parse_error("fn main(): i32 { let x: char = 255 / 16; return 0; }") ==
+          "expected a value of type char, not i32");
     // An unsigned division by zero has no answer, and the message is the same one a
     // signed division gives: the divisor is zero whichever way it is read.
-    CHECK(parse_error("fn main(): i32 { let x: u8 = 255 / 0; return 0; }") ==
+    CHECK(parse_error("fn main(): i32 { let x: u8 = 255u8 / 0u8; return 0; }") ==
           "division by zero in a constant expression");
-    CHECK(parse_error("fn main(): i32 { let x: u8 = 255 % 0; return 0; }") ==
+    CHECK(parse_error("fn main(): i32 { let x: u8 = 255u8 % 0u8; return 0; }") ==
           "division by zero in a constant expression");
-    // `i64min / -1` is `2^63`, which no signed type holds and `u64` does.
-    CHECK(folded_bits("((-9223372036854775807) - 1) / -1", "u64") == 0x8000000000000000ULL);
-    CHECK(parse_error("fn main(): i32 { let x: i64 = ((-9223372036854775807) - 1) / -1; return 0; }") != "");
-    // A wider `imin / -1` is a value in that type and not a constant overflow.
-    CHECK(folded_signed("-2147483647 - 1", "i32") == -2147483648LL);
+    // `imin / -1` is `2^(w-1)`, which the type does not hold, so the fold reports the
+    // trap rather than the number the machine cannot.
+    CHECK(parse_error("fn main(): i32 { let x: i64 = ((-9223372036854775807i64) - 1i64) / -1i64; return 0; }") ==
+          "this constant does not fit i64");
 }
 
 TEST_CASE("a bool has no order, but it does have equality") {
@@ -384,36 +392,39 @@ TEST_CASE("a bool has no order, but it does have equality") {
 }
 
 
-TEST_CASE("a constant above i64max is a bit pattern, not a value") {
-    // A constant is written in the `i64` range, so one wider than that has no value
-    // the parser can name -- only bits, and a fold at the operand width. The
-    // distinction is the whole reason there are two ways to fold.
-    CHECK(folded_bits("18446744073709551615", "u64") == 0xFFFFFFFFFFFFFFFFULL);
-    // Arithmetic on it wraps at 64 bits, which is a pattern, not an overflow: there is
-    // no value here to have left the range.
-    CHECK(folded_bits("18446744073709551615 + 1", "u64") == 0);
-    CHECK(folded_bits("18446744073709551615 * 2", "u64") == 0xFFFFFFFFFFFFFFFEULL);
-    // An operation on the pattern still reports a division it cannot do, because the
-    // trap is the machine's, and it is reached on the bit path rather than the exact one.
-    CHECK(parse_error("fn main(): i32 { let x: u64 = 18446744073709551615 / 0; return 0; }") ==
+TEST_CASE("a `u64` literal is a value of `u64` and of no other type") {
+    // There is no bit-pattern state any more: `u64max` is a `u64`, and it is written
+    // with the `u64` suffix because no signed literal reaches it.
+    CHECK(folded_bits("18446744073709551615u64", "u64") == 0xFFFFFFFFFFFFFFFFULL);
+    // Arithmetic on it is exact, so the two operations that leave the range are
+    // errors rather than wrapped numbers.
+    CHECK(parse_error("fn main(): i32 { let x: u64 = 18446744073709551615u64 + 1u64; return 0; }") ==
+          "this constant expression is too large for any type");
+    CHECK(parse_error("fn main(): i32 { let x: u64 = 18446744073709551615u64 * 2u64; return 0; }") ==
+          "this constant expression is too large for any type");
+    // A division it cannot do is still reported, and the message is the same one a
+    // signed division gives.
+    CHECK(parse_error("fn main(): i32 { let x: u64 = 18446744073709551615u64 / 0u64; return 0; }") ==
           "division by zero in a constant expression");
-    // A pattern has no value to be out of range, so it is not range-checked: it goes
-    // into the position at the width the position asks for.
+    // Division and modulus on it are the unsigned ones, so the answer is the large
+    // one rather than the -1 the same bits would be read as in an `i64`.
+    CHECK(folded_bits("18446744073709551615u64 / 1000u64", "u64") == 18446744073709551ULL);
+    CHECK(folded_bits("18446744073709551615u64 % 1000u64", "u64") == 615);
+    // A `u64` is not an `i64`, so the position has to be the one that holds it.
+    CHECK(parse_error("fn main(): i32 { let x: i64 = 18446744073709551615u64; return 0; }") ==
+          "'18446744073709551615u64' does not fit i64");
+    // A comparison on it is the unsigned one, which is the same either way.
+    CHECK(folded_bits("18446744073709551615u64 > 0u64", "bool") == 1);
+    // A lone literal with no suffix takes the type of its position, so `4294967296` is an
+    // `i64` in an `i64` position and out of range in every narrower one.
+    CHECK(folded_bits("4294967296", "i64") == 4294967296ULL);
     CHECK(folded_bits("4294967296", "u64") == 4294967296ULL);
-    // ... but a value that is exact *is* checked, and 4294967296 is one.
-    CHECK(parse_error("fn main(): i32 { let x: u8 = 4294967296; return 0; }") == "this constant does not fit u8");
-    // Unsigned division and modulus on a pattern are the machine's, so the operand
-    // type picks the form rather than the value's sign: a bit pattern of `u64max`
-    // is a large unsigned value, not -1.
-    CHECK(folded_bits("18446744073709551615 / 2", "u64") == 0x7FFFFFFFFFFFFFFFULL);
-    CHECK(folded_bits("18446744073709551615 / 1000", "u64") == 18446744073709551ULL);
-    CHECK(folded_bits("18446744073709551615 % 1000", "u64") == 615);
-    // ... while the same pattern read as a signed value is -1, and the position's
-    // own type is what chooses. A value that is not exact cannot be a negative one
-    // an unsigned type could hold, so this is the one place the two forms differ.
-    CHECK(folded_bits("18446744073709551615 / 2", "i64") == 0x7FFFFFFFFFFFFFFFULL);
-    // A comparison on a pattern is on the bits, which is the same either way.
-    CHECK(folded_bits("18446744073709551615 > 0", "bool") == 1);
+    CHECK(parse_error("fn main(): i32 { let x: u8 = 4294967296; return 0; }") == "'4294967296' does not fit u8");
+    // Under an operator there is no position to take it from, so the operand is an `i32`
+    // and `i32max` is the limit -- the literal itself is out of range before the sum is.
+    CHECK(parse_error("fn main(): i32 { let x: i64 = 4294967296 + 1; return 0; }") ==
+          "'4294967296' does not fit i32");
+    CHECK(parse_error("fn main(): i32 { let x: i64 = 1 + 2; return 0; }") == "expected a value of type i64, not i32");
 }
 
 TEST_CASE("a constant expression is one the parser can compute") {

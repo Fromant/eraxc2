@@ -16,9 +16,10 @@ namespace erax::frontend {
 /// exceptions: every step returns `std::expected` and errors travel with `?`.
 ///
 /// \p expected is the contextual type of the position being filled — the
-/// declared type of a `let`, the target type of an assignment, a parameter's
-/// type in a call. It is what gives an integer literal its type, and a constant
-/// expression is range-checked against it.
+    /// declared type of a `let`, the target type of an assignment, a parameter's
+    /// type in a call. It types an integer literal that has no suffix, and it is
+    /// not passed into the operands of an operator: a result is the operator's own
+    /// type, so `let x: i64 = 1 + 2` is a type error and not an `i64`.
 class ExpressionParser {
 public:
     explicit ExpressionParser(ParseContext& context) noexcept : context_(&context) {}
@@ -26,7 +27,7 @@ public:
     using result = std::expected<Value, ParseError>;
 
     /// An expression in a position that expects \p expected (or none, in which
-    /// case its literals are `u32`).
+    /// case an unsuffixed literal is an `i32`).
     result expression(std::optional<SemType> expected);
     /// An expression that must fold: no calls, no local reads, nothing that
     /// depends on a cell's value at run time.
@@ -45,7 +46,7 @@ private:
     result additive_expression(std::optional<SemType> expected);
     result multiplicative_expression(std::optional<SemType> expected);
     result unary_expression(std::optional<SemType> expected);
-    result primary(std::optional<SemType> expected);
+    result primary(std::optional<SemType> expected, bool negated = false);
 
     /// One level of a left-associative binary operator loop: parse an operand,
     /// then fold in every following operator of that level.
@@ -65,11 +66,14 @@ private:
     /// Applies a JIR unary op, folding when the operand is a constant.
     result apply_unary(middleend::Op op, SemType type, const Value& operand, SourceLocation location);
 
-    /// Reads an integer literal, typed by \p expected.
-    result integer_literal(const Token& token, std::optional<SemType> expected);
-
-    /// Re-reads a constant as \p expected, failing when the value does not fit.
-    result retype(Value& value, SemType expected, SourceLocation location);
+    /// Reads an integer literal, typed by \p expected or by its own suffix. A lone
+    /// literal takes the type of the position it fills; a literal inside an operator
+    /// does not, and is an `i32` unless it says otherwise.
+    ///
+    /// \p negated says a unary `-` is in front of it, which is the one place a
+    /// negative literal is written: `-128i8` is `imin`, and no `i8` literal on its own
+    /// is negative.
+    result integer_literal(const Token& token, std::optional<SemType> expected, bool negated);
 
     /// A call of \p name with the arguments at the cursor.
     result call(const std::string& name, SourceLocation location);

@@ -25,11 +25,12 @@ Lowest to highest (operators on the same line are left-associative):
 ## Typing rules
 
 - `&&`, `||`, and `^^` (bool XOR) all take and produce `bool`, and **all three are eager — both operands are always evaluated**. They lower to the bitwise `AND`/`OR`/`XOR` on `bool`, which is the same operation for 0/1 (see `docs/middleend/JIR.md`). There is no short-circuiting in v1.
-- `!` takes `bool`. `-` and `~` take integers. Bitwise `& \| ^ << >>` take integers.
+- `!` takes `bool`. `~` takes integers; `-` takes **signed** integers, because an unsigned type has no negative side to negate into — `~0u8` is `255`, and `-1u8` is a compile error. Bitwise `& \| ^ << >>` take integers.
 - `==` / `!=` accept any two same-typed values, including two `bool`s. `< <= > >=` accept two same-typed **integers or chars** — a `bool` is neither, so `true < false` is a compile error, even though `bool` lowers to `i8` in the IR and the comparison would be well defined there. The rule is in the language, not inherited from the machine.
 - Comparisons produce `bool`; a `bool` is not an integer, so `a < b < c`, `1 + true`, and an `i32` value as a condition are type errors. A condition (the grammar's `condition` in `if`/`while`/`do`/`for`, see `language.md#grammar`) must be `bool`.
-- A call's argument count and types must exactly match the declaration (literals adapt to the parameter type); the call's type is the function's return type.
-- Constant expressions are folded at compile time; folding that overflows the expected type, or divides by zero, is a compile error. See `types.md#constants` for what a constant is and why a compile-time expression is checked where a runtime one wraps.
+- A call's argument count and types must exactly match the declaration (a *lone* literal argument takes the parameter type); the call's type is the function's return type.
+- An operator's operands are typed by each other, not by the position: the second operand takes the first's type, and a first operand with no neighbour to type it is an `i32`. So the expected type reaches an operand only when that operand is a lone literal at the top of the expression. See `types.md#literals`.
+- Constant expressions are folded at compile time, exactly, in the type of their operands; a fold that leaves that type, outgrows every type, or divides by zero, is a compile error. See `types.md#constants` for what a constant is and why a compile-time expression is checked where a runtime one wraps.
 
 ## Modulo follows the dividend, not the divisor
 

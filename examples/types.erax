@@ -8,7 +8,9 @@
 // The boundary values are here because they are the ones that pin the rules down:
 // `-9223372036854775807 - 1` is `i64min` written so the parser sees a subtraction
 // rather than a literal it might read as a positive, and `18446744073709551615` is
-// `u64max`, a value no signed type holds.
+// `u64max`, a value no signed type holds. The two widest need an explicit suffix,
+// because a bare literal is an `i32` unless the position says otherwise, and neither
+// of these fits an `i32`.
 fn main(): i32 {
     let a: i8 = -128;
     let b: u8 = 255;
@@ -16,8 +18,8 @@ fn main(): i32 {
     let d: u16 = 65535;
     let e: i32 = -2147483648;
     let f: u32 = 4294967295;
-    let g: i64 = -9223372036854775807 - 1;
-    let h: u64 = 18446744073709551615;
+    let g: i64 = -9223372036854775807i64 - 1i64;
+    let h: u64 = 18446744073709551615u64;
     let i: bool = true;
     let j: char = 'A';
     let k: char = '\n';

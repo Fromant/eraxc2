@@ -213,7 +213,8 @@ flowchart TD
   - `0x` with no digit is `radix literal requires at least one digit`.
   - A digit that does not belong to the base (`0b12`, `0x1G`, `0o98`) is `invalid digit '<c>' in radix literal`.
 - **Separators sit between digits.** A `_` inside a number needs a digit immediately before and after it: `1_000`, `0xFF_FF`, `1e1_0`, `1.5_0` are one token, while `1_`, `0x1_`, `1__2`, `0b_10`, `0x_1` are `digit separator '_' must be placed between digits` errors.
-- **No C-style suffixes:** `64ul` lexes as `Number` `64` + `Identifier` `ul`.
+- **A type suffix is part of the number.** A run of identifier characters after the digits is consumed into the same `Number` token: `5i64`, `0xFFu8`, `1_000i32`, `1e3i32` are each one token. The lexer does not check what the run names — `64ul` and `0x1G` are also one `Number` — because the suffix set is a parser rule (`types.md#literals`): a letter after a radix literal is a suffix, not an off-base digit.
+- **A C-style suffix is not a thing:** `ul`, `L`, `U` name nothing, and the parser reports `'<suffix>' is not a type`.
 
 ### Identifiers
 
@@ -244,7 +245,7 @@ flowchart TD
 | `''`                                             | `empty character literal`                                      | opening `'`        |
 | `'ab'`, `'a`, `'\n a'`                           | `character literal must contain exactly one character`          | opening `'`        |
 | `0x`, `0b`, `0o` with no digit                   | `radix literal requires at least one digit`                    | the `0`            |
-| `0b12`, `0x1G`, `0o98`                           | `invalid digit '2' in radix literal`                           | the offending char |
+| `0b12`, `0o19`, `0b1012`                         | `invalid digit '2' in radix literal`                           | the offending char |
 | `1_`, `0x1_`, `1__2`, `0b_10`                    | `digit separator '_' must be placed between digits`            | the offending `_`  |
 
 The CLI surfaces them as `file:row:col: error: message`:

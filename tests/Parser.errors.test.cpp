@@ -131,13 +131,13 @@ TEST_CASE("a for header is init; test; step, and each part says what it wanted")
 }
 
 TEST_CASE("a void call has no value, and the arithmetic says so") {
-    // A call that returns nothing is not an operand. The type is named on both sides,
-    // which is the accurate reading: `void` is what the call has, `i32` is what the
-    // `+` needs.
+    // A call that returns nothing is not an operand. The next operand is read in the
+    // type of the one before it, so `void` is what the position asks for and the
+    // literal is what it does not get.
     CHECK(parse_error("fn f() { } fn main(): i32 { let x: i32 = f() + 1; return 0; }") ==
-          "expected a value of type void, not u32");
+          "expected a value of type void, not an integer literal");
     CHECK(parse_error("fn f() { } fn main(): i32 { let x: i32 = 1; if (f() > 1) { return 1; } return 0; }") ==
-          "expected a value of type void, not u32");
+          "expected a value of type void, not an integer literal");
     // A unary operator names the operator and the void it was given, which is the more
     // useful pair of the two, so the two wordings differ.
     CHECK(parse_error("fn f() { } fn main(): i32 { let x: i32 = -f(); return 0; }") ==

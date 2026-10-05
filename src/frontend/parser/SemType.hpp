@@ -38,7 +38,10 @@ constexpr bool is_signed(SemType type) noexcept {
     return middleend::is_signed(lower(type));
 }
 
-/// The type an integer literal takes where nothing expects one.
-constexpr SemType default_literal_type = SemType::U32;
+/// The type an integer literal takes where nothing expects one: a bare `5` is an
+/// `i32`, which is the width the language is smallest at and the one that costs the
+/// least to be wrong about. A literal that has to be another type says so — with a
+/// suffix, or by sitting in a position that expects one.
+constexpr SemType default_literal_type = SemType::I32;
 
 }  // namespace erax::frontend

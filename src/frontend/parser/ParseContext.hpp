@@ -3,7 +3,9 @@
 #include <cstddef>
 #include <cstdint>
 #include <expected>
+#include <span>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <vector>
 
@@ -72,6 +74,16 @@ public:
     /// next token. An `if` has to know before it branches which edge an untaken
     /// test falls through to — the other arm, or the join when there is none.
     bool else_follows() const;
+
+    /// Whether one of `operators` follows the operand that starts at the cursor,
+    /// counting a `( … )` group or a call's arguments as part of that operand. An
+    /// expression level needs this to know a literal is the whole expression
+    /// before it types it, which is the only way a literal can take the type of
+    /// its position without typing the operands of an operator too.
+    bool operator_follows(std::span<const std::string_view> operators) const;
+
+    /// The index just past the `( … )` group that starts at \p index.
+    std::size_t past_group(std::size_t index) const noexcept;
 
     SourceLocation location() const noexcept { return current().location; }
 

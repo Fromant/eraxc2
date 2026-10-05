@@ -148,10 +148,10 @@ TEST_CASE("a condition is a bool, in every construct that takes one") {
     for (const char* source : programs) {
         CHECK(parse_error(source) == "condition must be 'bool', not i32");
     }
-    // A literal condition is caught one step earlier, where it takes the type of the
-    // position it is in -- which is where the type check belongs.
+    // A literal condition is caught one step earlier, where it is read in the type of
+    // the position it is in -- and a `bool` is not one a literal can fill.
     CHECK(parse_error("fn main(): i32 { if (1) { return 0; } return 0; }") ==
-          "expected a value of type bool, not u32");
+          "expected a value of type bool, not an integer literal");
     // A `char` is not a `bool`, even though it is a byte.
     CHECK(parse_error("fn main(): i32 { let c: char = 'A'; if (c) { return 0; } return 0; }") ==
           "condition must be 'bool', not char");

@@ -232,12 +232,23 @@ TEST_CASE("radix literals need digits") {
 }
 
 TEST_CASE("radix literals reject off-base digits") {
-    const std::vector<std::string_view> samples = {"0b12", "0b21", "0x1G", "0o98"};
+    // A digit is checked in its own base, because it is part of the literal.
+    const std::vector<std::string_view> samples = {"0b12", "0b21", "0o98", "0o19", "0b1012"};
     for (const auto s : samples) {
         INFO("off-base sample: " << s);
         SourceLocation location;
         REQUIRE(lex_error(s, location).find("digit") != std::string::npos);
     }
+}
+
+TEST_CASE("a letter after a radix literal is a suffix, not a digit") {
+    // `G` is not a digit at all, so the literal ends and the run that follows is a
+    // suffix for the parser to name rather than a digit for the lexer to reject.
+    const auto ts = lex_ok("0x1G");
+
+    REQUIRE(ts.size() == 2);
+    CHECK(ts[0].type == TokenType::Number);
+    CHECK(ts[0].text == "0x1G");
 }
 
 TEST_CASE("a trailing dot is member access, not a fraction") {
@@ -254,11 +265,16 @@ TEST_CASE("a dot before a digit is a member access after an identifier") {
     check_kinds(kinds(ts), {TokenType::Identifier, TokenType::Dot, TokenType::Number, TokenType::EndOfFile});
 }
 
-TEST_CASE("C-like number suffixes are gone") {
-    const auto ts = lex_ok("64ul");
-
-    REQUIRE(texts(ts) == std::vector<std::string>{"64", "ul", ""});
-    check_kinds(kinds(ts), {TokenType::Number, TokenType::Identifier, TokenType::EndOfFile});
+TEST_CASE("a type suffix is one token with the digits") {
+    // The suffix names a type rather than a C width modifier, and the lexer has no
+    // keyword table to check it against, so the whole literal is one token.
+    for (const std::string_view s : {"5i64", "0xFFu8", "1_000i32", "64ul", "0x1G"}) {
+        INFO("suffixed sample: " << s);
+        REQUIRE(single_lexeme(s, TokenType::Number));
+    }
+    // A suffix on an exponent is part of the same token, and the parser rejects it as the
+    // float it is -- which is why the split matters for `2e` above and not here.
+    REQUIRE(single_lexeme("1e3i32", TokenType::Number));
 }
 
 TEST_CASE("digit separators must sit between digits") {

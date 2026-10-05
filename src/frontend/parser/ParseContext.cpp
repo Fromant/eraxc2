@@ -1,5 +1,7 @@
 #include "ParseContext.hpp"
 
+#include <algorithm>
+#include <span>
 #include <utility>
 
 namespace erax::frontend {
@@ -121,6 +123,46 @@ bool TokenCursor::else_follows() const {
     if (index >= tokens_->size()) return false;
     const Token& token = (*tokens_)[index];
     return token.type == TokenType::Identifier && keyword_of(token.text) == Keyword::Else;
+}
+
+/// The index just past the `( … )` group that starts at \p index, or the end of the
+/// stream if it is never closed.
+std::size_t TokenCursor::past_group(std::size_t index) const noexcept {
+    int depth = 0;
+    for (; index < tokens_->size(); ++index) {
+        if ((*tokens_)[index].type == TokenType::LParen) {
+            ++depth;
+        } else if ((*tokens_)[index].type == TokenType::RParen && --depth == 0) {
+            return index + 1;
+        }
+    }
+    return tokens_->size();
+}
+
+bool TokenCursor::operator_follows(std::span<const std::string_view> operators) const {
+    std::size_t index = index_;
+    // A prefix operator belongs to the operand in front of it, so `-128` is one operand
+    // and not a subtraction whose left side is missing. An infix `-` always follows a
+    // whole operand, so one at the cursor can only be a prefix.
+    while (index < tokens_->size() && (*tokens_)[index].type == TokenType::Operator) {
+        const std::string_view text = (*tokens_)[index].text;
+        if (text != "-" && text != "!" && text != "~") break;
+        ++index;
+    }
+    // What follows the operand is the one token after it, so the operand's own extent is
+    // stepped over exactly: a `( … )` group, a literal or a name, and a call's arguments
+    // after that name. Anything else, including a `;`, is where the operand ends and the
+    // answer is no operator.
+    if (index < tokens_->size() && (*tokens_)[index].type == TokenType::LParen) {
+        index = past_group(index);
+    } else if (index < tokens_->size() && (*tokens_)[index].type == TokenType::Identifier) {
+        ++index;
+        if (index < tokens_->size() && (*tokens_)[index].type == TokenType::LParen) index = past_group(index);
+    } else if (index < tokens_->size()) {
+        ++index;
+    }
+    if (index >= tokens_->size() || (*tokens_)[index].type != TokenType::Operator) return false;
+    return std::ranges::find(operators, (*tokens_)[index].text) != operators.end();
 }
 
 void TokenCursor::skip_to_sync() {

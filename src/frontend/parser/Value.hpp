@@ -11,26 +11,21 @@ namespace erax::frontend {
 /// A compile-time constant, carried alongside the operand that holds it so a
 /// global initializer and an `if` can be folded without a second walk.
 ///
-/// A constant is two things: the raw bit pattern the machine will see, and — when
-/// the value is small enough to be exact — the number it stands for. The second
-/// is what makes `-1` a compile error where an `u8` is expected, which no bit
-/// pattern can say, since as a bit pattern `-1` is a perfectly good 255.
+/// A constant is a type and the bits that type holds, and nothing else. Every
+/// literal is typed the moment it is read — by its suffix, by the position it
+/// fills, or by `default_literal_type` — so there is no "not yet known to be a
+/// value" state for a constant to be in, and therefore no need to carry the value
+/// separately from the bits. The bits are the value: `i32 -1` is `0xFFFFFFFF`, and
+/// a range check reads them as the type says.
 struct ConstInt {
     middleend::Type type = middleend::Type::Void;
     std::uint64_t bits = 0;
-    /// The value as a number, valid only when `exact` is set.
-    std::int64_t exact = 0;
-    /// The value fits in an `i64`; the widest constants (`u64` above `i64max`)
-    /// do not, and are checked against their type by width instead.
-    bool exact_known = false;
 
-    /// The value as a number, read as `type`. An exact one is the number itself; a
-    /// `u64` above `i64max` has no exact reading, so it is its bits interpreted.
+    /// The value as a number, read as `type`: sign-extended for a signed type, and
+    /// a `u64` above `i64max` has no such reading, so it is compared as bits.
     std::int64_t signed_value() const noexcept;
-
-    /// The value is representable in `type`: an exact one must lie in the type's
-    /// range, an inexact one can only be a `u64`.
-    bool fits(middleend::Type type) const noexcept;
+    /// The value as a number read as an unsigned type of the same width.
+    std::uint64_t unsigned_value() const noexcept;
 
     /// The same number read as `type`, which must be a type it fits.
     static ConstInt of(std::int64_t value, middleend::Type type) noexcept;
@@ -45,14 +40,6 @@ struct Value {
     SemType type = SemType::Void;
     middleend::Operand operand;
     std::optional<ConstInt> constant;
-
-    /// The type is a placeholder from the no-expected-type default (`u32`), so a
-    /// real type elsewhere in the expression can still retype it. Only a constant
-    /// can be a placeholder, and only a constant can be retyped.
-    bool retypeable = false;
-
-    /// Re-reads the constant as `type`, which `fits` must accept.
-    void retype(SemType type) noexcept;
 
     /// The operand as it goes into a command: a constant materializes as an
     /// instant, anything else is already an operand.

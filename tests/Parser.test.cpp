@@ -59,10 +59,10 @@ TEST_CASE("an integer literal takes the type of the position it fills") {
     // Contextual: the declared type decides, and the value has to fit it.
     parse_ok("fn f(x: i8): i8 { let y: i8 = 127; return y; } fn main(): i32 { f(1); return 0; }");
     CHECK(parse_error("fn f(x: i8): i8 { let y: i8 = 128; return y; } fn main(): i32 { f(1); return 0; }") ==
-          "this constant does not fit i8");
+          "'128' does not fit i8");
     // A negative value is not a u8, even though its bits would fit.
-    CHECK(parse_error("fn main(): i32 { let x: u8 = -1; return 0; }") != "");
-    // With no type to take, a literal is a u32.
+    CHECK(parse_error("fn main(): i32 { let x: u8 = -1; return 0; }") == "'-' is not defined for u8");
+    // With no type to take, a literal is an i32.
     parse_ok("fn main(): i32 { 1 + 2; return 0; }");
     CHECK(parse_error("fn main(): i32 { let x: bool = 1; return 0; }") != "");
     // A `char` literal is a `char`, and it is not an integer to add to one.

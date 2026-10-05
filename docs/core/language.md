@@ -20,7 +20,7 @@ Source-level contract of the erax language: grammar, types, and semantics. The d
 
 ## Grammar
 
-Terminals in quotes; `[]` optional, `{}` repeated, `|` choice. `INT`/`CHAR` are integer/character literals as lexed (see the tokenizer spec).
+Terminals in quotes; `[]` optional, `{}` repeated, `|` choice. `INT`/`CHAR` are integer/character literals as lexed (see the tokenizer spec); an `INT` may carry a type suffix, which is part of the token (`5i64`, `0xFFu8`) — see `types.md#literals`.
 
 ```
 program        = { global | function } ;

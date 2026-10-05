@@ -215,10 +215,15 @@ private:
             const std::size_t before = pos_;
             if (!consume_digits(radix)) return;
             if (pos_ == before) { fail("radix literal requires at least one digit", token_start_); return; }
-            if (!at_end() && is_identifier_char(peek())) {
+            // A digit the base does not have is a typo and is caught here, because a
+            // suffix cannot start with a digit: `0b12` is `0b1` followed by `2`, and
+            // reporting it as an off-base digit names the mistake better than letting
+            // the parser see two literals.
+            if (!at_end() && is_digit(peek())) {
                 fail(std::string("invalid digit '") + peek() + "' in radix literal", loc_);
                 return;
             }
+            consume_type_suffix();
             tokens_.push_back(make(TokenType::Number));
             return;
         }
@@ -235,9 +240,32 @@ private:
                 consume();
                 if (peek() == '+' || peek() == '-') consume();
                 if (!consume_digits(10)) return;
+                consume_type_suffix();
+                tokens_.push_back(make(TokenType::Number));
+                return;
             }
+            // `e` with no exponent after it is the start of a name -- `2e` is `2` and
+            // `e` -- so the literal ends here and the suffix is not read from it.
+            tokens_.push_back(make(TokenType::Number));
+            return;
         }
+        consume_type_suffix();
         tokens_.push_back(make(TokenType::Number));
+    }
+
+    /// Takes a type suffix off a numeric literal: `5i64`, `0xFFu8`, `1_000i32`.
+    ///
+    /// The suffix is the type name itself rather than a C-style `L`/`UL`, because
+    /// erax has no `long` and the width is already in the name -- `5i64` says what
+    /// `5ll` would, without inventing a second vocabulary. Which runs are *legal*
+    /// suffixes is the parser's business: a keyword is an `Identifier` token the
+    /// parser classifies, so the lexer only decides that `5i64` is one token and
+    /// leaves what it means to the parser. A run that is not a legal suffix is
+    /// consumed anyway, so `64ul` is one literal to reject instead of a literal
+    /// followed by a name the parser would have to explain away.
+    void consume_type_suffix() {
+        if (at_end() || !is_identifier_start(peek())) return;
+        while (!at_end() && is_identifier_char(peek())) consume();
     }
 
     bool consume_digits(int radix) {

@@ -5,6 +5,7 @@
 #include <optional>
 #include <string>
 
+#include "ConstantRange.hpp"
 #include "middleend/jir/Fold.hpp"
 
 namespace erax::frontend {
@@ -35,6 +36,21 @@ int radix_of(char c) noexcept {
     return 2;
 }
 
+/// The length of the type suffix on \p text, or 0 if it does not end in one.
+///
+/// Longest match wins, so `i64` is not read as `i6` — there is no `i6`, but the same
+/// rule makes the suffix set open to a three-digit type later without touching this.
+std::size_t suffix_length(std::string_view text) noexcept {
+    constexpr std::string_view suffixes[] = {"i8", "u8", "i16", "u16", "i32", "u32", "i64", "u64"};
+    std::size_t longest = 0;
+    for (const std::string_view suffix : suffixes) {
+        if (text.size() > suffix.size() && text.ends_with(suffix)) {
+            longest = std::max(longest, suffix.size());
+        }
+    }
+    return longest;
+}
+
 std::expected<std::uint64_t, std::string> parse_number(std::string_view text) {
     int base = 10;
     std::size_t index = 0;
@@ -46,8 +62,18 @@ std::expected<std::uint64_t, std::string> parse_number(std::string_view text) {
     for (; index < text.size(); ++index) {
         const char c = text[index];
         if (c == '_') continue;
+        // The tokenizer has already rejected a digit outside the base, so what is left
+        // here is a letter that is not one -- a suffix this parser does not know. It is
+        // caught rather than folded into the number, because `64ul` read as a base-10
+        // digit sequence is `6721`, which looks like a plausible literal.
+        if (!(c >= '0' && c <= '9') && !((c | 0x20) >= 'a' && (c | 0x20) <= 'f')) {
+            return std::unexpected("'" + std::string{text.substr(index)} + "' is not a type");
+        }
         const std::uint64_t digit = c <= '9' ? static_cast<std::uint64_t>(c - '0')
                                              : static_cast<std::uint64_t>(c | 0x20) - 'a' + 10;
+        if (digit >= static_cast<std::uint64_t>(base)) {
+            return std::unexpected("invalid digit '" + std::string{c} + "' in radix literal");
+        }
         if (value > (std::numeric_limits<std::uint64_t>::max() - digit) / static_cast<std::uint64_t>(base)) {
             return std::unexpected("integer literal '" + std::string{text} + "' is too large for any type");
         }
@@ -89,247 +115,6 @@ std::expected<std::uint64_t, std::string> parse_char(std::string_view raw) {
                                        : static_cast<std::uint64_t>(c | 0x20) - 'a' + 10);
     }
     return value;
-}
-
-std::uint64_t truncate(std::uint64_t bits, Type type) noexcept {
-    const std::size_t width = middleend::size_of(type) * 8;
-    if (width == 0 || width == 64) return bits;
-    return bits & ((std::uint64_t{1} << width) - 1);
-}
-
-/// The magnitude of `value`, without negating `i64min`, which has no positive
-/// counterpart and would not survive the round trip.
-std::uint64_t magnitude(std::int64_t value) noexcept {
-    return value < 0 ? ~static_cast<std::uint64_t>(value) + 1 : static_cast<std::uint64_t>(value);
-}
-
-/// The type a fold is done in. Most operations read their bits the same way whatever
-/// the operand reports, but `Sdiv`, `Smod` and `Sar` read them as a signed number, and
-/// an untargeted literal reports itself `u64` -- so without this, `imin / -1` divides
-/// two unsigned values and answers `0`. Only the signedness is taken from the op; the
-/// width is the operand's, which for a placeholder is the `u64` it is held at.
-Type fold_type_of(Op op, Type operand) noexcept {
-    switch (op) {
-        case Op::Sdiv:
-        case Op::Smod:
-        case Op::Sar:
-            switch (operand) {
-                case Type::U8: return Type::I8;
-                case Type::U16: return Type::I16;
-                case Type::U32: return Type::I32;
-                case Type::U64: return Type::I64;
-                default: return operand;
-            }
-        default: return operand;
-    }
-}
-
-/// A result that has left the `i64` range a constant is written in, held as a sign and
-/// a magnitude. Two's complement has no room for a value past the width of its own
-/// cell, and a wrapped one comes back looking small and legitimate: `2^64` wraps to
-/// `0`, and `i64min - 1` wraps to `i64max`. A sign and a magnitude do not wrap, which
-/// is what lets the range of every type be asked directly instead of guessed at per
-/// operator.
-struct Wide {
-    bool negative = false;
-    std::uint64_t magnitude = 0;
-};
-
-/// Which of the three states in `types.md#constants` a result is in: a value, a `u64`
-/// that has no `i64` value, or a number that is in no type at all.
-enum class Reach { Value, Bits, NoType };
-
-Reach reach_of(const Wide& wide) noexcept {
-    const std::uint64_t i64_sign = std::uint64_t{1} << 63;
-    // A negative result is an unsigned value nowhere, so once it is below `i64min`
-    // there is no type left to carry it. `i64min` itself is the sign bit as a
-    // magnitude, so `-(2^63)` is a value and `+(2^63)` is not.
-    if (wide.negative) return wide.magnitude <= i64_sign ? Reach::Value : Reach::NoType;
-    return wide.magnitude < i64_sign ? Reach::Value : Reach::Bits;
-}
-
-/// `a` combined with `b` by `op`, as a sign and a magnitude. `op` is `+`, `-` or `*`.
-/// Fails only when the magnitude itself outgrows a `u64`, which is reachable by
-/// multiplication and is in no type whatever the sign.
-bool wide_of(Op op, std::int64_t a, std::int64_t b, Wide& out) noexcept {
-    constexpr std::uint64_t top = ~std::uint64_t{0};
-    const std::uint64_t left = magnitude(a);
-    const std::uint64_t right = magnitude(b);
-    if (op == Op::Mul) {
-        if (left != 0 && right > top / left) return false;
-        out = {(a < 0) != (b < 0), left * right};
-        return true;
-    }
-    // A sum and a difference of two `i64` reach `2^64`, so even here the magnitude can
-    // outgrow a `u64` -- but only at exactly `2^64`, which the carry test catches.
-    if (op == Op::Add ? (a < 0) != (b < 0) : (a < 0) == (b < 0)) {
-        // The operands disagree in sign, so the larger magnitude wins the sign.
-        if (left >= right) {
-            out = {op == Op::Add ? a < 0 : b < 0, left - right};
-        } else {
-            out = {op == Op::Add ? b < 0 : a < 0, right - left};
-        }
-        return true;
-    }
-    if (left > top - right) return false;
-    out = {a < 0, left + right};
-    return true;
-}
-
-/// The number a folded bit pattern stands for, sign-extended for a signed type.
-/// Exact unless the pattern is a `u64` above `i64max`.
-ConstInt from_bits(std::uint64_t bits, Type type) {
-    ConstInt constant{type, truncate(bits, type), 0, false};
-    const std::uint64_t width = middleend::size_of(type) * 8;
-    if (width == 64) {
-        // An `i64` is every 64-bit pattern read as a number; only a `u64` can be one
-        // that has no number at all.
-        if (middleend::is_signed(type)) {
-            constant.exact = static_cast<std::int64_t>(constant.bits);
-            constant.exact_known = true;
-            return constant;
-        }
-        if (constant.bits <= static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max())) {
-            constant.exact = static_cast<std::int64_t>(constant.bits);
-            constant.exact_known = true;
-        }
-        return constant;
-    }
-    const std::uint64_t sign = std::uint64_t{1} << (width - 1);
-    if ((constant.bits & sign) != 0) {
-        constant.exact = static_cast<std::int64_t>(constant.bits) - static_cast<std::int64_t>(std::uint64_t{1} << width);
-    } else {
-        constant.exact = static_cast<std::int64_t>(constant.bits);
-    }
-    constant.exact_known = true;
-    return constant;
-}
-
-/// The exact value of a constant expression, when it has one. This is a question
-/// about the source, not a fold: `fold::binary` answers in bit patterns and always
-/// has one, but the two answers are not the same. `0x80000000` is a value the
-/// source can name, or it is a value that left the `i64` range a constant is
-/// written in and wrapped, and only the value tells those apart.
-///
-/// So there are three answers, not two: the value, `std::nullopt` when only the
-/// bits are known (a shift or a product out of `i64` range), or a `ParseError`
-/// where the expression cannot be a constant at all. The value is what a range
-/// check, a folded `if`, and a division's sign all read, which is why the bits
-/// cannot stand in for it.
-std::expected<std::optional<ConstInt>, ParseError> exact_value(Op op, SemType operand, SemType result,
-                                                              const ConstInt& a, const ConstInt& b,
-                                                              SourceLocation location) {
-    const Type operand_type = lower(operand);
-    const Type result_type = lower(result);
-    std::int64_t value = 0;
-
-    switch (op) {
-        // A constant is folded in the `i64` range, and leaving that range is not one
-        // thing but three. A result inside it is a value. A result above it is still
-        // a `u64` and is carried as bits until the position says which type it is. A
-        // result below `i64min`, or past `u64max` whichever way it went, is in no type
-        // at all -- and wrapping it would produce a number that looks legitimate in
-        // every position, which is the one answer a constant must never give.
-        case Op::Add:
-        case Op::Sub:
-        case Op::Mul: {
-            Wide wide;
-            const Reach reach = wide_of(op, a.exact, b.exact, wide) ? reach_of(wide) : Reach::NoType;
-            if (reach == Reach::NoType) {
-                // There is no type to name in the message, because there is none: the
-                // result is not too big for the position, it is too big for the language.
-                return std::unexpected(at("this constant expression is too large for any type", location));
-            }
-            if (reach == Reach::Bits) return std::optional<ConstInt>{};
-            value = wide.negative ? static_cast<std::int64_t>(~wide.magnitude + 1)
-                                  : static_cast<std::int64_t>(wide.magnitude);
-            break;
-        }
-        case Op::Sdiv:
-        case Op::Smod:
-            if (b.exact == 0) {
-                return std::unexpected(at("division by zero in a constant expression", location));
-            }
-            if (a.exact == std::numeric_limits<std::int64_t>::min() && b.exact == -1) {
-                // The quotient is `2^63`: a `u64` value and no signed one, and the same
-                // number `1 << 63` reaches. It is returned as bits rather than left to a
-                // fold, because the signed division that would have to produce it traps
-                // on exactly this pair, and the position decides which type it fills.
-                return ConstInt::bits_of(std::uint64_t{1} << 63, Type::U64);
-            }
-            value = op == Op::Sdiv ? a.exact / b.exact : a.exact % b.exact;
-            break;
-        case Op::Udiv:
-        case Op::Umod:
-            if (b.exact == 0) {
-                return std::unexpected(at("division by zero in a constant expression", location));
-            }
-            if (op == Op::Udiv) {
-                value = static_cast<std::int64_t>(static_cast<std::uint64_t>(a.exact) /
-                                                  static_cast<std::uint64_t>(b.exact));
-            } else {
-                value = static_cast<std::int64_t>(static_cast<std::uint64_t>(a.exact) %
-                                                  static_cast<std::uint64_t>(b.exact));
-            }
-            break;
-        case Op::Shl: {
-            // A negative value has no exact shifted form, and a count of 63 or more
-            // leaves the i64 range for anything but zero.
-            const std::uint64_t amount = static_cast<std::uint64_t>(b.exact) & middleend::shift_mask(operand_type);
-            if (a.exact == 0) {
-                value = 0;
-                break;
-            }
-            const std::uint64_t left = a.exact < 0 ? 0 : static_cast<std::uint64_t>(a.exact);
-            if (a.exact < 0 || amount >= 63 ||
-                left > static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max()) >> amount) {
-                return std::optional<ConstInt>{};
-            }
-            value = static_cast<std::int64_t>(left << amount);
-            break;
-        }
-        case Op::Shr:
-        case Op::Sar:
-            // A logical shift is only ever chosen for an unsigned operand, whose
-            // exact value is never negative, and an arithmetic one is defined on
-            // the two's-complement value.
-            value = a.exact >> (static_cast<std::uint64_t>(b.exact) & middleend::shift_mask(operand_type));
-            break;
-        case Op::And:
-        case Op::Or:
-        case Op::Xor: {
-            const std::uint64_t bits =
-                op == Op::And ? (a.bits & b.bits) : (op == Op::Or ? (a.bits | b.bits) : (a.bits ^ b.bits));
-            return from_bits(bits, result_type);
-        }
-        case Op::CmpEq:
-        case Op::CmpNe:
-        case Op::CmpLt:
-        case Op::CmpLe:
-        case Op::CmpGt:
-        case Op::CmpGe: {
-            // Two exact values are compared as numbers, and that is the only reading
-            // that gets a negative literal right: `-1 < 1` read as bits is
-            // `0xFFFF.. < 1` and answers false. Signed and unsigned comparison agree
-            // whenever both values are non-negative, so this is also right for an
-            // operand that is genuinely unsigned.
-            const bool answer = op == Op::CmpEq   ? a.exact == b.exact
-                                : op == Op::CmpNe ? a.exact != b.exact
-                                : op == Op::CmpLt ? a.exact < b.exact
-                                : op == Op::CmpLe ? a.exact <= b.exact
-                                : op == Op::CmpGt ? a.exact > b.exact
-                                                   : a.exact >= b.exact;
-            return ConstInt::of(answer ? 1 : 0, result_type);
-        }
-        case Op::Mov:
-        case Op::Ret:
-        case Op::Call:
-        case Op::Inc:
-        case Op::Dec:
-        case Op::Neg:
-        case Op::Not: break;
-    }
-    return ConstInt::of(value, result_type);
 }
 
 }  // namespace
@@ -398,14 +183,16 @@ ExpressionParser::result ExpressionParser::multiplicative_expression(std::option
 ExpressionParser::result ExpressionParser::binary_level(operand_level operand, std::optional<SemType> expected,
                                                         std::initializer_list<std::string_view> operators) {
     // The expected type belongs to the whole expression, not to its operands: an
-    // operator's result has the operator's own type, so nothing here may be typed
-    // by it until it is known that there is no operator at all. That is what keeps
-    // `1 < 2` a `bool` in a `bool` position instead of typing its operands `bool`.
+    // operator's result has the operator's own type, so nothing here may be typed by
+    // it until it is known that there is no operator at all. That is what keeps
+    // `1 < 2` a `bool` in a `bool` position instead of typing its operands `bool`,
+    // and it is why the level looks ahead for an operator before it parses rather than
+    // typing the first operand and taking the type back.
     const SourceLocation start = context().cursor.location();
-    auto first = (this->*operand)(std::nullopt);
+    const bool lone = !context().cursor.operator_follows(operators);
+    auto first = (this->*operand)(lone ? expected : std::nullopt);
     if (!first) return first;
     Value left = *first;
-    bool combined_any = false;
 
     while (true) {
         std::string_view op;
@@ -420,54 +207,20 @@ ExpressionParser::result ExpressionParser::binary_level(operand_level operand, s
         const SourceLocation location = context().cursor.location();
         context().cursor.take();
 
-        // A left operand that is only a placeholder — a constant typed by the
-        // no-expected-type default — leaves the type open, so the right operand is
-        // parsed without one and the left one follows it.
-        const std::optional<SemType> right_expected =
-            left.retypeable ? std::nullopt : std::optional<SemType>{left.type};
-        auto parsed = (this->*operand)(right_expected);
+        // Each operand takes the type of the operand before it, so `x + 1` types the
+        // `1` as whatever `x` is. A literal in the first position of the level has no
+        // such neighbour and stays `i32`, which is why `let x: i64 = 1 + 2` is a type
+        // error: both `1`s are `i32` and the sum is an `i32`.
+        auto parsed = (this->*operand)(left.type);
         if (!parsed) return parsed;
         Value right = *parsed;
-        if (left.retypeable && !right.retypeable && right.type != SemType::Void) {
-            auto typed = retype(left, right.type, location);
-            if (!typed) return std::unexpected(typed.error());
-        }
 
         auto combined = combine(op, left, right, location);
         if (!combined) return std::unexpected(combined.error());
         left = *combined;
-        combined_any = true;
     }
 
-    // A lone operand is the whole expression, so a literal in it takes the type of
-    // the position it fills. Anything else already has a type of its own, and the
-    // statement that wanted one — a `let`, a return, a test — is what checks it. The
-    // retyping happens even where the placeholder's default type already reads as the
-    // wanted one, because it is the retyping that checks the value against it.
-    if (!combined_any && expected && left.retypeable) {
-        auto typed = retype(left, *expected, start);
-        if (!typed) return std::unexpected(typed.error());
-    }
     return left;
-}
-
-ExpressionParser::result ExpressionParser::retype(Value& value, SemType expected, SourceLocation location) {
-    // Only a constant of an integer type can change type: a literal adapting to the
-    // position it fills. A `bool` is not an integer, so `1` is not a `bool` and
-    // `let x: bool = 1;` is the type error it looks like.
-    if (value.type != expected && (!value.constant || !is_integer(expected) || !is_integer(value.type))) {
-        return std::unexpected(
-            at("expected a value of type " + std::string{to_string(expected)} + ", not " +
-                   std::string{to_string(value.type)},
-               location));
-    }
-    if (value.constant && !value.constant->fits(lower(expected))) {
-        return std::unexpected(at("this constant does not fit " + std::string{to_string(expected)}, location));
-    }
-    value.retype(expected);
-    value.type = expected;
-    value.retypeable = false;
-    return value;
 }
 
 ExpressionParser::result ExpressionParser::combine(std::string_view op, Value& left, Value& right,
@@ -518,15 +271,9 @@ ExpressionParser::result ExpressionParser::combine(std::string_view op, Value& l
     if (op == "+") return apply(Op::Add, left.type, left, right, location);
     if (op == "-") return apply(Op::Sub, left.type, left, right, location);
     if (op == "*") return apply(Op::Mul, left.type, left, right, location);
-    // A placeholder has no type yet, and an exact value folds as a number rather
-    // than as bits, so it is folded in the signed form. The two forms only differ
-    // for a negative operand, and a negative value is not one an unsigned type can
-    // be retyped to. A placeholder above `i64max` is not such a value: it has only
-    // a bit pattern, and a pattern is not signed or unsigned on its own -- `u64max`
-    // as bits is a large unsigned value, not -1. There the type decides, as it
-    // does everywhere else.
-    const bool exact_placeholder = left.retypeable && left.constant && left.constant->exact_known;
-    const bool arithmetic = exact_placeholder || is_signed(left.type);
+    // Signedness comes from the operand's type, which is a real type now: there is no
+    // placeholder left for it to be guessed from.
+    const bool arithmetic = is_signed(left.type);
     if (op == "/") return apply(arithmetic ? Op::Sdiv : Op::Udiv, left.type, left, right, location);
     if (op == "%") return apply(arithmetic ? Op::Smod : Op::Umod, left.type, left, right, location);
     if (op == "<<") return apply(Op::Shl, left.type, left, right, location);
@@ -537,87 +284,48 @@ ExpressionParser::result ExpressionParser::combine(std::string_view op, Value& l
 
 ExpressionParser::result ExpressionParser::apply(Op op, SemType result, const Value& left, const Value& right,
                                                  SourceLocation location) {
+    const Type result_type = lower(result);
     if (left.constant && right.constant) {
-        // A constant is folded at the width its bits actually carry, which for a placeholder
-        // is the full `u64` and not the default type it reports. Its range is not checked
-        // either: a placeholder has no type until the expression takes the one it fills.
-        const bool placeholder = result == left.type && left.retypeable && right.retypeable;
-        const SemType operand_semtype = lift(left.constant->type);
-        const Type operand_type = lower(operand_semtype);
-        const Type result_type = placeholder ? operand_type : lower(result);
-        const ConstInt& a = *left.constant;
-        const ConstInt& b = *right.constant;
-        std::optional<ConstInt> folded;
-        if (a.exact_known && b.exact_known) {
-            auto exact = exact_value(op, operand_semtype, result, a, b, location);
-            if (!exact) return std::unexpected(exact.error());
-            folded = *exact;
-        }
-        if (!folded) {
-            // The bits are all that is left to fold: either an operand was already
-            // only a pattern, or the value outgrew the range a constant is written in.
-            // A division still has no answer here, and an overflow is a compile error
-            // even though the same operation only wraps when it runs.
-            const middleend::fold::Result raw = middleend::fold::binary(op, fold_type_of(op, operand_type), a.bits, b.bits);
-            if (raw.failure) {
-                if (*raw.failure == middleend::fold::Failure::DivisionByZero) {
-                    return std::unexpected(at("division by zero in a constant expression", location));
-                }
-                return std::unexpected(
-                    at("constant expression overflows " + std::string{to_string(left.type)}, location));
-            }
-            folded = from_bits(*raw.value, result_type);
-        }
-        if (!placeholder && folded->exact_known && !folded->fits(result_type)) {
-            return std::unexpected(at("constant expression overflows " + std::string{to_string(result)}, location));
-        }
-        return Value{result, Operand::instant(result_type, folded->bits), folded, placeholder};
+        // The operands are the same type -- `combine` checked that -- so the fold is
+        // done in it, whatever the result is: a comparison folds its `i32` operands and
+        // lands an `i8`, and every other op's result is that same type back.
+        auto folded = range::fold(op, lower(left.type), *left.constant, *right.constant);
+        if (!folded) return std::unexpected(at(folded.error(), location));
+        const ConstInt constant = ConstInt::bits_of(folded->bits, result_type);
+        return Value{result, Operand::instant(result_type, constant.bits), constant};
     }
 
-    const Type result_type = lower(result);
     const std::uint64_t destination = context().builder.alloc(result_type);
     context().builder.emit(op, {Operand::vreg(result_type, destination), left.as_operand(), right.as_operand()});
-    return Value{result, Operand::vreg(result_type, destination), std::nullopt, false};
+    return Value{result, Operand::vreg(result_type, destination), std::nullopt};
 }
 
 ExpressionParser::result ExpressionParser::apply_unary(Op op, SemType type, const Value& operand,
                                                        SourceLocation location) {
+    const Type operand_type = lower(type);
     if (operand.constant) {
-        // As in `apply`: a placeholder is folded at the width its bits carry and is not
-        // range-checked, because its type is still the position's to decide.
-        const bool placeholder = operand.retypeable;
-        const Type operand_type = operand.constant->type;
-        std::optional<ConstInt> folded;
-        if (operand.constant->exact_known) {
-            // A negation of `i64min` is `2^63`, which has no `i64` value, so it falls
-            // through to the bits and the position's range check is what rejects it.
-            if (op == Op::Neg && operand.constant->exact != std::numeric_limits<std::int64_t>::min()) {
-                folded = ConstInt::of(0 - operand.constant->exact, operand_type);
-            }
-            // `~x` is `-x - 1`, so like a negation it keeps the value exact.
-            if (op == Op::Not) folded = ConstInt::of(~operand.constant->exact, operand_type);
+        if (op == Op::Neg) {
+            // `-imin` is a value in the machine's rule and is not one in the source's,
+            // which is the split `docs/core/types.md#constants` is about. The `-` on the
+            // literal itself was read with the sign in view, so it is not this one.
+            auto negated = range::negate(operand_type, *operand.constant);
+            if (!negated) return std::unexpected(at(negated.error(), location));
+            return Value{type, Operand::instant(operand_type, negated->bits), *negated};
         }
-        if (!folded) {
-            const middleend::fold::Result raw = middleend::fold::unary(op, operand_type, operand.constant->bits);
-            if (raw.failure) {
-                return std::unexpected(
-                    at("constant expression overflows " + std::string{to_string(type)}, location));
-            }
-            folded = from_bits(*raw.value, operand_type);
-        }
-        if (!placeholder && folded->exact_known && !folded->fits(operand_type)) {
-            return std::unexpected(at("constant expression overflows " + std::string{to_string(type)}, location));
-        }
-        return Value{type, Operand::instant(operand_type, folded->bits), folded, placeholder};
+        // `~` maps every value of a type onto another value of it, so there is nothing
+        // here to check and the machine's answer is the answer.
+        const middleend::fold::Result folded = middleend::fold::unary(op, operand_type, operand.constant->bits);
+        const ConstInt constant = ConstInt::bits_of(*folded.value, operand_type);
+        return Value{type, Operand::instant(operand_type, constant.bits), constant};
     }
 
-    const Type result_type = lower(type);
-    const std::uint64_t destination = context().builder.alloc(result_type);
-    context().builder.emit(op, {Operand::vreg(result_type, destination), operand.as_operand()});
-    return Value{type, Operand::vreg(result_type, destination), std::nullopt, false};
+    const std::uint64_t destination = context().builder.alloc(operand_type);
+    context().builder.emit(op, {Operand::vreg(operand_type, destination), operand.as_operand()});
+    return Value{type, Operand::vreg(operand_type, destination), std::nullopt};
 }
 
-ExpressionParser::result ExpressionParser::integer_literal(const Token& token, std::optional<SemType> expected) {
+ExpressionParser::result ExpressionParser::integer_literal(const Token& token, std::optional<SemType> expected,
+                                                            bool negated) {
     if (is_float_literal(token.text)) {
         return std::unexpected(at("float is not supported yet", token.location));
     }
@@ -629,21 +337,49 @@ ExpressionParser::result ExpressionParser::integer_literal(const Token& token, s
             at("expected a value of type " + std::string{to_string(*expected)} + ", not an integer literal",
                token.location));
     }
-    auto parsed = parse_number(token.text);
+
+    // A suffix names the type: `5i64`, `0xFFu8`. It is the type name rather than a
+    // C-style `L`, because erax has no `long` and the width is already in the name.
+    std::string_view digits = token.text;
+    std::optional<SemType> suffixed;
+    if (const std::size_t split = digits.size() - suffix_length(digits); split != digits.size()) {
+        const std::string_view suffix = digits.substr(split);
+        const std::optional<SemType> named = type_of(keyword_of(suffix));
+        if (!named || !is_integer(*named)) {
+            return std::unexpected(at("'" + std::string{suffix} + "' is not a type", token.location));
+        }
+        suffixed = named;
+        digits = digits.substr(0, split);
+    }
+
+    auto parsed = parse_number(digits);
     if (!parsed) return std::unexpected(at(parsed.error(), token.location));
 
-    // With no expected type the literal is only a placeholder: the position it fills decides
-    // its type later, so there is nothing to check it against yet and its bits are held at
-    // full width — `let x: u64 = 4294967296;` must not lose the value to the default type.
-    // The check belongs to the retyping that follows, which names the real type.
-    const Type held = lower(expected.value_or(SemType::U64));
-    const ConstInt constant = ConstInt::bits_of(*parsed, held);
-    if (expected && !constant.fits(held)) {
-        return std::unexpected(
-            at("'" + token.text + "' does not fit " + std::string{to_string(*expected)}, token.location));
+    // A suffix wins over the position, and disagreeing with it is an error rather
+    // than a silent conversion: `let x: i32 = 5i64;` says `i32` and `i64` in one
+    // expression. With no suffix, the position decides, and with no position either,
+    // the literal is an `i32`.
+    if (suffixed && expected && *suffixed != *expected) {
+        return std::unexpected(at("'" + std::string{digits} + std::string{to_string(*suffixed)} +
+                                      "' does not fit " + std::string{to_string(*expected)},
+                                  token.location));
     }
-    return Value{expected.value_or(default_literal_type), Operand::instant(held, constant.bits), constant,
-                 !expected.has_value()};
+    // The value is read as a magnitude, so it is checked against the whole range of the
+    // type: `255` fits a `u8`, `256` does not, and neither is quietly truncated. A
+    // literal carries no sign of its own, so only the positive half of a signed type is
+    // asked about -- unless a unary `-` is in front of it, which is how the negative
+    // half is written at all.
+    const SemType type = suffixed.value_or(expected.value_or(default_literal_type));
+    const bool fits =
+        negated ? range::negated_magnitude_fits(*parsed, lower(type)) : range::magnitude_fits(*parsed, lower(type));
+    if (!fits) {
+        return std::unexpected(at("'" + std::string{digits} + "' does not fit " + std::string{to_string(type)},
+                                  token.location));
+    }
+    // The value is the one the source names, so a literal under `-` is a negative one
+    // rather than its magnitude with a `Neg` still to come.
+    const ConstInt constant = ConstInt::bits_of(negated ? ~*parsed + 1 : *parsed, lower(type));
+    return Value{type, Operand::instant(lower(type), constant.bits), constant};
 }
 
 ExpressionParser::result ExpressionParser::unary_expression(std::optional<SemType> expected) {
@@ -659,7 +395,21 @@ ExpressionParser::result ExpressionParser::unary_expression(std::optional<SemTyp
         // `!` is defined on `bool`, so that is the only type its operand can have.
         const std::optional<SemType> operand_expected =
             op == "!" ? std::optional<SemType>{SemType::Bool} : expected;
-        auto operand = unary_expression(operand_expected);
+
+        if (op == "-" && cursor.at(TokenType::Number)) {
+            // A literal under `-` is read with the sign in view, because that is the
+            // only way a negative value is ever written: there is no negative `i8`
+            // literal without one. So the value that comes back is already the
+            // negation, and there is no `Neg` left to apply.
+            if (operand_expected && is_integer(*operand_expected) && !is_signed(*operand_expected)) {
+                return std::unexpected(
+                    at("'-' is not defined for " + std::string{to_string(*operand_expected)}, location));
+            }
+            const Token token = cursor.current();
+            cursor.take();
+            return integer_literal(token, operand_expected, true);
+        }
+        result operand = unary_expression(operand_expected);
         if (!operand) return operand;
         const Value value = *operand;
         if (op == "!") {
@@ -668,13 +418,18 @@ ExpressionParser::result ExpressionParser::unary_expression(std::optional<SemTyp
                     at("'!' is defined on 'bool', but got " + std::string{to_string(value.type)},
                        location));
             }
-            const Value zero{SemType::Bool, Operand::instant(Type::I8, 0), ConstInt::of(0, Type::I8), false};
+            const Value zero{SemType::Bool, Operand::instant(Type::I8, 0), ConstInt::of(0, Type::I8)};
             return apply(Op::CmpNe, SemType::Bool, value, zero, location);
         }
         if (!is_integer(value.type)) {
             return std::unexpected(
                 at("'" + std::string{op} + "' is not defined for " + std::string{to_string(value.type)},
                    location));
+        }
+        // An unsigned type has no negative side to negate into, so `-` on one is not an
+        // arithmetic op at all; `~` is the same on both signednesses and stays.
+        if (op == "-" && !is_signed(value.type)) {
+            return std::unexpected(at("'-' is not defined for " + std::string{to_string(value.type)}, location));
         }
         return apply_unary(op == "-" ? Op::Neg : Op::Not, value.type, value, location);
     }
@@ -728,11 +483,11 @@ ExpressionParser::result ExpressionParser::call(const std::string& name, SourceL
     for (const Value& argument : arguments) args.push_back(argument.as_operand());
     context().builder.emit(Op::Call, std::move(args));
 
-    if (return_type == Type::Void) return Value{SemType::Void, Operand::empty(), std::nullopt, false};
-    return Value{function->return_type, Operand::vreg(return_type, destination), std::nullopt, false};
+    if (return_type == Type::Void) return Value{SemType::Void, Operand::empty(), std::nullopt};
+    return Value{function->return_type, Operand::vreg(return_type, destination), std::nullopt};
 }
 
-ExpressionParser::result ExpressionParser::primary(std::optional<SemType> expected) {
+ExpressionParser::result ExpressionParser::primary(std::optional<SemType> expected, bool negated) {
     TokenCursor& cursor = context().cursor;
     const SourceLocation location = cursor.location();
     const Token token = cursor.current();
@@ -740,7 +495,7 @@ ExpressionParser::result ExpressionParser::primary(std::optional<SemType> expect
     switch (token.type) {
         case TokenType::Number: {
             cursor.take();
-            return integer_literal(token, expected);
+            return integer_literal(token, expected, negated);
         }
         case TokenType::Char: {
             cursor.take();
@@ -750,7 +505,7 @@ ExpressionParser::result ExpressionParser::primary(std::optional<SemType> expect
                 return std::unexpected(at("character literal is not a 0-255 code point", token.location));
             }
             const ConstInt constant = ConstInt::of(static_cast<std::int64_t>(*code), Type::U8);
-            return Value{SemType::Char, Operand::instant(Type::U8, constant.bits), constant, false};
+            return Value{SemType::Char, Operand::instant(Type::U8, constant.bits), constant};
         }
         case TokenType::String:
             return std::unexpected(at("string is not supported yet", location));
@@ -774,15 +529,11 @@ ExpressionParser::result ExpressionParser::primary(std::optional<SemType> expect
     const Keyword keyword = keyword_of(name);
     if (keyword == Keyword::True || keyword == Keyword::False) {
         cursor.take();
-        // A `bool` is not an integer, so a literal in a position expecting one is
-        // a type error rather than something to convert.
-        if (expected && *expected != SemType::Bool) {
-            return std::unexpected(
-                at("expected a value of type " + std::string{to_string(*expected)} + ", not 'bool'", location));
-        }
+        // A `bool` is a value of its own type: the expected type does not reach it,
+        // so a position wanting an integer is left to report the mismatch itself.
         const std::int64_t value = keyword == Keyword::True ? 1 : 0;
         const ConstInt constant = ConstInt::of(value, Type::I8);
-        return Value{SemType::Bool, Operand::instant(Type::I8, constant.bits), constant, false};
+        return Value{SemType::Bool, Operand::instant(Type::I8, constant.bits), constant};
     }
     if (keyword != Keyword::None) {
         return std::unexpected(at("'" + name + "' is a reserved word", location));
@@ -809,7 +560,7 @@ ExpressionParser::result ExpressionParser::primary(std::optional<SemType> expect
         if (!local->assigned) {
             return std::unexpected(at("'" + name + "' is read before it is assigned", location));
         }
-        return Value{local->sem_type, Operand::vreg(local->type, local->vreg), std::nullopt, false};
+        return Value{local->sem_type, Operand::vreg(local->type, local->vreg), std::nullopt};
     }
     if (const GlobalInfo* global = context().find_global(name)) {
         if (const_mode_) {
@@ -817,10 +568,9 @@ ExpressionParser::result ExpressionParser::primary(std::optional<SemType> expect
                 return std::unexpected(
                     at("'" + name + "' is declared after this initializer", location));
             }
-            return Value{global->sem_type, Operand::global(global->type, global->id), global->value,
-                         false};
+            return Value{global->sem_type, Operand::global(global->type, global->id), global->value};
         }
-        return Value{global->sem_type, Operand::global(global->type, global->id), std::nullopt, false};
+        return Value{global->sem_type, Operand::global(global->type, global->id), std::nullopt};
     }
     return std::unexpected(at("undeclared identifier '" + name + "'", location));
 }
