@@ -112,6 +112,31 @@ TEST_CASE("precedence follows the operator table") {
     CHECK(straight.blocks[0].commands[0].args[1].value == 9);
 }
 
+TEST_CASE("logical not is a test against zero") {
+    // `!x` is `x == 0`, so it lowers to the comparison that says so: a `CMP_NE`
+    // would make `!` a no-op, since a `bool` is 0 or 1 either way.
+    const Program program =
+        parse_ok("fn main(): i32 { let flag: bool = true; let other: bool = !flag; return 0; }");
+    const auto commands = commands_of(program, 0);
+    const auto not_at = std::find_if(commands.begin(), commands.end(),
+                                     [](const Command& command) { return command.op == Op::CmpEq; });
+    REQUIRE(not_at != commands.end());
+    // The flag is the left operand and the zero it is tested against is an
+    // instant, not a cell.
+    CHECK(not_at->args[2].kind == OperandKind::Instant);
+    CHECK(not_at->args[2].value == 0);
+    CHECK(not_at->args[1].kind == OperandKind::VReg);
+    // A `!` on a literal folds, so `!true` is `false` before any IR exists: the
+    // only command left is the write.
+    const Program folded = parse_ok("fn main(): i32 { let flag: bool = !true; return 0; }");
+    const auto straight = commands_of(folded, 0);
+    REQUIRE(straight.size() == 2);
+    CHECK(straight[0].op == Op::Mov);
+    CHECK(straight[0].args[1].kind == OperandKind::Instant);
+    CHECK(straight[0].args[1].value == 0);
+    CHECK(straight[1].op == Op::Ret);
+}
+
 TEST_CASE("a call names its callee and checks every argument") {
     const std::string source = "fn f(a: i32, b: i32): i32 { return a; } fn main(): i32 { return f(1, 2); }";
     const Program program = parse_ok(source);

@@ -419,7 +419,7 @@ ExpressionParser::result ExpressionParser::unary_expression(std::optional<SemTyp
                        location));
             }
             const Value zero{SemType::Bool, Operand::instant(Type::I8, 0), ConstInt::of(0, Type::I8)};
-            return apply(Op::CmpNe, SemType::Bool, value, zero, location);
+            return apply(Op::CmpEq, SemType::Bool, value, zero, location);
         }
         if (!is_integer(value.type)) {
             return std::unexpected(
