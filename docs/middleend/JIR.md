@@ -157,13 +157,17 @@ Every value is defined in this contract or the program is rejected by the valida
 
 Runs on every `Program` before any backend sees it. A producer leaves the CFG canonical: it drops the blocks no edge can reach (the parser knows which source constructs cannot run) and never lets a path fall off the end of a function.
 
-1. **CFG**: entry block is 0; every block reachable; every edge's `from`/`to` valid; 0–2 outgoing edges per block; a two-edge block has exactly one conditional edge; no outgoing edges iff the block ends in `RET`.
+1. **CFG**: entry block is 0; every block reachable; every edge's `from`/`to` valid; 0–2 outgoing edges per block; a two-edge block has exactly one conditional edge; no outgoing edges iff the block ends in `RET`, and a `RET` is that block's last command.
 2. **Commands**: arity and operand roles match the op table; operand types are the explicit ones on each operand; ops requiring same-type operands get them; no implicit conversions.
-3. **Frames**: every vreg id `< frame_size`; params are `$0..n-1` in order.
+3. **Frames**: a function's frame is never empty and holds its params in `$0..n-1`; every vreg id `< frame_size`.
 4. **Definitions**: every vreg read has a reaching definition from entry (params and globals count as defined at entry); every vreg has one consistent type across all reads and writes.
-5. **Calls**: `args[1]` is a `Fn` operand naming a valid function; `args[2..]` count and types match the callee's params and are all defined; `args[0]` is the `EMPTY` sentinel iff the callee returns void — a sentinel anywhere else is an error, and a non-void `dst` matches the callee's return type.
+5. **Calls**: `args[1]` is a `Fn` operand naming a valid function — the one slot an `Fn` may sit in; `args[2..]` count and types match the callee's params and are all defined; `args[0]` is the `EMPTY` sentinel iff the callee returns void — a sentinel anywhere else is an error, and a non-void `dst` matches the callee's return type.
 6. **Program**: entrypoint exists, zero params, `i32` return.
-7. **Init CFGs**: the same rules as function CFGs, zero params.
+7. **Init CFGs**: the same rules as function CFGs, zero params, and reads nothing.
+
+A branch test is a `CMP_*` on two values of one type, and its operands are read like any other: in frame, and defined on the way here.
+
+Signedness is in the op's name, so the operands have to agree: `SDIV`, `SMOD`, `SAR` signed; `UDIV`, `UMOD` unsigned. `SHL` and `SHR` are defined either way. A comparison answers `i8` regardless of what it compares, since its signedness comes from its operands.
 
 ## Execution model (possible implementation)
 

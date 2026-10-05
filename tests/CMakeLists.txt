@@ -11,6 +11,7 @@ FetchContent_MakeAvailable(Catch2)
 add_executable(erax_tests
     Tokenizer.test.cpp
     Jir.test.cpp
+    Validator.test.cpp
     Parser.test.cpp
     Parser.literals.test.cpp
     Parser.globals.test.cpp

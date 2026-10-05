@@ -37,7 +37,7 @@ Source-level additions that are out of scope for v1 — listed here so the langu
 ## JIR — v0.1 scope
 
 - [x] Integer types, globals, functions, calls (incl. recursion), control flow — `src/middleend/jir/` builds and prints them; the parser emits them.
-- [ ] Validator per the IR spec (`JIR.md#validator`) — the builder asserts the structural invariants in debug builds; the seven checks are not a separate pass yet.
+- [x] Validator per the IR spec (`JIR.md#validator`) — `src/middleend/jir/Validator.{hpp,cpp}` runs the seven checks on every `Program` the driver lowers; it collects all errors rather than stopping at the first, so one run names everything wrong.
 - [ ] Interpreter: the stack-machine engine (one cell array + frame pointer).
 
 ## JIR — later scope

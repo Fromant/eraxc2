@@ -8,12 +8,14 @@
 #include "frontend/parser/ProgramParser.hpp"
 #include "frontend/tokenizer/Tokenizer.hpp"
 #include "middleend/jir/Jir.hpp"
+#include "middleend/jir/Validator.hpp"
 
 using erax::frontend::ParseError;
 using erax::frontend::ProgramParser;
 using erax::frontend::to_string;
 using erax::frontend::Token;
 using erax::frontend::Tokenizer;
+using erax::middleend::ValidationError;
 
 namespace {
 
@@ -22,6 +24,15 @@ namespace {
 template <typename Error>
 int report(const Error& error) {
     std::cerr << error.location.to_string() << ": error: " << error.message << '\n';
+    return EXIT_FAILURE;
+}
+
+/// A rejected program, one line per error. The IR is nameless, so a validation
+/// error names a function, a block, and a command instead of a source position.
+int report(const std::vector<ValidationError>& errors) {
+    for (const ValidationError& error : errors) {
+        std::cerr << "error: " << erax::middleend::to_string(error) << '\n';
+    }
     return EXIT_FAILURE;
 }
 
@@ -75,6 +86,10 @@ int main(int argc, char* argv[]) {
 
     auto program = ProgramParser{*tokens}.parse();
     if (!program) return report(program.error());
+    // `JIR.md#validator`: the program is checked before anything is done with it,
+    // so `--jir` prints IR that a backend can be handed.
+    auto valid = erax::middleend::check(*program);
+    if (!valid) return report(valid.error());
     std::cout << erax::middleend::print(*program);
     return EXIT_SUCCESS;
 }
