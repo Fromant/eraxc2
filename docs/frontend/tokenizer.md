@@ -273,7 +273,7 @@ fn main(): i32 {
 }
 ```
 
-`./build/eraxc examples/helloworld.erx` prints one line per token — kind, raw text, location:
+`./build/eraxc --tokenize examples/helloworld.erx` prints one line per token — kind, raw text, location — and disappears after the lexer, like every stop-earlier stage of the driver:
 
 ```console
 identifier 'fn' examples/helloworld.erx:4:1

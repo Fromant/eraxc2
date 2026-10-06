@@ -4,25 +4,27 @@ TypeScript-like programming language with a static type system.
 
 One language, three ways to run it:
 
-1. **Reference interpreter** — runs JIR in this process, one cell array at a time. This is what `eraxc --run` does, and its results are the ones every other backend is compared against.
+1. **Reference interpreter** — runs JIR in this process, one cell array at a time. This is what `eraxc` does by default, and its results are the ones every other backend is compared against.
 2. **Bytecode VM** — the front-end compiles to a stable bytecode, JIR (`docs/middleend/JIR.md`); the VM executes a *serialized* form of it (Java/C#-style). Pre-compiled and portable, no JIT needed.
 3. **AoT compiler** — native code generation for peak performance (C++-level). Coming much later; the backend itself is not part of the shared contract.
 
 All three share one front-end (lexer → parser → JIR), so the same `.erx` programs must produce identical results on every backend. That shared contract is what makes the language cheap to test.
 
 > **Status: WIP.** The tokenizer, the parser, and the reference interpreter all exist: the parser lowers a
-> program straight to JIR, `--jir` prints it, and `--run` executes it. The validator and the interpreter
-> both run on everything the driver lowers. No bytecode VM, no AoT backend yet.
+> program straight to JIR, `--jir` prints it, and running it is the default (no flag needed). The validator
+> runs on everything the driver lowers. No bytecode VM, no AoT backend yet.
 
 ## Using eraxc
 
-`eraxc` is the driver. It reads one `.erx` file, or stdin when no file is given, and one flag says how far to take it:
+`eraxc` is the driver. It reads one `.erx` file, or stdin when no file is given, and runs the full pipeline by
+default. A flag only ever stops the pipeline earlier:
 
 | Command | What it does |
 | ------- | ------------ |
-| `.\build\eraxc.exe file.erx` | Tokenize and print the token stream — the lexer's view of the source |
-| `.\build\eraxc.exe --jir file.erx` | Lower to JIR and print it — the parser's and validator's view |
-| `.\build\eraxc.exe --run file.erx` | Run it: the program's `print` output and final globals on stdout, **exit code = the entrypoint's `i32` return** |
+| `.\build\eraxc.exe file.erx` | Parse, validate, and run: program `print` output and final globals on stdout, **exit code = the entrypoint's `i32` return** |
+| `.\build\eraxc.exe --run file.erx` | The no-flag behavior, written out |
+| `.\build\eraxc.exe --jir file.erx` | Stop after lowering: print the validated JIR — what a backend executes |
+| `.\build\eraxc.exe --tokenize file.erx` | Stop after the lexer: print the token list |
 | `.\build\eraxc.exe --help` | Usage |
 
 Every failure exits `1`. A source error quotes its location (`file:row:col:`), a rejected IR or a trap quotes
@@ -31,7 +33,7 @@ the place in the IR instead, because that is all the IR has to go on.
 Start with the tokenizer — no build step, just what the source lexes as:
 
 ```powershell
-.\build\eraxc.exe examples\fib.erx
+.\build\eraxc.exe --tokenize examples\fib.erx
 ```
 
 ```
@@ -81,28 +83,28 @@ entrypoint: 0
 Blocks are numbered, `-> n` is the fall-through edge, and block 1 is the loop's own header: block 4 jumps
 back to it, so nothing before it re-runs.
 
-Then run it. The exit code is the program's own result, so it composes with everything else in a shell:
+Then run it. No flag needed — running is the default, and the exit code is the program's own result, so it composes with everything else in a shell:
 
 ```powershell
-.\build\eraxc.exe --run examples\fib.erx   # prints nothing, exits 55
-.\build\eraxc.exe --run examples\globals.erx
-global 0: i32 0x2                          # the final global state
+.\build\eraxc.exe examples\fib.erx       # prints nothing, exits 55
+.\build\eraxc.exe examples\globals.erx
+global 0: i32 0x2                        # the final global state
 # exits 2
 ```
 
 A program with no globals and no `print` writes nothing of its own — globals plus exit code is still the whole result unless `print` is called, which is the one way a v0.1 program writes to stdout. Stdin works everywhere a file does, which is the fastest way to try a snippet:
 
 ```powershell
-'fn main(): i32 { return 7; }' | .\build\eraxc.exe --run   # exits 7
+'fn main(): i32 { return 7; }' | .\build\eraxc.exe   # exits 7
 ```
 
 Errors stop it wherever they are — in the source, in the IR, or at run time:
 
 ```powershell
-'fn main(): i32 { let b: bool = 1; return 0; }' | .\build\eraxc.exe --run
+'fn main(): i32 { let b: bool = 1; return 0; }' | .\build\eraxc.exe
 <stdin>:1:22: error: expected a value of type bool, not i32
 
-'fn main(): i32 { let z: i32 = 0; return 7 / z; }' | .\build\eraxc.exe --run
+'fn main(): i32 { let z: i32 = 0; return 7 / z; }' | .\build\eraxc.exe
 error: function 0, block 0, 1 frame deep: division by zero
 ```
 
@@ -135,7 +137,7 @@ tests/
   Validator.test.cpp       the seven validator checks, one rule broken at a time
   Interpreter.test.cpp     what programs do when they run, plus the examples/ corpus
 examples/                  .erx programs — the syntax vision and the conformance corpus
-main.cpp                   CLI: tokenize a file or stdin, lower it to JIR, or run it
+main.cpp                   CLI: run a file or stdin by default; `--jir` / `--tokenize` stop the pipeline earlier
 ```
 
 ## Building
@@ -202,7 +204,7 @@ fn main(): i32 {
 ```
 
 ```powershell
-.\build\eraxc.exe --run examples\fib.erx    # prints nothing, exits 55
+.\build\eraxc.exe examples\fib.erx      # prints nothing, exits 55
 ```
 
 ## Limitations / next steps

@@ -38,7 +38,7 @@ Source-level additions that are out of scope for v1 — listed here so the langu
 
 - [x] Integer types, globals, functions, calls (incl. recursion), control flow — `src/middleend/jir/` builds and prints them; the parser emits them.
 - [x] Validator per the IR spec (`JIR.md#validator`) — `src/middleend/jir/Validator.{hpp,cpp}` runs the seven checks on every `Program` the driver lowers; it collects all errors rather than stopping at the first, so one run names everything wrong.
-- [x] Interpreter: the stack-machine engine (one cell array + frame pointer) — `src/interp/Interpreter.{hpp,cpp}` runs a validated `Program` to completion and reports the bytes `PRINT` wrote, the final global state, and the entrypoint's return code; `eraxc --run file.erx` is the driver. Arithmetic is `fold::binary`/`fold::unary`, the same code the parser folds constants with, so a folded answer and a computed one cannot drift.
+- [x] Interpreter: the stack-machine engine (one cell array + frame pointer) — `src/interp/Interpreter.{hpp,cpp}` runs a validated `Program` to completion and reports the bytes `PRINT` wrote, the final global state, and the entrypoint's return code; running is the driver's default (`eraxc file.erx`, or stdin). Arithmetic is `fold::binary`/`fold::unary`, the same code the parser folds constants with, so a folded answer and a computed one cannot drift.
 - [x] Builtin `print` (`Op::Print` in JIR): `print(a, b, c);` writes each value as the decimal its type reads, space-separated, newline-terminated; `print();` writes the newline alone. The only output a v0.1 program has. `docs/core/*`, `docs/middleend/JIR.md#output`, and `examples/print.erx` pin it.
 
 ## JIR — later scope

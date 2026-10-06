@@ -11,9 +11,9 @@ ctest --test-dir build --output-on-failure
 .\build\tests\erax_tests.exe                     # full suite; --list-tests enumerates the names
 .\build\tests\erax_tests.exe "*loop*"            # filter by name — names are prose sentences, no tags
 .\build\tests\erax_tests.exe "operator chars merge greedily"
-.\build\eraxc.exe examples\helloworld.erx   # tokenizes a file, prints a token dump
-.\build\eraxc.exe --jir examples\fib.erx    # lowers a program and prints the JIR
-.\build\eraxc.exe --run examples\fib.erx    # runs it; the exit code is the entrypoint's return
+.\build\eraxc.exe --tokenize examples\fib.erx    # prints the token list
+.\build\eraxc.exe --jir examples\fib.erx          # lowers a program and prints the JIR
+.\build\eraxc.exe examples\fib.erx                # runs it (no flag); the exit code is the entrypoint's return
 echo 'let a: i32 = 1;' | .\build\eraxc.exe    # or stdin; errors as file:row:col
 
 cmake -S . -B build-cov -G Ninja -DERAX_COVERAGE=ON  # GCC/Clang + gcov only, separate dir, network first time

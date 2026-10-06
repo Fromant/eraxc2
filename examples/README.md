@@ -1,6 +1,6 @@
 # Examples
 
-These small programs show what erax looks like today (v1). They only use features the parser/JIR implement, so they lower cleanly with `--jir` and run with `--run`.
+These small programs show what erax looks like today (v1). They only use features the parser/JIR implement, so they lower cleanly with `--jir` and run by default (no flag).
 
 - `entry.erx` -- The entrypoint returns an exit code (`i32`). No globals.
 - `globals.erx` -- A global initialized by a constant `0`; `1` and `2` are added/multiplied in the function.
@@ -17,8 +17,8 @@ To see the lowered JIR for any of these:
 .\build\eraxc.exe --jir examples\sum_to_ten.erx
 ```
 
-To run one: `--run` exits with the entrypoint's return value, which is what makes these the conformance corpus (`tests/Interpreter.test.cpp` runs the same files and checks the same numbers).
+To run one: running is the default, so no flag is needed — the exit code is the entrypoint's return value, which is what makes these the conformance corpus (`tests/Interpreter.test.cpp` runs the same files and checks the same numbers):
 
 ```powershell
-.\build\eraxc.exe --run examples\fib.erx    # prints nothing, exits 55
+.\build\eraxc.exe examples\fib.erx    # prints nothing, exits 55
 ```
