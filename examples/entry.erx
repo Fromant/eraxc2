@@ -1,9 +1,10 @@
 // The smallest program there is: the entrypoint returns an exit code, and `i32` is
 // what the driver gets back. There is nothing to do and nothing is printed.
-fn main(): i32 {
-    return 0;
+fn main() : i32 {
+  return 0;
 }
 
-fn huy(y: i32): i32 {
-    return y + 456;
+fn huy(y : i32) : i8 {
+  let a : i8 = 126 + 1;
+  return a;
 }

@@ -8,15 +8,19 @@ erax, a TypeScript-like compiled language. **The tokenizer, the parser, and the 
 cmake -S . -B build          # FetchContent pulls Catch2 v3.9.1 (needs network first time)
 cmake --build build
 ctest --test-dir build --output-on-failure
-.\build\erax_tests.exe                       # full Catch2 suite
-.\build\erax_tests.exe "number*"             # run matching tests (Catch2 wildcards)
-.\build\eraxc.exe examples\helloworld.erax   # tokenizes a file, prints a token dump
-.\build\eraxc.exe --jir examples\fib.erax    # lowers a program and prints the JIR
-.\build\eraxc.exe --run examples\fib.erax    # runs it; the exit code is the entrypoint's return
+.\build\tests\erax_tests.exe                     # full suite; --list-tests enumerates the names
+.\build\tests\erax_tests.exe "*loop*"            # filter by name — names are prose sentences, no tags
+.\build\tests\erax_tests.exe "operator chars merge greedily"
+.\build\eraxc.exe examples\helloworld.erx   # tokenizes a file, prints a token dump
+.\build\eraxc.exe --jir examples\fib.erx    # lowers a program and prints the JIR
+.\build\eraxc.exe --run examples\fib.erx    # runs it; the exit code is the entrypoint's return
 echo 'let a: i32 = 1;' | .\build\eraxc.exe    # or stdin; errors as file:row:col
+
+cmake -S . -B build-cov -G Ninja -DERAX_COVERAGE=ON  # GCC/Clang + gcov only, separate dir, network first time
+cmake --build build-cov --target coverage             # builds, runs the suite, writes build-cov/coverage.txt
 ```
 
-No lint/formatter/typecheck config exists. `-Wall -Wextra` apply only to GNU/Clang builds.
+`ctest` is one wrapper around the Catch2 binary; to filter you must run `build\tests\erax_tests.exe` directly. `.clang-format` (Google-based, **2-space indent**, 120 cols) governs all C++ — run `clang-format -i` on files you touch; the whole tree is already formatted. There is no lint or typecheck config. `-Wall -Wextra` apply only to GNU/Clang builds. If a coverage reconfigure fails blaming the compiler, the `build-cov/` cache is stale — delete the dir and configure again.
 
 ## Layout
 
@@ -26,7 +30,7 @@ No lint/formatter/typecheck config exists. `-Wall -Wextra` apply only to GNU/Cla
 - `docs/middleend/JIR.md` — the shared IR contract (stack-framed, register-style); `src/middleend/jir/` implements the types, builder, constant folding, and the validator.
 - `src/interp/Interpreter.{hpp,cpp}` — the reference executor: one cell array, a frame pointer walking it, `fold` arithmetic, and the machine's own limits. Pinned by `tests/Interpreter.test.cpp`, which also runs `examples/` as the conformance corpus. Its results are what a backend is compared to.
 - `TODO.md` — **roadmap + `.jir` serialization/versioning, and all "not in v1" / future-work content.** Future work must live here, never in the spec docs.
-- `examples/helloworld.erax` — aspirational (uses `string`/`std.print`, which are not v1).
+- `examples/helloworld.erx` — aspirational (uses `string`/`std.print`, which are not v1).
 
 ## Doc conventions (hard rules from the session)
 
@@ -49,6 +53,6 @@ No lint/formatter/typecheck config exists. `-Wall -Wextra` apply only to GNU/Cla
 
 ## Style
 
-- C++23, no extensions. Project style: 4-space indent, no trailing punctuation comments unless clarifying; follow the existing tokenizer/test file style.
+- C++23, no extensions. Formatting is `.clang-format` (Google-based, 2-space indent, 120 cols) — run `clang-format -i` on files you touch; match the surrounding comment style (prose comments are common).
 - **No exceptions, anywhere in the front end or the driver.** Every fallible step returns `std::expected<T, E>`, and parse errors carry a `SourceLocation`; `main` reports them and returns `EXIT_FAILURE`. Do not add `throw`/`try`/`catch` or `std::optional`-then-throw patterns.
 - Repo history commits each completed change directly to `main` with short imperative messages (e.g. `core: …`, `JIR: …`); no PRs.

@@ -24,7 +24,9 @@ using erax::interp::Outcome;
 using erax::interp::Rejected;
 using erax::interp::Trap;
 using erax::interp::Trapped;
+using erax::middleend::Branch;
 using erax::middleend::Command;
+using erax::middleend::Condition;
 using erax::middleend::Function;
 using erax::middleend::Global;
 using erax::middleend::Op;
@@ -40,7 +42,7 @@ namespace {
 /// program and asks what it did rather than how it was built.
 std::expected<Outcome, erax::interp::Failure> execute(std::string_view source, const Limits& limits = {})
 {
-    auto tokens = Tokenizer {}.tokenize(source, "test.erax");
+    auto tokens = Tokenizer {}.tokenize(source, "test.erx");
     REQUIRE(tokens.has_value());
     auto program = ProgramParser { *tokens }.parse();
     REQUIRE(program.has_value());
@@ -85,7 +87,7 @@ std::vector<Cell> globals_of(std::string_view source, const Limits& limits = {})
 /// own refusals is the only way there.
 Program lower(std::string_view source)
 {
-    auto tokens = Tokenizer {}.tokenize(source, "test.erax");
+    auto tokens = Tokenizer {}.tokenize(source, "test.erx");
     REQUIRE(tokens.has_value());
     auto program = ProgramParser { *tokens }.parse();
     REQUIRE(program.has_value());
@@ -430,18 +432,215 @@ TEST_CASE("the shipped examples run")
 {
     // The examples are the corpus the driver lowers by hand; each one's result is
     // what its comment says it does.
-    CHECK(example_code("entry.erax") == 0);
-    CHECK(example_code("fib.erax") == 55);
-    CHECK(example_code("folded_test.erax") == 4);
-    CHECK(example_code("globals.erax") == 2);
-    CHECK(example_code("sum_to_ten.erax") == 45);
-    CHECK(example_code("types.erax") == 0);
-    // `globals.erax` is the one that writes a global, so its final state matters
+    CHECK(example_code("entry.erx") == 0);
+    CHECK(example_code("fib.erx") == 55);
+    CHECK(example_code("folded_test.erx") == 4);
+    CHECK(example_code("globals.erx") == 2);
+    CHECK(example_code("sum_to_ten.erx") == 45);
+    CHECK(example_code("types.erx") == 0);
+    // `globals.erx` is the one that writes a global, so its final state matters
     // as much as its exit code.
-    const auto globals = run_example("globals.erax");
+    const auto globals = run_example("globals.erx");
     REQUIRE(globals.has_value());
     CHECK(globals->globals == std::vector<Cell> { 2 });
-    // `helloworld.erax` is aspirational: `string` is not in v1, so it never
+    // `helloworld.erx` is aspirational: `string` is not in v1, so it never
     // lowers and the interpreter is never asked about it.
-    CHECK_FALSE(lowers("helloworld.erax"));
+    CHECK_FALSE(lowers("helloworld.erx"));
+}
+
+TEST_CASE("a global initializer can branch toward its own value")
+{
+    // An initializer is straight-line when the parser writes it, but its CFG may
+    // still have edges, and the machine counts the cells those edges read: the
+    // branch test's vregs are part of what the initializer's frame has to hold.
+    Program program;
+    program.globals.push_back(Global { Type::I32, {} });
+    Global& branching = program.globals.back();
+    branching.init.blocks.resize(2);
+    branching.init.blocks[0].commands.push_back(
+        Command { Op::Mov, { Operand::vreg(Type::I32, 0), Operand::instant(Type::I32, 5) } });
+    branching.init.blocks[0].next = 1;
+    branching.init.blocks[0].branch = Branch {
+        { Op::CmpNe, Operand::vreg(Type::I32, 0), Operand::vreg(Type::I32, 0) }, 1
+    };
+    branching.init.blocks[1].commands.push_back(
+        Command { Op::Mov, { Operand::global(Type::I32, 0), Operand::vreg(Type::I32, 0) } });
+    branching.init.blocks[1].commands.push_back(Command { Op::Ret, {} });
+    program.functions.push_back(entry_returning(Operand::global(Type::I32, 0)));
+    const auto outcome = erax::interp::run(program);
+    REQUIRE(outcome.has_value());
+    CHECK(*outcome == Outcome { { 5 }, 5 });
+}
+
+TEST_CASE("a block with a branch but no fallthrough dies when the test does not hold")
+{
+    // The validator accepts a two-edge block with the branch missing its
+    // fallthrough, so the machine's own walk has to say what an untaken branch
+    // means there: a message, not an index into nothing.
+    Program program;
+    Function entry;
+    entry.return_type = Type::I32;
+    entry.frame_size = 1;
+    entry.cfg.blocks.resize(2);
+    entry.cfg.blocks[0].commands.push_back(
+        Command { Op::Mov, { Operand::vreg(Type::I32, 0), Operand::instant(Type::I32, 0) } });
+    entry.cfg.blocks[0].branch = Branch {
+        { Op::CmpNe, Operand::vreg(Type::I32, 0), Operand::vreg(Type::I32, 0) }, 1
+    };
+    entry.cfg.blocks[1].commands.push_back(Command { Op::Ret, { Operand::vreg(Type::I32, 0) } });
+    program.functions.push_back(entry);
+    const auto outcome = erax::interp::run(program);
+    REQUIRE_FALSE(outcome.has_value());
+    REQUIRE(std::holds_alternative<Broken>(outcome.error()));
+    CHECK(std::get<Broken>(outcome.error()).what == "a block with a branch has no fallthrough edge");
+}
+
+TEST_CASE("reading a global the program does not declare is a message, not a wild read")
+{
+    // The validator checks frames, calls, and every vreg, but not global ids, so
+    // a run can reach the machine's own reading of an index: it reports rather
+    // than indexing past the end of the global array.
+    Program program;
+    Function entry;
+    entry.return_type = Type::I32;
+    entry.frame_size = 2;
+    entry.cfg.blocks.resize(1);
+    entry.cfg.blocks[0].commands.push_back(
+        Command { Op::Mov, { Operand::vreg(Type::I32, 0), Operand::instant(Type::I32, 1) } });
+    entry.cfg.blocks[0].commands.push_back(Command { Op::Add,
+                                                     { Operand::vreg(Type::I32, 1), Operand::global(Type::I32, 42),
+                                                       Operand::global(Type::I32, 42) } });
+    entry.cfg.blocks[0].commands.push_back(Command { Op::Ret, { Operand::vreg(Type::I32, 1) } });
+    program.functions.push_back(entry);
+    auto outcome = erax::interp::run(program);
+    REQUIRE_FALSE(outcome.has_value());
+    REQUIRE(std::holds_alternative<Broken>(outcome.error()));
+    CHECK(std::get<Broken>(outcome.error()).what == "an operand names a global that does not exist");
+
+    // The same read through a unary op dies the same way.
+    Function unary;
+    unary.return_type = Type::I32;
+    unary.frame_size = 1;
+    unary.cfg.blocks.resize(1);
+    unary.cfg.blocks[0].commands.push_back(
+        Command { Op::Not, { Operand::vreg(Type::I32, 0), Operand::global(Type::I32, 42) } });
+    unary.cfg.blocks[0].commands.push_back(Command { Op::Ret, { Operand::vreg(Type::I32, 0) } });
+    Program again;
+    again.functions.push_back(unary);
+    const auto second = erax::interp::run(again);
+    REQUIRE_FALSE(second.has_value());
+    REQUIRE(std::holds_alternative<Broken>(second.error()));
+    CHECK(std::get<Broken>(second.error()).what == "an operand names a global that does not exist");
+}
+
+TEST_CASE("writing a global the program does not declare is a message, not a wild write")
+{
+    Program program;
+    program.functions.push_back(entry_returning(Operand::instant(Type::I32, 0)));
+    auto& block = program.functions[0].cfg.blocks[0];
+    block.commands.insert(block.commands.begin(),
+                          Command { Op::Mov, { Operand::global(Type::I32, 7), Operand::instant(Type::I32, 1) } });
+    const auto outcome = erax::interp::run(program);
+    REQUIRE_FALSE(outcome.has_value());
+    REQUIRE(std::holds_alternative<Broken>(outcome.error()));
+    CHECK(std::get<Broken>(outcome.error()).what == "a write names a global that does not exist");
+}
+
+TEST_CASE("an unreadable operand dies wherever the machine reads it")
+{
+    // The validator never checks global ids, so an out-of-range global can sit in
+    // any operand slot; every one of the machine's readers reports it the same
+    // way rather than indexing past the end of the global array.
+    const auto broken = [](Program program) {
+        const auto outcome = erax::interp::run(program);
+        REQUIRE_FALSE(outcome.has_value());
+        REQUIRE(std::holds_alternative<Broken>(outcome.error()));
+        return std::get<Broken>(outcome.error()).what;
+    };
+
+    // A `RET` reading the missing global.
+    Program returned;
+    Function ret_entry;
+    ret_entry.return_type = Type::I32;
+    ret_entry.frame_size = 1;
+    ret_entry.cfg.blocks.resize(1);
+    ret_entry.cfg.blocks[0].commands.push_back(Command { Op::Ret, { Operand::global(Type::I32, 42) } });
+    returned.functions.push_back(ret_entry);
+    CHECK(broken(std::move(returned)) == "an operand names a global that does not exist");
+
+    // A call handing the missing global to a callee.
+    Program called;
+    Function callee;
+    callee.params.push_back(Type::I32);
+    callee.return_type = Type::I32;
+    callee.frame_size = 1;
+    callee.cfg.blocks.resize(1);
+    callee.cfg.blocks[0].commands.push_back(Command { Op::Ret, { Operand::vreg(Type::I32, 0) } });
+    Function caller;
+    caller.return_type = Type::I32;
+    caller.frame_size = 1;
+    caller.cfg.blocks.resize(1);
+    caller.cfg.blocks[0].commands.push_back(Command { Op::Call,
+                                                      { Operand::vreg(Type::I32, 0), Operand::function(Type::I32, 0),
+                                                        Operand::global(Type::I32, 42) } });
+    caller.cfg.blocks[0].commands.push_back(Command { Op::Ret, { Operand::vreg(Type::I32, 0) } });
+    called.functions.push_back(callee);
+    called.functions.push_back(caller);
+    called.entrypoint = 1;
+    CHECK(broken(std::move(called)) == "an operand names a global that does not exist");
+
+    // A branch test on the missing global.
+    Program branched;
+    Function branch_entry;
+    branch_entry.return_type = Type::I32;
+    branch_entry.frame_size = 1;
+    branch_entry.cfg.blocks.resize(2);
+    branch_entry.cfg.blocks[0].next = 1;
+    branch_entry.cfg.blocks[0].branch = Branch {
+        { Op::CmpNe, Operand::global(Type::I32, 42), Operand::global(Type::I32, 42) }, 1
+    };
+    branch_entry.cfg.blocks[1].commands.push_back(Command { Op::Ret, { Operand::instant(Type::I32, 0) } });
+    branched.functions.push_back(branch_entry);
+    CHECK(broken(std::move(branched)) == "an operand names a global that does not exist");
+}
+
+TEST_CASE("a global initializer can die before the entrypoint exists")
+{
+    // An initializer runs in a frame of its own, so an initializer that traps is
+    // the whole program dying there: the entrypoint is never pushed.
+    Program program;
+    program.globals.push_back(Global { Type::I32, {} });
+    Global& doomed = program.globals.back();
+    doomed.init.blocks.resize(1);
+    doomed.init.blocks[0].commands.push_back(
+        Command { Op::Mov, { Operand::vreg(Type::I32, 0), Operand::instant(Type::I32, 7) } });
+    doomed.init.blocks[0].commands.push_back(
+        Command { Op::Mov, { Operand::vreg(Type::I32, 1), Operand::instant(Type::I32, 0) } });
+    doomed.init.blocks[0].commands.push_back(Command { Op::Sdiv, { Operand::vreg(Type::I32, 2),
+                                                                   Operand::vreg(Type::I32, 0),
+                                                                   Operand::vreg(Type::I32, 1) } });
+    doomed.init.blocks[0].commands.push_back(Command { Op::Ret, {} });
+    program.functions.push_back(entry_returning(Operand::instant(Type::I32, 0)));
+    const auto outcome = erax::interp::run(program);
+    REQUIRE_FALSE(outcome.has_value());
+    const Trapped& trapped = std::get<Trapped>(outcome.error());
+    CHECK(trapped.trap == Trap::DivisionByZero);
+    CHECK(trapped.site.subject == Subject::GlobalInit);
+    CHECK(trapped.site.index == 0);
+    CHECK(trapped.site.depth == 1);
+}
+
+TEST_CASE("every trap has a name")
+{
+    CHECK(erax::interp::to_string(Trap::DivisionByZero) == "division by zero");
+    CHECK(erax::interp::to_string(Trap::SignedOverflow) == "signed division overflowed");
+    CHECK(erax::interp::to_string(Trap::StackExhausted) == "the stack outgrew the machine");
+    CHECK(erax::interp::to_string(Trap::FrameTooLarge) == "a frame is larger than the machine allows");
+}
+
+TEST_CASE("a failure reads as a message, and an empty rejection says so")
+{
+    CHECK(erax::interp::to_string(erax::interp::Failure { erax::interp::Broken { "nope" } }) == "nope");
+    const erax::interp::Failure empty = erax::interp::Rejected {};
+    CHECK(erax::interp::to_string(empty) == "0 errors, the first: no reason given");
 }

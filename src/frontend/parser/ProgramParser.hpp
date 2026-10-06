@@ -14,7 +14,7 @@
 
 namespace erax::frontend {
 
-    /// Lowers a whole `.erax` file to a `Program`: the globals, the functions, and
+    /// Lowers a whole `.erx` file to a `Program`: the globals, the functions, and
     /// the CFG of every body. Like the tokenizer it is all-or-nothing, and like the
     /// tokenizer it builds no tree — a source file becomes JIR and nothing else.
     ///

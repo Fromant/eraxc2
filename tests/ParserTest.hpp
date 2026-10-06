@@ -27,7 +27,7 @@ namespace erax::test {
 
     /// Parses a whole program the way the driver does, so a test reads like a file.
     inline Program parse_ok(std::string_view source) {
-        auto tokens = Tokenizer {}.tokenize(source, "test.erax");
+        auto tokens = Tokenizer {}.tokenize(source, "test.erx");
         REQUIRE(tokens.has_value());
         auto program = ProgramParser {*tokens}.parse();
         REQUIRE(program.has_value());
@@ -37,7 +37,7 @@ namespace erax::test {
     /// The message of the first error, which is all a program ever reports: the parse
     /// is all-or-nothing, so there is no second one to look at.
     inline std::string parse_error(std::string_view source) {
-        auto tokens = Tokenizer {}.tokenize(source, "test.erax");
+        auto tokens = Tokenizer {}.tokenize(source, "test.erx");
         REQUIRE(tokens.has_value());
         auto program = ProgramParser {*tokens}.parse();
         REQUIRE_FALSE(program.has_value());
@@ -46,7 +46,7 @@ namespace erax::test {
 
     /// The location of the first error, for a rule about *where* something is wrong.
     inline std::string parse_error_location(std::string_view source) {
-        auto tokens = Tokenizer {}.tokenize(source, "test.erax");
+        auto tokens = Tokenizer {}.tokenize(source, "test.erx");
         REQUIRE(tokens.has_value());
         auto program = ProgramParser {*tokens}.parse();
         REQUIRE_FALSE(program.has_value());
@@ -56,7 +56,7 @@ namespace erax::test {
     /// The first message from either stage, for a source a lexer rule already rejects: a
     /// lexical rule is a parser rule that runs earlier, so both are "the first error".
     inline std::string any_error(std::string_view source) {
-        auto tokens = Tokenizer {}.tokenize(source, "test.erax");
+        auto tokens = Tokenizer {}.tokenize(source, "test.erx");
         if (!tokens)
             return tokens.error().message;
         auto program = ProgramParser {*tokens}.parse();
@@ -66,7 +66,7 @@ namespace erax::test {
 
     /// The location of the first error from either stage.
     inline std::string any_error_location(std::string_view source) {
-        auto tokens = Tokenizer {}.tokenize(source, "test.erax");
+        auto tokens = Tokenizer {}.tokenize(source, "test.erx");
         if (!tokens)
             return tokens.error().location.to_string();
         auto program = ProgramParser {*tokens}.parse();

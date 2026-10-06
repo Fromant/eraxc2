@@ -631,9 +631,9 @@ TEST_CASE("unknown characters are errors with their position")
 TEST_CASE("error location may carry a source file name")
 {
     SourceLocation location;
-    lex_error("a @ b", location, "prog.erax");
+    lex_error("a @ b", location, "prog.erx");
 
-    REQUIRE(location.file == "prog.erax");
+    REQUIRE(location.file == "prog.erx");
 }
 
 TEST_CASE("positions span multiple lines")

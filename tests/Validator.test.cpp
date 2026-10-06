@@ -120,7 +120,7 @@ TEST_CASE("a program the parser could have emitted is valid")
         "fn fact(n: i32): i32 { if (n < 1) { return 1; } return n * fact(n - 1); } fn main(): i32 { return fact(5); }",
     };
     for (const char* source : sources) {
-        auto tokens = erax::frontend::Tokenizer {}.tokenize(source, "test.erax");
+        auto tokens = erax::frontend::Tokenizer {}.tokenize(source, "test.erx");
         REQUIRE(tokens.has_value());
         auto program = erax::frontend::ProgramParser { *tokens }.parse();
         REQUIRE(program.has_value());
@@ -194,6 +194,24 @@ TEST_CASE("1. a CFG is entered at block 0 and reaches what it needs")
         mixed.functions[0].cfg.blocks[1].commands = { ret() };
         CHECK(messages(mixed) == std::vector<std::string> { "branches on two types, i32 and u32" });
     }
+    SECTION("the branch test holds a value")
+    {
+        Program empty = minimal();
+        empty.functions[0].cfg.blocks.resize(2);
+        empty.functions[0].cfg.blocks[0].commands.clear();
+        empty.functions[0].cfg.blocks[0].next = 1;
+        empty.functions[0].cfg.blocks[0].branch = Branch { Condition { Op::CmpEq, Operand::empty(), Operand::empty() }, 1 };
+        empty.functions[0].cfg.blocks[1].commands = { ret() };
+        CHECK(messages(empty) == std::vector<std::string> { "the branch test is the EMPTY sentinel, which holds no value", "the branch test is the EMPTY sentinel, which holds no value" });
+
+        Program checks = minimal();
+        checks.functions[0].cfg.blocks.resize(2);
+        checks.functions[0].cfg.blocks[0].commands.clear();
+        checks.functions[0].cfg.blocks[0].next = 1;
+        checks.functions[0].cfg.blocks[0].branch = Branch { Condition { Op::CmpEq, Operand::instant(Type::Void, 0), Operand::instant(Type::Void, 0) }, 1 };
+        checks.functions[0].cfg.blocks[1].commands = { ret() };
+        CHECK(messages(checks) == std::vector<std::string> { "the branch test is void", "the branch test is void" });
+    }
 }
 
 TEST_CASE("2. a command has the shape the op table gives it")
@@ -207,6 +225,10 @@ TEST_CASE("2. a command has the shape the op table gives it")
         Program call = minimal();
         body(call, { Command { Op::Call, { Operand::vreg(Type::I32, 0) } } });
         CHECK(messages(call) == std::vector<std::string> { "CALL takes at least 2 arguments, but 1 was given" });
+
+        Program ret = minimal();
+        ret.functions[0].cfg.blocks[0].commands = { Command { Op::Ret, { Operand::instant(Type::I32, 0), Operand::instant(Type::I32, 0) } } };
+        CHECK(messages(ret) == std::vector<std::string> { "RET takes 0 or 1 arguments, but 2 were given" });
     }
     SECTION("a result is a vreg, and only MOV writes a global")
     {
@@ -221,10 +243,21 @@ TEST_CASE("2. a command has the shape the op table gives it")
         body(mov, { Command { Op::Mov, { Operand::instant(Type::I32, 0), Operand::instant(Type::I32, 1) } } });
         CHECK(messages(mov) == std::vector<std::string> { "MOV needs a vreg or a global to write, but arg 0 is an instant" });
 
+        Program read_global = minimal();
+        body(read_global,
+            { Command { Op::Add,
+                { Operand::global(Type::I32, 0), Operand::instant(Type::I32, 1), Operand::instant(Type::I32, 1) } } });
+        CHECK(messages(read_global) == std::vector<std::string> { "the result must be a vreg, but arg 0 is a global" });
+
         Program into_global = minimal();
         into_global.globals.push_back(Global { Type::I32, Cfg {} });
         body(into_global, { Command { Op::Mov, { Operand::global(Type::I32, 0), Operand::instant(Type::I32, 1) } } });
         CHECK(validate(into_global).empty());
+
+        Program into_function = minimal();
+        body(into_function,
+            { Command { Op::Mov, { Operand::function(Type::I32, 0), Operand::instant(Type::I32, 1) } } });
+        CHECK(messages(into_function) == std::vector<std::string> { "MOV needs a vreg or a global to write, but arg 0 is a function" });
     }
     SECTION("one op is one type")
     {
@@ -479,6 +512,16 @@ TEST_CASE("5. a call is checked against the function it names")
                 { Operand::vreg(Type::U32, 0), Operand::function(Type::I32, callee),
                     Operand::instant(Type::I32, 1), Operand::instant(Type::I32, 2) } } });
         CHECK(messages(wrong) == std::vector<std::string> { "CALL needs arg 0 to be i32, but it is u32" });
+
+        // The callee operand names its return type too; when it disagrees with the
+        // function it names, that is reported before the result slot is looked at.
+        Program lied = minimal();
+        const std::size_t other = add_binary(lied);
+        body(lied,
+            { Command { Op::Call,
+                { Operand::vreg(Type::I32, 0), Operand::function(Type::U32, other),
+                    Operand::instant(Type::I32, 1), Operand::instant(Type::I32, 2) } } });
+        CHECK(messages(lied) == std::vector<std::string> { "calls a function returning u32, but function 1 returns i32" });
     }
 }
 
@@ -487,6 +530,7 @@ TEST_CASE("6. the entrypoint is a function of no arguments returning i32")
     Program missing = minimal();
     missing.entrypoint = 3;
     CHECK(messages(missing) == std::vector<std::string> { "the entrypoint is function 3, which does not exist" });
+    CHECK(locations(missing) == std::vector<std::string> { "the program" });
 
     Program params = minimal();
     params.functions[0].params = { Type::I32 };

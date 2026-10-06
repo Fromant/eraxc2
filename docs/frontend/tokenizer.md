@@ -1,6 +1,6 @@
 # Tokenizer
 
-The tokenizer is stage 1 of the shared front-end. It turns raw `.erax` source text into a flat, ordered list of [tokens](#token-kinds). Everything downstream — parser, bytecode, and all three runtimes — consumes this stream, so the text and positions recorded here are the single source of truth for diagnostics.
+The tokenizer is stage 1 of the shared front-end. It turns raw `.erx` source text into a flat, ordered list of [tokens](#token-kinds). Everything downstream — parser, bytecode, and all three runtimes — consumes this stream, so the text and positions recorded here are the single source of truth for diagnostics.
 
 ```mermaid
 flowchart LR
@@ -95,7 +95,7 @@ Notes:
 - `text` is the **exact source slice**. Quoted literals store their *inner* text with the quotes stripped and the escape sequences left raw (`"a\nb"` → the four characters `a`, `\`, `n`, `b`). Unescaping is the parser's job.
 - Keywords are **not** a token kind: `fn`, `let`, `return`, … lex as plain `Identifier` and are classified by the parser.
 - `Token::operator==` compares kind and text only, deliberately ignoring position, so the test suite can assert token streams without hardcoding locations.
-- `Token::describe()` renders `identifier 'fn' at prog.erax:4:1` — the same format the CLI uses.
+- `Token::describe()` renders `identifier 'fn' at prog.erx:4:1` — the same format the CLI uses.
 
 ## Source locations
 
@@ -257,7 +257,7 @@ $ echo '0b12' | ./build/eraxc
 
 ## Worked example
 
-`examples/helloworld.erax`:
+`examples/helloworld.erx`:
 
 ```erax
 
@@ -273,35 +273,35 @@ fn main(): i32 {
 }
 ```
 
-`./build/eraxc examples/helloworld.erax` prints one line per token — kind, raw text, location:
+`./build/eraxc examples/helloworld.erx` prints one line per token — kind, raw text, location:
 
 ```console
-identifier 'fn' examples/helloworld.erax:4:1
-identifier 'main' examples/helloworld.erax:4:4
-'(' '(' examples/helloworld.erax:4:8
-')' ')' examples/helloworld.erax:4:9
-':' ':' examples/helloworld.erax:4:10
-identifier 'i32' examples/helloworld.erax:4:12
-'{' '{' examples/helloworld.erax:4:16
-identifier 'let' examples/helloworld.erax:6:5
-identifier 'text' examples/helloworld.erax:6:9
-':' ':' examples/helloworld.erax:6:13
-identifier 'string' examples/helloworld.erax:6:15
-operator '=' examples/helloworld.erax:6:22
-string 'Hello, \"world\"!\nOn a new line' examples/helloworld.erax:6:24
-';' ';' examples/helloworld.erax:6:58
-identifier 'std' examples/helloworld.erax:8:5
-'.' '.' examples/helloworld.erax:8:8
-identifier 'print' examples/helloworld.erax:8:9
-'(' '(' examples/helloworld.erax:8:14
-identifier 'text' examples/helloworld.erax:8:15
-')' ')' examples/helloworld.erax:8:19
-';' ';' examples/helloworld.erax:8:20
-identifier 'return' examples/helloworld.erax:10:5
-number '0' examples/helloworld.erax:10:12
-';' ';' examples/helloworld.erax:10:13
-'}' '}' examples/helloworld.erax:11:1
-end of file '' examples/helloworld.erax:11:2
+identifier 'fn' examples/helloworld.erx:4:1
+identifier 'main' examples/helloworld.erx:4:4
+'(' '(' examples/helloworld.erx:4:8
+')' ')' examples/helloworld.erx:4:9
+':' ':' examples/helloworld.erx:4:10
+identifier 'i32' examples/helloworld.erx:4:12
+'{' '{' examples/helloworld.erx:4:16
+identifier 'let' examples/helloworld.erx:6:5
+identifier 'text' examples/helloworld.erx:6:9
+':' ':' examples/helloworld.erx:6:13
+identifier 'string' examples/helloworld.erx:6:15
+operator '=' examples/helloworld.erx:6:22
+string 'Hello, \"world\"!\nOn a new line' examples/helloworld.erx:6:24
+';' ';' examples/helloworld.erx:6:58
+identifier 'std' examples/helloworld.erx:8:5
+'.' '.' examples/helloworld.erx:8:8
+identifier 'print' examples/helloworld.erx:8:9
+'(' '(' examples/helloworld.erx:8:14
+identifier 'text' examples/helloworld.erx:8:15
+')' ')' examples/helloworld.erx:8:19
+';' ';' examples/helloworld.erx:8:20
+identifier 'return' examples/helloworld.erx:10:5
+number '0' examples/helloworld.erx:10:12
+';' ';' examples/helloworld.erx:10:13
+'}' '}' examples/helloworld.erx:11:1
+end of file '' examples/helloworld.erx:11:2
 ```
 
 Note the string token on line 6: the quotes are gone, `\"` and `\n` are kept raw, and the position points at the opening quote.

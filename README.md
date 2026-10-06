@@ -8,7 +8,7 @@ One language, three ways to run it:
 2. **Bytecode VM** — the front-end compiles to a stable bytecode, JIR (`docs/middleend/JIR.md`); the VM executes a *serialized* form of it (Java/C#-style). Pre-compiled and portable, no JIT needed.
 3. **AoT compiler** — native code generation for peak performance (C++-level). Coming much later; the backend itself is not part of the shared contract.
 
-All three share one front-end (lexer → parser → JIR), so the same `.erax` programs must produce identical results on every backend. That shared contract is what makes the language cheap to test.
+All three share one front-end (lexer → parser → JIR), so the same `.erx` programs must produce identical results on every backend. That shared contract is what makes the language cheap to test.
 
 > **Status: WIP.** The tokenizer, the parser, and the reference interpreter all exist: the parser lowers a
 > program straight to JIR, `--jir` prints it, and `--run` executes it. The validator and the interpreter
@@ -16,13 +16,13 @@ All three share one front-end (lexer → parser → JIR), so the same `.erax` pr
 
 ## Using eraxc
 
-`eraxc` is the driver. It reads one `.erax` file, or stdin when no file is given, and one flag says how far to take it:
+`eraxc` is the driver. It reads one `.erx` file, or stdin when no file is given, and one flag says how far to take it:
 
 | Command | What it does |
 | ------- | ------------ |
-| `.\build\eraxc.exe file.erax` | Tokenize and print the token stream — the lexer's view of the source |
-| `.\build\eraxc.exe --jir file.erax` | Lower to JIR and print it — the parser's and validator's view |
-| `.\build\eraxc.exe --run file.erax` | Run it: final globals on stdout, **exit code = the entrypoint's `i32` return** |
+| `.\build\eraxc.exe file.erx` | Tokenize and print the token stream — the lexer's view of the source |
+| `.\build\eraxc.exe --jir file.erx` | Lower to JIR and print it — the parser's and validator's view |
+| `.\build\eraxc.exe --run file.erx` | Run it: final globals on stdout, **exit code = the entrypoint's `i32` return** |
 | `.\build\eraxc.exe --help` | Usage |
 
 Every failure exits `1`. A source error quotes its location (`file:row:col:`), a rejected IR or a trap quotes
@@ -31,19 +31,19 @@ the place in the IR instead, because that is all the IR has to go on.
 Start with the tokenizer — no build step, just what the source lexes as:
 
 ```powershell
-.\build\eraxc.exe examples\fib.erax
+.\build\eraxc.exe examples\fib.erx
 ```
 
 ```
-identifier 'fn' examples\fib.erax:13:1
-identifier 'fib' examples\fib.erax:13:4
-'(' '(' examples\fib.erax:13:7
-identifier 'n' examples\fib.erax:13:8
-':' ':' examples\fib.erax:13:9
-identifier 'i32' examples\fib.erax:13:11
-')' ')' examples\fib.erax:13:14
+identifier 'fn' examples\fib.erx:13:1
+identifier 'fib' examples\fib.erx:13:4
+'(' '(' examples\fib.erx:13:7
+identifier 'n' examples\fib.erx:13:8
+':' ':' examples\fib.erx:13:9
+identifier 'i32' examples\fib.erx:13:11
+')' ')' examples\fib.erx:13:14
 ...
-end of file '' examples\fib.erax:22:2
+end of file '' examples\fib.erx:22:2
 ```
 
 Every token carries the kind, the text, and where it was — that dump is what you read when the lexer is
@@ -52,7 +52,7 @@ the thing in question, and the location is what every later error is quoted agai
 Then lower it. This is what a backend is handed, and what the validator checked first:
 
 ```powershell
-.\build\eraxc.exe --jir examples\sum_to_ten.erax
+.\build\eraxc.exe --jir examples\sum_to_ten.erx
 ```
 
 ```
@@ -84,8 +84,8 @@ back to it, so nothing before it re-runs.
 Then run it. The exit code is the program's own result, so it composes with everything else in a shell:
 
 ```powershell
-.\build\eraxc.exe --run examples\fib.erax   # prints nothing, exits 55
-.\build\eraxc.exe --run examples\globals.erax
+.\build\eraxc.exe --run examples\fib.erx   # prints nothing, exits 55
+.\build\eraxc.exe --run examples\globals.erx
 global 0: i32 0x2                          # the final global state
 # exits 2
 ```
@@ -100,7 +100,7 @@ Errors stop it wherever they are — in the source, in the IR, or at run time:
 
 ```powershell
 'fn main(): i32 { let b: bool = 1; return 0; }' | .\build\eraxc.exe --run
-<stdin>:1:32: error: expected a value of type bool, not an integer literal
+<stdin>:1:22: error: expected a value of type bool, not i32
 
 'fn main(): i32 { let z: i32 = 0; return 7 / z; }' | .\build\eraxc.exe --run
 error: function 0, block 0, 1 frame deep: division by zero
@@ -134,7 +134,7 @@ tests/
   Jir.test.cpp             JIR types, builder, and folding
   Validator.test.cpp       the seven validator checks, one rule broken at a time
   Interpreter.test.cpp     what programs do when they run, plus the examples/ corpus
-examples/                  .erax programs — the syntax vision and the conformance corpus
+examples/                  .erx programs — the syntax vision and the conformance corpus
 main.cpp                   CLI: tokenize a file or stdin, lower it to JIR, or run it
 ```
 
@@ -149,6 +149,14 @@ ctest --test-dir build --output-on-failure
 ```
 
 The first configure fetches Catch2, so it needs network once. After that, `.\build\eraxc.exe --help` lists the driver.
+
+`ctest --test-dir build` is one entry wrapping the whole suite. The Catch2 binary lives at
+`build\tests\erax_tests.exe`; run it directly to filter, since test names are prose sentences with no tags:
+
+```powershell
+.\build\tests\erax_tests.exe "*loop*"
+.\build\tests\erax_tests.exe "operator chars merge greedily"
+```
 
 ## Coverage
 
@@ -166,7 +174,7 @@ push toward 100%.
 
 ## Example
 
-`examples/helloworld.erax` is the current syntax vision, and it is ahead of the implementation — `string` and
+`examples/helloworld.erx` is the current syntax vision, and it is ahead of the implementation — `string` and
 `std.print` are not v1 yet:
 
 ```erax
@@ -177,7 +185,7 @@ fn main(): i32 {
 }
 ```
 
-A program the parser accepts today, and the interpreter runs — this is `examples/fib.erax`, minus its
+A program the parser accepts today, and the interpreter runs — this is `examples/fib.erx`, minus its
 comment header:
 
 ```erax
@@ -194,7 +202,7 @@ fn main(): i32 {
 ```
 
 ```powershell
-.\build\eraxc.exe --run examples\fib.erax    # prints nothing, exits 55
+.\build\eraxc.exe --run examples\fib.erx    # prints nothing, exits 55
 ```
 
 ## Limitations / next steps

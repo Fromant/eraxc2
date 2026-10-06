@@ -20,7 +20,7 @@ Source-level additions that are out of scope for v1 — listed here so the langu
 - `?:` (ternary), optional chaining (`?.`), spread (`...`), ranges, `::` namespace resolution (dots remain the namespace syntax), `const`/immutability, implicit widening.
 - Short-circuit `&&` / `||` — v1 evaluates both operands (see `docs/core/expressions.md`). It needs an op the current table has none of (a conditional-jump or select form), so it is a `.jir` version bump.
 - An `unreachable code` diagnostic — v1 parses dead code, checks it, and drops it.
-- Strings and string literals, floats — and with them the stdlib (`std.print`). `examples/helloworld.erax` is aspirational on `string`.
+- Strings and string literals, floats — and with them the stdlib (`std.print`). `examples/helloworld.erx` is aspirational on `string`.
 - Machine-level futures — arrays/indices, pointers/references, objects/classes, closures — live in the JIR section below.
 - **`const` / immutability.** v1 has no `const` keyword and no immutable binding: `let` declares a local or global whose initializer may or may not be a constant expression, and it stays assignable (`a = 2;`). There is no way to *say* a name must never change, which is the thing a constant expression is otherwise so careful about. See `docs/core/types.md#constants` for what "constant" currently means.
 - **A `char` suffix.** `char` is a type name and `is_integer(char)` holds, but it is not a literal suffix (`types.md#literals`), so a *constant* `char` expression cannot be written: `let x: char = 255 / 16;` is an `i32` division in a `char` position. Adding `char` to the suffix set closes it, and is the only way `char` arithmetic is readable as arithmetic rather than through two names.
@@ -38,7 +38,7 @@ Source-level additions that are out of scope for v1 — listed here so the langu
 
 - [x] Integer types, globals, functions, calls (incl. recursion), control flow — `src/middleend/jir/` builds and prints them; the parser emits them.
 - [x] Validator per the IR spec (`JIR.md#validator`) — `src/middleend/jir/Validator.{hpp,cpp}` runs the seven checks on every `Program` the driver lowers; it collects all errors rather than stopping at the first, so one run names everything wrong.
-- [x] Interpreter: the stack-machine engine (one cell array + frame pointer) — `src/interp/Interpreter.{hpp,cpp}` runs a validated `Program` to completion and reports the final global state plus the entrypoint's return code; `eraxc --run file.erax` is the driver. Arithmetic is `fold::binary`/`fold::unary`, the same code the parser folds constants with, so a folded answer and a computed one cannot drift.
+- [x] Interpreter: the stack-machine engine (one cell array + frame pointer) — `src/interp/Interpreter.{hpp,cpp}` runs a validated `Program` to completion and reports the final global state plus the entrypoint's return code; `eraxc --run file.erx` is the driver. Arithmetic is `fold::binary`/`fold::unary`, the same code the parser folds constants with, so a folded answer and a computed one cannot drift.
 
 ## JIR — later scope
 

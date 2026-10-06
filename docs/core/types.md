@@ -16,8 +16,10 @@ Mapping to the IR: `bool` lowers to `i8` and `char` to `u8` (a `0–255` byte, s
 
 - Integer literals (decimal, `0x`/`0X`, `0b`/`0B`, `0o`/`0O`, `_` separators) have an integer type.
 - A literal may carry a **type suffix** naming that type: `5i64`, `0xFFu8`, `1_000i32`. The suffix set is the integer type names — `i8` `u8` `i16` `u16` `i32` `u32` `i64` `u64` — and nothing else; `char` and `bool` are not suffixes (`docs/frontend/tokenizer.md#numbers`).
-- A **lone** literal with no suffix takes the type of the position it fills: the declared type of `let`, the lvalue type of `=`, a parameter type in a call. Its value must fit that type, so `let x: i8 = 127;` is fine and `let x: i8 = 128;` is not.
-- A lone literal with no suffix and **no expected type** — the first operand of an operator, or an expression statement whose value is discarded — is an **`i32`**. So `1 + 2;` is an `i32` addition, which is constant and folds away; nothing reaches the IR.
+- A **lone** literal with no suffix takes the type of the position it fills: the declared type of `let`, the lvalue type of `=`, a parameter type in a call, the return type of a function. Its value must fit that type, so `let x: i8 = 127;` is fine and `let x: i8 = 128;` is not.
+- A lone literal with no suffix and **no expected type** — an expression statement whose value is discarded — is an **`i32`**. So `1 + 2;` is an `i32` addition, which is constant and folds away; nothing reaches the IR.
+- **For arithmetic (`+ - * / %`), bitwise (`| ^ &`), and shift (`<< >>`) operators, the expected type is threaded to the first operand when it is a lone operand** (no operator follows it). This makes `let x: i8 = 127 + 1` fold in `i8` and range-check (error: 128 does not fit `i8`), and `let x: i64 = 1 + 2` fold in `i64` (result `3`). The second operand always takes the first operand's type.
+- **For comparison (`== != < <= > >=`) and logical (`|| && ^^`) operators, the expected type is NOT threaded.** Their result type (`bool`) differs from their operand type, so the first operand defaults to `i32` when unsuffixed. This keeps `1 < 2` a `bool` comparison of two `i32` values.
 - A suffix wins over the position, and the two disagreeing is an error rather than a silent conversion: `let x: i32 = 5i64;` is a compile error. There are no implicit conversions of any kind.
 - A literal is never a `bool`. `let b: bool = 1;` is a compile error, and so is `let c: i8 = 'A';` — the character does not convert to an integer. A lone integer literal *does* take a `char` position (`let c: char = 255;`), because `char` is a one-byte integer type; what it cannot do is name one, because `char` is not a suffix.
 - `-` on a literal is read with the sign in view, so the negative half of a signed type is spelled that way: `-128i8` is `i8min` and `-200` does not fit an `i8`.
@@ -30,8 +32,9 @@ Mapping to the IR: `bool` lowers to `i8` and `char` to `u8` (a `0–255` byte, s
 
 Two operands of a binary operator must have the **exact same type**; an `=` / compound-assign RHS and a call argument must exactly match the target type — except for a *lone* literal, which takes the type of its position and is range-checked against it. Identifiers never silently widen or narrow. Mixing `i8` and `i32`, or `bool` and an integer, is a type error. (Widening and casts are future work.)
 
-The expected type is **not threaded into an operator's operands**, which is what keeps `1 < 2` a `bool` and `let x: i32 = 1 + 2;` an `i32`. It also means an operator is in the type of its own operands, so `let x: i64 = 1 + 2;` is a type error and `let x: i8 = 100 + 27;` is one too — both operands are `i32`. Write the suffix to say which width is meant.
+**For arithmetic, bitwise, and shift operators, the expected type threads to the first operand when it stands alone.** This means `let x: i8 = 127 + 1` is a range error (128 does not fit `i8`), not a type error. The first operand becomes `i8`, the second inherits `i8`, the addition folds to `128i8`, and the range check fails. Similarly, `let x: i64 = 1 + 2` is now valid: the addition folds to `3i64`.
 
+**For comparison and logical operators, the expected type does NOT thread.** `1 < 2` compares two `i32` values and produces `bool`. `let b: bool = 1 < 2` is valid because the comparison result is `bool`, matching the position.
 ## Constants {#constants}
 
 A **constant expression** is one the parser can evaluate while reading it: literals, unary `-` / `!` / `~`, arithmetic, and comparisons. It appears wherever a value is required — a `let` initializer, a global's initializer, an assignment RHS, a call argument. Reading a variable, or calling a function, is not constant (`expressions.md#typing-rules`).
