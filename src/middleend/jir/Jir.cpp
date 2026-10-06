@@ -86,6 +86,7 @@ namespace erax::middleend {
             case Op::CmpGt: return "CMP_GT";
             case Op::CmpGe: return "CMP_GE";
             case Op::Call: return "CALL";
+            case Op::Print: return "PRINT";
             case Op::Ret: return "RET";
         }
         return "unknown";
@@ -94,12 +95,7 @@ namespace erax::middleend {
     std::string to_string(const Operand& operand) {
         switch (operand.kind) {
             case OperandKind::Instant:
-                if (is_signed(operand.type)) {
-                    return std::string {to_string(operand.type)} + " " +
-                        signed_text(operand.value, size_of(operand.type));
-                }
-                return std::string {to_string(operand.type)} + " " +
-                    unsigned_text(operand.value, size_of(operand.type));
+                return std::string {to_string(operand.type)} + " " + decimal_text(operand.type, operand.value);
             case OperandKind::VReg:
                 if (operand.is_empty())
                     return "EMPTY";
@@ -108,6 +104,12 @@ namespace erax::middleend {
             case OperandKind::Fn: return "&" + std::to_string(operand.value);
         }
         return "unknown";
+    }
+
+    std::string decimal_text(Type type, std::uint64_t bits) {
+        if (is_signed(type))
+            return signed_text(bits, size_of(type));
+        return unsigned_text(bits, size_of(type));
     }
 
     std::string print(const Program& program) {

@@ -174,6 +174,30 @@ TEST_CASE("a program's whole result is its globals and its exit code")
     CHECK(execute("fn main(): i32 { return 1; }")->globals.empty());
 }
 
+TEST_CASE("print writes a line of values to the program's output")
+{
+    // Values are separated by single spaces and a line is ended with one newline.
+    CHECK(execute("fn main(): i32 { print(1, 2, 3); return 0; }")->output == "1 2 3\n");
+    // Zero arguments still writes the newline.
+    CHECK(execute("fn main(): i32 { print(); return 0; }")->output == "\n");
+    // A value prints as the decimal its type reads: signed values sign-extend,
+    // unsigned values zero-extend, and `char`/`bool` are the byte they lower to.
+    CHECK(execute("fn main(): i32 { print(-1); return 0; }")->output == "-1\n");
+    CHECK(execute("fn main(): i32 { print(255u8); return 0; }")->output == "255\n");
+    CHECK(execute("fn main(): i32 { let x: i64 = 300; print(x); return 0; }")->output == "300\n");
+    CHECK(execute("let g: i64 = -7; fn main(): i32 { print(g); return 0; }")->output == "-7\n");
+    CHECK(execute("fn main(): i32 { print(true, 'x'); return 0; }")->output == "1 120\n");
+    // An expression is folded and printed the same way a return value is.
+    CHECK(execute("fn main(): i32 { print(10 - 2 * 3); return 0; }")->output == "4\n");
+    // Everything accumulates: each call appends its own line.
+    CHECK(execute("fn main(): i32 { print(1); print(); print(2); return 0; }")->output == "1\n\n2\n");
+    // Printing changes nothing else about the run: the result is still the globals
+    // and the exit code.
+    const auto outcome = execute("let n: i32 = 4; fn main(): i32 { print(n, n * n); return n; }");
+    REQUIRE(outcome.has_value());
+    CHECK(*outcome == Outcome { { 4 }, 4, "4 16\n" });
+}
+
 TEST_CASE("a global is zeroed, then written in declaration order")
 {
     CHECK(globals_of("fn main(): i32 { return 0; }").empty());
@@ -436,10 +460,14 @@ TEST_CASE("the shipped examples run")
     CHECK(example_code("fib.erx") == 55);
     CHECK(example_code("folded_test.erx") == 4);
     CHECK(example_code("globals.erx") == 2);
+    CHECK(example_code("print.erx") == 0);
     CHECK(example_code("sum_to_ten.erx") == 45);
     CHECK(example_code("types.erx") == 0);
-    // `globals.erx` is the one that writes a global, so its final state matters
-    // as much as its exit code.
+    // `print.erx` is the one that writes output, so its bytes matter as much as
+    // its exit code; `globals.erx` is the one whose final global state matters.
+    const auto printed = run_example("print.erx");
+    REQUIRE(printed.has_value());
+    CHECK(printed->output == "1 2 3\n-42 255\n120 1\n\n");
     const auto globals = run_example("globals.erx");
     REQUIRE(globals.has_value());
     CHECK(globals->globals == std::vector<Cell> { 2 });

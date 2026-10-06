@@ -67,6 +67,7 @@ TEST_CASE("the op table is complete and round-trips by name")
     REQUIRE(from_name("SHR") == Op::Shr);
     REQUIRE(from_name("CMP_GE") == Op::CmpGe);
     REQUIRE(from_name("CALL") == Op::Call);
+    REQUIRE(from_name("PRINT") == Op::Print);
     REQUIRE(from_name("RET") == Op::Ret);
     REQUIRE(from_name("NOPE") == Op::Ret);
 
@@ -86,6 +87,9 @@ TEST_CASE("arity comes from the op table")
     CHECK(arity(Op::Ret).max == 1);
     CHECK(arity(Op::Call).min == 2);
     CHECK(arity(Op::Call).max == Arity::unbounded);
+    // `PRINT` takes any number of values, none included: `print()` is just a newline.
+    CHECK(arity(Op::Print).min == 0);
+    CHECK(arity(Op::Print).max == Arity::unbounded);
 
     CHECK(arity(Op::Add).accepts(3) == true);
     CHECK(arity(Op::Add).accepts(2) == false);
@@ -95,6 +99,9 @@ TEST_CASE("arity comes from the op table")
     CHECK(arity(Op::Call).accepts(2) == true);
     CHECK(arity(Op::Call).accepts(99) == true);
     CHECK(arity(Op::Call).accepts(1) == false);
+    CHECK(arity(Op::Print).accepts(0) == true);
+    CHECK(arity(Op::Print).accepts(1) == true);
+    CHECK(arity(Op::Print).accepts(5) == true);
 }
 
 TEST_CASE("only the comparisons are edge conditions")
@@ -107,6 +114,7 @@ TEST_CASE("only the comparisons are edge conditions")
 
     CHECK(has_result(Op::Mov) == true);
     CHECK(has_result(Op::Call) == true);
+    CHECK(has_result(Op::Print) == false);
     CHECK(has_result(Op::Ret) == false);
 }
 

@@ -529,6 +529,38 @@ namespace erax::frontend {
     return Value {function->return_type, Operand::vreg(return_type, destination), std::nullopt};
   }
 
+  ExpressionParser::result ExpressionParser::print_call(SourceLocation location) {
+    if (const_mode_) {
+      return std::unexpected(at("a constant expression may not call 'print'", location));
+    }
+
+    std::vector<Operand> args;
+    if (!context().cursor.at(TokenType::RParen)) {
+      while (true) {
+        // A printed value has no expected type to take, so it is left untyped —
+        // exactly as an argument past the last parameter is: the value's own type
+        // is what prints.
+        auto argument = expression(std::nullopt);
+        if (!argument)
+          return argument;
+        if (argument->type == SemType::Void) {
+          return std::unexpected(at("'print' cannot print a value of type void", location));
+        }
+        args.push_back(argument->as_operand());
+        if (!context().cursor.match(TokenType::Comma))
+          break;
+      }
+    }
+    if (context().cursor.take().type != TokenType::RParen) {
+      return std::unexpected(at("expected ')' after the arguments of 'print'", context().cursor.location()));
+    }
+
+    context().builder.emit(Op::Print, std::move(args));
+    // `print` is an expression of type void, which is the one type a statement
+    // position accepts without complaint.
+    return Value {SemType::Void, Operand::empty(), std::nullopt};
+  }
+
   ExpressionParser::result ExpressionParser::primary(std::optional<SemType> expected, bool negated) {
     TokenCursor& cursor = context().cursor;
     const SourceLocation location = cursor.location();
@@ -585,6 +617,16 @@ namespace erax::frontend {
     cursor.take();
     if (cursor.at(TokenType::Dot)) {
       return std::unexpected(at("'.' is not part of a name in v1", location));
+    }
+    if (name == "print") {
+      // No `fn print` may be declared, so the whole name is the builtin's: a call
+      // lowers to `PRINT`, and a bare `print` is the same error a function name
+      // that exists gets.
+      if (!cursor.at(TokenType::LParen)) {
+        return std::unexpected(at("'print' is a builtin function and can only be called", location));
+      }
+      cursor.take();
+      return print_call(location);
     }
     if (cursor.at(TokenType::LParen)) {
       if (context().find_function(name) == nullptr) {

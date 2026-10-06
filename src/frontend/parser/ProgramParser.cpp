@@ -131,6 +131,10 @@ namespace erax::frontend {
                 auto param = expect_identifier(cursor);
                 if (!param)
                     return std::unexpected(param.error());
+                if (*param == "print") {
+                    return std::unexpected(ParseError {"the name 'print' is the builtin print function",
+                                                       cursor.location()});
+                }
                 if (auto colon = expect(cursor, TokenType::Colon); !colon) {
                     return std::unexpected(colon.error());
                 }
@@ -190,6 +194,9 @@ namespace erax::frontend {
         if (auto equals = expect_op(cursor, "="); !equals) {
             return std::unexpected(equals.error());
         }
+        if (*name == "print") {
+            return std::unexpected(ParseError {"the name 'print' is the builtin print function", start});
+        }
         if (context_.find_global(*name) || context_.find_function(*name)) {
             return std::unexpected(ParseError {"'" + *name + "' is already declared", start});
         }
@@ -211,6 +218,9 @@ namespace erax::frontend {
 
         if (context_.find_function(found.name) || context_.find_global(found.name)) {
             return std::unexpected(ParseError {"'" + found.name + "' is already declared", found.location});
+        }
+        if (found.name == "print") {
+            return std::unexpected(ParseError {"the name 'print' is the builtin print function", found.location});
         }
         if (found.name == "main") {
             if (!found.params.empty() || found.return_type != SemType::I32) {
@@ -353,6 +363,9 @@ namespace erax::frontend {
         auto name = expect_identifier(cursor);
         if (!name)
             return std::unexpected(name.error());
+        if (*name == "print") {
+            return std::unexpected(ParseError {"the name 'print' is the builtin print function", start});
+        }
         if (context_.declares(*name)) {
             return std::unexpected(ParseError {"'" + *name + "' is already declared in this scope", start});
         }

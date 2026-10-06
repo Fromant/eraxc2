@@ -317,6 +317,34 @@ TEST_CASE("2. a command has the shape the op table gives it")
                 { Operand::vreg(Type::I32, 0), Operand::function(Type::I32, 0), Operand::instant(Type::I32, 1) } } });
         CHECK(messages(program) == std::vector<std::string> { "an operand names a function rather than holding a value" });
     }
+    SECTION("PRINT writes whatever values it is given")
+    {
+        // Any value is printable — mixed types and none at all: a bare `PRINT` is
+        // just the newline, and it has no result slot to type-check.
+        Program empty = minimal();
+        body(empty, { Command { Op::Print, {} } });
+        CHECK(validate(empty).empty());
+
+        Program mixed = minimal();
+        body(mixed,
+            { Command { Op::Print,
+                { Operand::instant(Type::I32, 1), Operand::instant(Type::U8, 2), Operand::instant(Type::I8, 1),
+                    Operand::global(Type::I32, 0) } } });
+        mixed.globals.push_back(Global { Type::I32, Cfg {} });
+        CHECK(validate(mixed).empty());
+
+        Program function_value = minimal();
+        body(function_value, { Command { Op::Print, { Operand::function(Type::I32, 0) } } });
+        CHECK(messages(function_value) == std::vector<std::string> { "a printed value names a function rather than holding a value" });
+
+        Program void_value = minimal();
+        body(void_value, { Command { Op::Print, { Operand::instant(Type::Void, 0) } } });
+        CHECK(messages(void_value) == std::vector<std::string> { "a printed value is void" });
+
+        Program empty_value = minimal();
+        body(empty_value, { Command { Op::Print, { Operand::empty() } } });
+        CHECK(messages(empty_value) == std::vector<std::string> { "an operand is the EMPTY sentinel, which holds no value" });
+    }
     SECTION("RET carries what the function returns")
     {
         Program void_return = minimal();

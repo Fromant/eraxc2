@@ -49,7 +49,7 @@ cmake --build build-cov --target coverage             # builds, runs the suite, 
 - `bool`/`char` lower to `i8`; no implicit conversions; assignment is a statement (not an expression); `break`/`continue` only in loops.
 - A literal takes the type of the position it fills, and only a *lone* one: the expected type is not threaded into the operands of an operator, which is what keeps `1 < 2` a `bool` and `let x: i32 = 1 + 2` an `i32` while `let x: bool = 1;` fails.
 - A folded test picks one CFG edge, so a constant `while (false)` drops its body and a constant `if` decides the definite-assignment intersection.
-- Tests compare programs by final global state + entrypoint return code; no stdout in v0.1.
+- Tests compare programs by the bytes `PRINT` wrote, final global state, and entrypoint return code; the builtin `print` is the only stdout in v0.1.
 
 ## Style
 

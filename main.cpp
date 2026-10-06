@@ -50,9 +50,11 @@ namespace {
     return EXIT_FAILURE;
   }
 
-  /// The program's whole observable result, printed as the driver sees it: the final
-  /// global state, and the exit code is the entrypoint's own return value.
+  /// The program's whole observable result, printed as the driver sees it: the bytes
+  /// the program itself wrote, then the final global state. The exit code is the
+  /// program's own voice, so it does not get a line of its own.
   int report(const Outcome& outcome, const erax::middleend::Program& program) {
+    std::cout << outcome.output;
     for (std::size_t index = 0; index < outcome.globals.size(); ++index) {
       std::cout << "global " << index << ": " << erax::middleend::to_string(program.globals[index].type) << " 0x"
                 << std::hex << outcome.globals[index] << std::dec << '\n';

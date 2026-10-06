@@ -185,6 +185,54 @@ TEST_CASE("a void call discards its result")
     CHECK(last.args.empty());
 }
 
+TEST_CASE("print is a call to the builtin of the same name")
+{
+    // One statement lowers to exactly one `PRINT`, whose args are the printed
+    // values in order.
+    const Program program =
+        parse_ok("fn main(): i32 { print(1, 2, 3); return 0; }");
+    const std::vector<Command> commands = commands_of(program, 0);
+    REQUIRE(commands.size() == 2);
+    const Command print = commands[0];
+    REQUIRE(print.op == Op::Print);
+    REQUIRE(print.args.size() == 3);
+    CHECK(print.args[0].kind == OperandKind::Instant);
+    CHECK(print.args[0].value == 1);
+    CHECK(print.args[2].value == 3);
+    CHECK(is_ret(commands[1]));
+
+    // No arguments is fine: `print()` is just the newline.
+    parse_ok("fn main(): i32 { print(); return 0; }");
+
+    // Any value type prints, and nothing expects a type back out of it.
+    parse_ok("fn g(): u8 { return 1; } fn main(): i32 { print(g(), true, 'x'); return 0; }");
+    parse_ok("let g: i32 = 5; fn main(): i32 { print(g); return 0; }");
+}
+
+TEST_CASE("print is a rule on the name, like main")
+{
+    CHECK(parse_error("fn main(): i32 { return print; }") == "'print' is a builtin function and can only be called");
+    CHECK(parse_error("fn print(): i32 { return 0; }") == "the name 'print' is the builtin print function");
+    CHECK(parse_error("fn f(print: i32): i32 { return 0; }") == "the name 'print' is the builtin print function");
+    CHECK(parse_error("let print: i32 = 1; fn main(): i32 { return 0; }") == "the name 'print' is the builtin print function");
+    CHECK(parse_error("fn main(): i32 { let print: i32 = 1; return 0; }") == "the name 'print' is the builtin print function");
+
+    // `print` is not a reserved word, but it is ruled by the name everywhere,
+    // including bare in an expression: only a `print(...)` survives parsing.
+    CHECK(parse_error("fn main(): i32 { print 1; return 0; }") == "'print' is a builtin function and can only be called");
+}
+
+TEST_CASE("print rejects the arguments nothing can print")
+{
+    // A call that returns nothing has no value to print, and a constant
+    // expression cannot call anything.
+    CHECK(parse_error("fn f() { } fn main(): i32 { print(f()); return 0; }") != "");
+    CHECK(parse_error("fn main(): i32 { print(1; return 0; }") != "");
+    // The result is void, so print cannot fill a value position.
+    CHECK(parse_error("fn main(): i32 { let x: i32 = print(1); return x; }") != "");
+    parse_ok("fn g(): bool { print(true); return true; } fn main(): i32 { return 0; }");
+}
+
 TEST_CASE("an assignment is a statement, not an expression")
 {
     parse_ok("fn main(): i32 { let x: i32 = 1; x = x + 1; return x; }");

@@ -69,12 +69,13 @@ namespace erax::interp {
 
     std::string to_string(const Failure& failure);
 
-    /// What a finished program leaves behind: the final global state and the
-    /// entrypoint's return code. That pair is the whole observable result in v0.1 —
-    /// no stdout yet — and it is what every backend is compared on.
+    /// What a finished program leaves behind: the final global state, the entrypoint's
+    /// return code, and the bytes its `PRINT`s wrote. That triple is the whole
+    /// observable result of v0.1, and it is what every backend is compared on.
     struct Outcome {
         std::vector<Cell> globals;  ///< one cell per global, raw bit patterns
         Cell code = 0;  ///< the entrypoint's `i32` return, raw bit pattern
+        std::string output = {};  ///< what `PRINT` wrote, flattened to \n-separated lines
 
         friend bool operator==(const Outcome&, const Outcome&) = default;
     };

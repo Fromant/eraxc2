@@ -22,7 +22,7 @@ All three share one front-end (lexer → parser → JIR), so the same `.erx` pro
 | ------- | ------------ |
 | `.\build\eraxc.exe file.erx` | Tokenize and print the token stream — the lexer's view of the source |
 | `.\build\eraxc.exe --jir file.erx` | Lower to JIR and print it — the parser's and validator's view |
-| `.\build\eraxc.exe --run file.erx` | Run it: final globals on stdout, **exit code = the entrypoint's `i32` return** |
+| `.\build\eraxc.exe --run file.erx` | Run it: the program's `print` output and final globals on stdout, **exit code = the entrypoint's `i32` return** |
 | `.\build\eraxc.exe --help` | Usage |
 
 Every failure exits `1`. A source error quotes its location (`file:row:col:`), a rejected IR or a trap quotes
@@ -90,7 +90,7 @@ global 0: i32 0x2                          # the final global state
 # exits 2
 ```
 
-A program with no globals prints nothing at all — final global state plus exit code is the whole observable result in v0.1. Stdin works everywhere a file does, which is the fastest way to try a snippet:
+A program with no globals and no `print` writes nothing of its own — globals plus exit code is still the whole result unless `print` is called, which is the one way a v0.1 program writes to stdout. Stdin works everywhere a file does, which is the fastest way to try a snippet:
 
 ```powershell
 'fn main(): i32 { return 7; }' | .\build\eraxc.exe --run   # exits 7
@@ -216,8 +216,8 @@ fn main(): i32 {
 - Digit separators must sit between digits — `1_000` is fine, `1_` and `0x_1` are lexer errors.
 - The language is v1-incomplete on purpose: no `string`, no standard library, no float, no `?.`/member access, no
   `match`, no user types. The parser rejects them with a clear error rather than guessing.
-- No output: a program cannot print anything yet, so `--run` reports its result only through globals and the exit
-  code. `std.print` arrives with strings.
+- One way to print: the builtin `print(a, b, …)` writes each value as the decimal its type reads, space-separated,
+  ending in one newline — no strings or formatting yet. `std.print` arrives with strings.
 - The interpreter bounds its own recursion and cell array (`Limits`, in `src/interp/Interpreter.hpp`) and reports
   `StackExhausted` rather than growing until the host gives out.
 
@@ -234,4 +234,4 @@ fn main(): i32 {
   folds constants with, so a folded answer and a computed one cannot drift apart.
 - **A cell is one `u64`.** A value is never held in a host type, so wrapping and narrowing are the IR's business:
   an `i32` cell is zero-extended, and `i32 -1` is `0xFFFFFFFF`.
-- **Shared test corpus.** Programs under `examples/` double as the conformance suite: same files, every backend, identical observable result — final global state plus the entrypoint's return code. No stdout in v0.1; the stdlib (and `std.print`) arrives with strings.
+- **Shared test corpus.** Programs under `examples/` double as the conformance suite: same files, every backend, identical observable result — the bytes `print` wrote, final global state, and the entrypoint's return code. The builtin `print` is the only stdout in v0.1; the stdlib (strings, `std.print`, formatting) arrives later.

@@ -1,0 +1,14 @@
+// The builtin `print`, the one way a v1 program has output.
+//
+// Each argument is written as the decimal its type reads: signed values sign-extend,
+// unsigned values zero-extend, and `char`/`bool` print as the byte they lower to.
+// Values are joined by single spaces and the line ends in one newline, so `print()`
+// with no arguments writes just the newline. The program's output is separate from
+// its result: `main` still returns the exit code.
+fn main(): i32 {
+    print(1, 2, 3);
+    print(-42, 255u8);
+    print('x', true);
+    print();
+    return 0;
+}

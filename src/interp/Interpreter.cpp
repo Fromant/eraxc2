@@ -101,7 +101,7 @@ namespace erax::interp {
                     break_("the entrypoint returned no value to be its exit code");
                     return std::unexpected(failure());
                 }
-                return Outcome {globals_, *returning_};
+                return Outcome {globals_, *returning_, output_};
             }
 
         private:
@@ -171,6 +171,7 @@ namespace erax::interp {
                 switch (command.op) {
                     case Op::Ret: return ret(command, frame);
                     case Op::Call: return call(command, frame, site);
+                    case Op::Print: return print(command, frame);
                     case Op::Mov: {
                         const Cell value = read(command.args[1], frame);
                         write(command.args[0], value, frame);
@@ -262,6 +263,23 @@ namespace erax::interp {
                 for (std::size_t slot = 0; slot < arguments.size(); ++slot) {
                     stack_[base + slot] = arguments[slot];
                 }
+                return true;
+            }
+
+            /// `PRINT a0 …`: writes each value as a signed or unsigned decimal — the
+            /// interpreter's `decimal_text`, which renders an `Instant` the same way —
+            /// separated by single spaces, then a newline. A bare `PRINT` writes only
+            /// the newline.
+            bool print(const Command& command, Frame frame) {
+                for (std::size_t slot = 0; slot < command.args.size(); ++slot) {
+                    const Cell value = read(command.args[slot], frame);
+                    if (died())
+                        return false;
+                    if (slot != 0)
+                        output_ += ' ';
+                    output_ += middleend::decimal_text(command.args[slot].type, value);
+                }
+                output_ += '\n';
                 return true;
             }
 
@@ -390,6 +408,7 @@ namespace erax::interp {
             const Program& program_;
             const Limits& limits_;
             std::vector<Cell> globals_;
+            std::string output_;  ///< the bytes `PRINT` wrote, for the `Outcome`
             std::vector<Cell> stack_;
             std::vector<Frame> frames_;
             std::optional<Cell> returning_;  ///< the value the outermost `RET` carried

@@ -108,6 +108,7 @@ Logical negation is `CMP_NE i8 $dst i8 $a i8 0`.
 | Op     | Shape                              | Semantics                                                  |
 | ------ | ---------------------------------- | ---------------------------------------------------------- |
 | `CALL` | `CALL dst &f a0 … an-1`            | call `f`, see [calls](#calls)                              |
+| `PRINT` | `PRINT a0 … an-1`                 | write each value's decimal to stdout, see [output](#output) |
 | `RET`  | `RET src` / `RET`                  | return `src` (non-void) / nothing; a `RET` block has no edges |
 
 ## Calls
@@ -141,6 +142,14 @@ CALL EMPTY &log i32 $3                  ; EMPTY dst — no value comes back
 2. Each non-empty `init cfg` runs in declaration order (a normal CFG — zero params, globals pre-defined).
 3. The entrypoint runs; its `i32` return value is the process exit code.
 
+## Output
+
+`PRINT a0 …` writes one line to the process's stdout: each operand as the decimal its type reads — signed for `i*`, unsigned for `u*` — operands joined by single spaces, the line ended with one newline. `PRINT` with no operands writes just the newline.
+
+- `PRINT` has **no result slot**: every operand is a read, and the op takes any number of them (arity `0..∞`).
+- Any value type prints: `bool`/`char` print as the `i8`/`u8` cell they lower to.
+- The run's observable result now includes the bytes `PRINT` wrote, in order (see [execution model](#execution-model)). It is the one way a v1 program touches the world; strings and a formatted stdlib arrive later (`TODO.md`).
+
 ## Runtime semantics
 
 Every value is defined in this contract or the program is rejected by the validator — there is no undefined behavior.
@@ -151,7 +160,7 @@ Every value is defined in this contract or the program is rejected by the valida
 - **Shift counts wrap to the operand width**: `count & (width-1)` — `i8`/`u8` → 3 bits, `i16`/`u16` → 4, `i32`/`u32` → 5, `i64`/`u64` → 6.
 - **Signedness**: signed for `i*`, unsigned for `u*` (comparisons, div/mod, `SAR`).
 - **Bool**: `i8` 0/1; a condition is always a `(cmp, a, b)` pair with C's "nonzero" rule.
-- **Determinism**: ordered IR, single-threaded. The same program has the same observable result (final global state + entrypoint return) on every backend.
+- **Determinism**: ordered IR, single-threaded. The same program has the same observable result (the bytes `PRINT` wrote, final global state, entrypoint return) on every backend.
 
 ## Validator
 
@@ -182,4 +191,4 @@ The interpreter of `src/interp/` is this contract made executable, and its resul
 - **A global initializer is a frame of its own** — the IR gives it no `frame_size`, so the machine gives it the cells its vregs name, and it runs before the entrypoint exists.
 - **The machine validates first.** Every operand is read through an index, so a program the validator rejects never reaches the cell array; it comes back as a list of errors instead.
 - **Limits are the machine's, not the IR's.** A frame's size and how deep recursion may go are not in this contract, so an executor has to say where it stops rather than asking the host for memory it may not have. The reference interpreter counts both the entrypoint's own frame and the initializers', and reports three ways to stop: a stack deeper than the limit, a frame wider than the whole cell array, and a cell array with no room left.
-- **What a run leaves behind is the observable result** and nothing else: final global state (one cell per global, in declaration order) plus the entrypoint's `i32` return. A trap keeps the call stack it happened on, because the IR is nameless and the stack is the only way to say where a program was.
+- **What a run leaves behind is the observable result** and nothing else: the bytes `PRINT` wrote, final global state (one cell per global, in declaration order), and the entrypoint's `i32` return. A trap keeps the call stack it happened on, because the IR is nameless and the stack is the only way to say where a program was.

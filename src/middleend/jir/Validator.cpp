@@ -476,6 +476,14 @@ namespace erax::middleend {
                         break;
                     }
                     case Op::Call: check_call(body, at, command); break;
+                    case Op::Print:
+                        // Every operand is a value to write, and nothing more: no result
+                        // slot, no shared type, no signedness. `EMPTY` was already rejected
+                        // above, so `need_value` is left with `Fn` and `Void` to report.
+                        for (std::size_t slot = 0; slot < command.args.size(); ++slot) {
+                            need_value(body, at, command.args[slot], "a printed value");
+                        }
+                        break;
                     case Op::Ret: check_ret(body, at, command); break;
                 }
             }

@@ -84,6 +84,9 @@ Notes:
   v1 has no member access and no namespaces (`TODO.md` carries dot namespaces as future work).
 - `[` `]` lex but are not part of v1 (arrays are future work); using them is a syntax error.
 - `const-expr` is enforced additionally: it must be constant-foldable and contain no calls.
+- `print` is the one call not answered by a declaration: `primary` briefly pulls an `IDENT` named `print` aside and
+  only ever lets it through as `print "(" … ")"` — no callee lookup happens, any number of values (including none)
+  may be printed, and the result is `void` (see `expressions.md#typing-rules` and `statements.md#print`).
 
 ## Operator set
 
@@ -124,7 +127,7 @@ Every keyword is reserved: it cannot be used as an `IDENT` (declaration or refer
 
 Type names, `true`, and `false` are reserved because they carry their meaning in type and literal position.
 
-`string`, `std`, `print`, `text`, … are ordinary identifiers, not reserved words: they may be used as names. Writing `string` in *type* position is a forward-looking error (see `types.md#literals`). `main` has the same status — the entry point is a rule on that name, see `statements.md#functions`.
+`string`, `std`, `text`, … are ordinary identifiers, not reserved words: they may be used as names. Writing `string` in *type* position is a forward-looking error (see `types.md#literals`). Two names carry their meaning without being reserved: `main` is the entry point — a rule on the name, see `statements.md#functions` — and `print` is the builtin output function, also a rule on the name (see `statements.md#print`). Neither may be given a declaration of its own, and neither stops the tokenizer; a bare `print` in expression position is an error, however, because it can only ever be a call.
 
 ## Semantics
 
@@ -152,3 +155,4 @@ The language lowers 1:1 to JIR:
 | `&&` `\|\|` `^^` | `AND` `OR` `XOR` on `bool` (both operands always evaluated) |
 | `if`/`while`/`do`/`for` | CFG edges + `Condition` |
 | function call | `CALL` |
+| `print(...)` | `PRINT` |

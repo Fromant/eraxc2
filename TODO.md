@@ -38,7 +38,8 @@ Source-level additions that are out of scope for v1 — listed here so the langu
 
 - [x] Integer types, globals, functions, calls (incl. recursion), control flow — `src/middleend/jir/` builds and prints them; the parser emits them.
 - [x] Validator per the IR spec (`JIR.md#validator`) — `src/middleend/jir/Validator.{hpp,cpp}` runs the seven checks on every `Program` the driver lowers; it collects all errors rather than stopping at the first, so one run names everything wrong.
-- [x] Interpreter: the stack-machine engine (one cell array + frame pointer) — `src/interp/Interpreter.{hpp,cpp}` runs a validated `Program` to completion and reports the final global state plus the entrypoint's return code; `eraxc --run file.erx` is the driver. Arithmetic is `fold::binary`/`fold::unary`, the same code the parser folds constants with, so a folded answer and a computed one cannot drift.
+- [x] Interpreter: the stack-machine engine (one cell array + frame pointer) — `src/interp/Interpreter.{hpp,cpp}` runs a validated `Program` to completion and reports the bytes `PRINT` wrote, the final global state, and the entrypoint's return code; `eraxc --run file.erx` is the driver. Arithmetic is `fold::binary`/`fold::unary`, the same code the parser folds constants with, so a folded answer and a computed one cannot drift.
+- [x] Builtin `print` (`Op::Print` in JIR): `print(a, b, c);` writes each value as the decimal its type reads, space-separated, newline-terminated; `print();` writes the newline alone. The only output a v0.1 program has. `docs/core/*`, `docs/middleend/JIR.md#output`, and `examples/print.erx` pin it.
 
 ## JIR — later scope
 
@@ -59,4 +60,4 @@ Source-level additions that are out of scope for v1 — listed here so the langu
 
 ## Conformance
 
-Programs under `examples/` double as the conformance corpus: same files, every backend. Results are compared as **final global state + entrypoint return code**. No stdout in v0.1 — the stdlib arrives with strings.
+Programs under `examples/` double as the conformance corpus: same files, every backend. Results are compared as **the bytes `PRINT` wrote + final global state + entrypoint return code**. The builtin `print` is the only stdout in v0.1 — strings, formatting, and the stdlib (`std.print`) still arrive later.

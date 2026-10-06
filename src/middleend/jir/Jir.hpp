@@ -93,13 +93,15 @@ namespace erax::middleend {
         CmpGt,
         CmpGe,
         Call,
+        Print,
         Ret,
     };
 
     std::string_view to_string(Op op) noexcept;
 
-    /// Argument count of an op. `Call` is `2` plus at least `0` arguments;
-    /// `Unbounded` marks an op whose arity depends on its operands.
+    /// Argument count of an op. `Call` is `2` plus at least `0` arguments and
+    /// `Print` takes any number from `0` up; `Unbounded` marks an op whose arity
+    /// depends on its operands.
     struct Arity {
         std::uint8_t min;
         std::uint8_t max;
@@ -139,13 +141,14 @@ namespace erax::middleend {
             case Op::Not: return {2, 2};
             case Op::Ret: return {0, 1};
             case Op::Call: return {2, Arity::unbounded};
+            case Op::Print: return {0, Arity::unbounded};
         }
         return {0, 0};
     }
 
     /// True when `args[0]` is the op's result slot.
     constexpr bool has_result(Op op) noexcept {
-        return op != Op::Ret;
+        return op != Op::Ret && op != Op::Print;
     }
 
     /// True for `CmpEq`..`CmpGe`, the only ops legal as a `Condition`'s `cmp`.
@@ -206,6 +209,12 @@ namespace erax::middleend {
     static_assert(std::is_trivially_copyable_v<Operand>);
 
     std::string to_string(const Operand& operand);
+
+    /// The decimal rendering of a bit pattern read as \p type: two's-complement for a
+    /// signed type, zero-extended for an unsigned one. It is the number a `PRINT`
+    /// writes and the number an `Instant` renders after its type name, so the two can
+    /// never disagree.
+    std::string decimal_text(Type type, std::uint64_t bits);
 
     /// `OP arg0 arg1 ...`, where `args[0]` is the result slot of an op that has one.
     struct Command {

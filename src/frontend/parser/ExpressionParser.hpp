@@ -77,6 +77,10 @@ private:
     /// A call of \p name with the arguments at the cursor.
     result call(const std::string& name, SourceLocation location);
 
+    /// A call of the builtin `print`, whose arguments are any values and whose
+    /// result is void: `print(1, 2)` writes `1 2\n`, `print()` only a newline.
+    result print_call(SourceLocation location);
+
     ParseContext& context() noexcept {
       return *context_;
     }
