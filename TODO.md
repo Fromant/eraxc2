@@ -54,6 +54,8 @@ Source-level additions that are out of scope for v1 — listed here so the langu
 - [ ] **VM** — executes JIR from a serialized form.
 - [ ] **AoT** — native codegen. Codegen concerns (instruction selection, frame layout, register allocation) are backend work.
 
+The driver contract for both is **flag = backend** (decided): `eraxc file.erx` runs on the reference interpreter and stays the default; `--vm` / `--aot` run with that backend; `-o out.jir` / `-o out.exe` emit the artifact instead of running and imply the backend. The `Action`/backend split in `main.cpp` already leaves the slot. Stdlib functions lower to **extern host calls** (a runtime the interpreter, VM, and AoT all satisfy the same way), not to one op per function — `PRINT` is the v0.1 stand-in.
+
 ## Serialization (`TODO.md` owns the format versioning)
 
 `.jir` = magic + `u32` version (v0.1: 1) + deterministic little-endian encoding of `Program` (commands as op + operand list; arity from the op table). The op table is frozen by the format — a new op is a version bump.
