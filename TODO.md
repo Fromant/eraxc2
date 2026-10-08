@@ -12,6 +12,9 @@ Status: **WIP.** The lexer and the parser exist; the IR is specified and impleme
 - [x] `char` literal unescaping — `\n`, `\t`, `\0`, `\\`, `\'`, `\xNN`, and `\uNNNN` decode in the parser.
 - [ ] `string` unescaping — waits on the `string` type existing.
 - [ ] `?.`/member access, `?:`, spread, ranges — the tokens compose at parse; the language side is "Beyond v1" below.
+- [x] `primitive` keyword + `primitive-call` expression (`language.md#grammar`), the catalog, and std auto-import (`docs/std.md`).
+- [x] `as` cast — `cast = unary { "as" type }` between binary and unary (`expressions.md#precedence`), any type to any type, always wrapping via `fold::convert` (`types.md#casts`, `JIR.md#conversions`), lowered to `CAST`.
+- [x] Function overloading — name plus parameter types identify a declaration (`statements.md#functions`), calls resolve by exact argument types (`expressions.md#typing-rules`), and std's `print` is one name with a declaration per type (`docs/std.md`).
 
 ## Beyond v1 (future work)
 
@@ -20,10 +23,10 @@ Source-level additions that are out of scope for v1 — listed here so the langu
 - `?:` (ternary), optional chaining (`?.`), spread (`...`), ranges, `::` namespace resolution (dots remain the namespace syntax), `const`/immutability, implicit widening.
 - Short-circuit `&&` / `||` — v1 evaluates both operands (see `docs/core/expressions.md`). It needs an op the current table has none of (a conditional-jump or select form), so it is a `.jir` version bump.
 - An `unreachable code` diagnostic — v1 parses dead code, checks it, and drops it.
-- Strings and string literals, floats — and with them the stdlib (`std.print`). `examples/helloworld.erx` is aspirational on `string`.
+- Strings and string literals, floats — and with them string support in the stdlib (`std.print`); v0.1 std lives in `stdlib/std.erx` already (`docs/std.md`). `examples/helloworld.erx` is aspirational on `string`.
 - Machine-level futures — arrays/indices, pointers/references, objects/classes, closures — live in the JIR section below.
 - **`const` / immutability.** v1 has no `const` keyword and no immutable binding: `let` declares a local or global whose initializer may or may not be a constant expression, and it stays assignable (`a = 2;`). There is no way to *say* a name must never change, which is the thing a constant expression is otherwise so careful about. See `docs/core/types.md#constants` for what "constant" currently means.
-- **A `char` suffix.** `char` is a type name and `is_integer(char)` holds, but it is not a literal suffix (`types.md#literals`), so a *constant* `char` expression cannot be written: `let x: char = 255 / 16;` is an `i32` division in a `char` position. Adding `char` to the suffix set closes it, and is the only way `char` arithmetic is readable as arithmetic rather than through two names.
+- **A `char` suffix.** `char` is a type name and `is_integer(char)` holds, but it is not a literal suffix (`types.md#literals`), so a *constant* `char` expression cannot be written: `let x: char = 255 / 16;` is an `i32` division in a `char` position. `(255 / 16) as char` already spells the value (`types.md#casts`), but only a suffix makes the arithmetic itself read as `char` arithmetic instead of `i32` ending in a cast — adding `char` to the suffix set closes that.
 - **Literal / singleton types.** `let b: i32 = 0;` gives `b` the type `i32`, not the value `0`. A type system that tracked the value — so `b` has type `0` and a later `b = 2` is an error until the use — would catch the divide-by-a-literal-zero and the accidental-overflow class of bug at compile time instead of at the trap, and it is the natural end state of the constants work in `types.md#constants`. It costs a real type-inference term and is far past v1.
 - **Wider integers (`i128`/`i256`) and arbitrary precision.** The question that decides whether it is cheap or not: a *cell* is one 64-bit word in the IR (`JIR.md#types`), so a value wider than a machine word is not one cell, and every assumption below is keyed to a single word. In order of how much it costs:
   1. `Operand::value`, `ConstInt::bits`, and the `EMPTY` sentinel are one `uint64_t` — a value of `2^64` is exactly the case `types.md#constants` classifies as *in no type*.
@@ -38,8 +41,8 @@ Source-level additions that are out of scope for v1 — listed here so the langu
 
 - [x] Integer types, globals, functions, calls (incl. recursion), control flow — `src/middleend/jir/` builds and prints them; the parser emits them.
 - [x] Validator per the IR spec (`JIR.md#validator`) — `src/middleend/jir/Validator.{hpp,cpp}` runs the seven checks on every `Program` the driver lowers; it collects all errors rather than stopping at the first, so one run names everything wrong.
-- [x] Interpreter: the stack-machine engine (one cell array + frame pointer) — `src/interp/Interpreter.{hpp,cpp}` runs a validated `Program` to completion and reports the bytes `PRINT` wrote, the final global state, and the entrypoint's return code; running is the driver's default (`eraxc file.erx`, or stdin). Arithmetic is `fold::binary`/`fold::unary`, the same code the parser folds constants with, so a folded answer and a computed one cannot drift.
-- [x] Builtin `print` (`Op::Print` in JIR): `print(a, b, c);` writes each value as the decimal its type reads, space-separated, newline-terminated; `print();` writes the newline alone. The only output a v0.1 program has. `docs/core/*`, `docs/middleend/JIR.md#output`, and `examples/print.erx` pin it.
+- [x] Interpreter: the stack-machine engine (one cell array + frame pointer) — `src/interp/Interpreter.{hpp,cpp}` runs a validated `Program` to completion and reports the bytes the program wrote to stdout, the final global state, and the exit code; running is the driver's default (`eraxc file.erx`, or stdin). Arithmetic is `fold::binary`/`fold::unary`, the same code the parser folds constants with, so a folded answer and a computed one cannot drift.
+- [x] Primitives — the `primitive` keyword and the backend-contract catalog (`print`, `print_char`, `read_char`, `exit`, `abort`) — `docs/primitive.md`, `src/primitives/`, lowered to `PRIM` (`Op::Primitive`). They replaced the builtin `print` name-rule entirely: `print` is now an ordinary primitive call, and `fn print` is a legal declaration like any other.
 
 ## JIR — later scope
 
@@ -47,19 +50,20 @@ Source-level additions that are out of scope for v1 — listed here so the langu
 - Strings — `std.string` in the stdlib, a heap-pointer wrapper; **no string ops in JIR, ever**.
 - Pointers/arrays (what strings sit on).
 - Closures, objects/classes.
-- Externs (`std.print`, …), then imports.
+- Imports — `std.erx` is auto-imported by the driver today (`docs/std.md`); a real import system (and `std.` dot access) replaces that.
+- New primitives — each is a catalog addition in `docs/primitive.md`, never a language change: memory (`alloc`/`free`), raw byte output (`write_bytes`, what strings will print through), and friends. Time/random stay excluded: the determinism rule in `docs/primitive.md` is what makes a backend comparison mean anything.
 
 ## Backends
 
 - [ ] **VM** — executes JIR from a serialized form.
 - [ ] **AoT** — native codegen. Codegen concerns (instruction selection, frame layout, register allocation) are backend work.
 
-The driver contract for both is **flag = backend** (decided): `eraxc file.erx` runs on the reference interpreter and stays the default; `--vm` / `--aot` run with that backend; `-o out.jir` / `-o out.exe` emit the artifact instead of running and imply the backend. The `Action`/backend split in `main.cpp` already leaves the slot. Stdlib functions lower to **extern host calls** (a runtime the interpreter, VM, and AoT all satisfy the same way), not to one op per function — `PRINT` is the v0.1 stand-in.
+The driver contract for both is **flag = backend** (decided): `eraxc file.erx` runs on the reference interpreter and stays the default; `--vm` / `--aot` run with that backend; `-o out.jir` / `-o out.exe` emit the artifact instead of running and imply the backend. The `Action`/backend split in `main.cpp` already leaves the slot. **The stdlib is pure erax** — `stdlib/std.erx`, embedded and auto-imported (`docs/std.md`) — so every backend runs it without implementing anything for it. What a backend *does* implement is the **primitive catalog** (`docs/primitive.md`): the interpreter, VM, and AoT all satisfy the same five contracts the same way, which is exactly what makes their results comparable.
 
 ## Serialization (`TODO.md` owns the format versioning)
 
-`.jir` = magic + `u32` version (v0.1: 1) + deterministic little-endian encoding of `Program` (commands as op + operand list; arity from the op table). The op table is frozen by the format — a new op is a version bump.
+`.jir` = magic + `u32` version (v0.1: 1) + deterministic little-endian encoding of `Program` (commands as op + operand list; arity from the op table; a `PRIM` carries the primitive's catalog `u32` id). The op table **and the primitive catalog** are frozen by the format — a new op or primitive is a version bump.
 
 ## Conformance
 
-Programs under `examples/` double as the conformance corpus: same files, every backend. Results are compared as **the bytes `PRINT` wrote + final global state + entrypoint return code**. The builtin `print` is the only stdout in v0.1 — strings, formatting, and the stdlib (`std.print`) still arrive later.
+Programs under `examples/` double as the conformance corpus: same files, every backend. Results are compared as **the bytes the program wrote to stdout (`print` / `print_char`) + final global state + exit code** (the entrypoint's return, or the code `exit`/`abort` gave); a program that uses `read_char` is run with pinned input. Strings, formatting, and `std.print` still arrive later.

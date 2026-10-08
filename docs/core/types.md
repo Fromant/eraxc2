@@ -16,12 +16,12 @@ Mapping to the IR: `bool` lowers to `i8` and `char` to `u8` (a `0–255` byte, s
 
 - Integer literals (decimal, `0x`/`0X`, `0b`/`0B`, `0o`/`0O`, `_` separators) have an integer type.
 - A literal may carry a **type suffix** naming that type: `5i64`, `0xFFu8`, `1_000i32`. The suffix set is the integer type names — `i8` `u8` `i16` `u16` `i32` `u32` `i64` `u64` — and nothing else; `char` and `bool` are not suffixes (`docs/frontend/tokenizer.md#numbers`).
-- A **lone** literal with no suffix takes the type of the position it fills: the declared type of `let`, the lvalue type of `=`, a parameter type in a call, the return type of a function. Its value must fit that type, so `let x: i8 = 127;` is fine and `let x: i8 = 128;` is not.
+- A **lone** literal with no suffix takes the type of the position it fills: the declared type of `let`, the lvalue type of `=`, a parameter type in a call, the return type of a function. Its value must fit that type, so `let x: i8 = 127;` is fine and `let x: i8 = 128;` is not. A call whose name is an overload set has no single parameter to hand a lone literal before resolution: such an argument is an `i32` unless suffixed, and the overload set must match it (`expressions.md#typing-rules`).
 - A lone literal with no suffix and **no expected type** — an expression statement whose value is discarded — is an **`i32`**. So `1 + 2;` is an `i32` addition, which is constant and folds away; nothing reaches the IR.
 - **For arithmetic (`+ - * / %`), bitwise (`| ^ &`), and shift (`<< >>`) operators, the expected type is threaded to the first operand when it is a lone operand** (no operator follows it). This makes `let x: i8 = 127 + 1` fold in `i8` and range-check (error: 128 does not fit `i8`), and `let x: i64 = 1 + 2` fold in `i64` (result `3`). The second operand always takes the first operand's type.
 - **For comparison (`== != < <= > >=`) and logical (`|| && ^^`) operators, the expected type is NOT threaded.** Their result type (`bool`) differs from their operand type, so the first operand defaults to `i32` when unsuffixed. This keeps `1 < 2` a `bool` comparison of two `i32` values.
 - A suffix wins over the position, and the two disagreeing is an error rather than a silent conversion: `let x: i32 = 5i64;` is a compile error. There are no implicit conversions of any kind.
-- A literal is never a `bool`. `let b: bool = 1;` is a compile error, and so is `let c: i8 = 'A';` — the character does not convert to an integer. A lone integer literal *does* take a `char` position (`let c: char = 255;`), because `char` is a one-byte integer type; what it cannot do is name one, because `char` is not a suffix.
+- A literal is never a `bool`. `let b: bool = 1;` is a compile error, and so is `let c: i8 = 'A';` — the character does not convert to an integer. A lone integer literal *does* take a `char` position (`let c: char = 255;`), because `char` is a one-byte integer type; what it cannot do is name one, because `char` is not a suffix — outside a `char` position, `65 as char` is how an expression gets a `char` (`#casts`).
 - `-` on a literal is read with the sign in view, so the negative half of a signed type is spelled that way: `-128i8` is `i8min` and `-200` does not fit an `i8`.
 - `-` is **not defined on an unsigned type**, which has no negative side: `let x: u8 = -1;` is a compile error. `~` is the same on both signednesses and stays.
 - Float literals (`3.14`, `1e10`, `1.5e-3`) lex as `Number` but have no type in v1; using one is a compile error (`float is not supported yet`).
@@ -30,14 +30,42 @@ Mapping to the IR: `bool` lowers to `i8` and `char` to `u8` (a `0–255` byte, s
 
 ## No implicit conversions
 
-Two operands of a binary operator must have the **exact same type**; an `=` / compound-assign RHS and a call argument must exactly match the target type — except for a *lone* literal, which takes the type of its position and is range-checked against it. Identifiers never silently widen or narrow. Mixing `i8` and `i32`, or `bool` and an integer, is a type error. (Widening and casts are future work.)
+Two operands of a binary operator must have the **exact same type**; an `=` / compound-assign RHS and a call argument must exactly match the target type — except for a *lone* literal, which takes the type of its position and is range-checked against it. Identifiers never silently widen or narrow. Mixing `i8` and `i32`, or `bool` and an integer, is a type error. (Implicit widening is future work — `TODO.md`. The one *explicit* conversion, `as`, is next.)
 
 **For arithmetic, bitwise, and shift operators, the expected type threads to the first operand when it stands alone.** This means `let x: i8 = 127 + 1` is a range error (128 does not fit `i8`), not a type error. The first operand becomes `i8`, the second inherits `i8`, the addition folds to `128i8`, and the range check fails. Similarly, `let x: i64 = 1 + 2` is now valid: the addition folds to `3i64`.
 
 **For comparison and logical operators, the expected type does NOT thread.** `1 < 2` compares two `i32` values and produces `bool`. `let b: bool = 1 < 2` is valid because the comparison result is `bool`, matching the position.
+
+## Casts {#casts}
+
+`x as T` is the **only** conversion in the language, and it is explicit: every one of the ten types — `i8` … `u64`, `bool`, `char` — casts to every other. Values never change type on their own; if one needs a different type, the source says so.
+
+The rule has one shape:
+
+- The value is **read in the type it already has**, and its two's-complement pattern is **wrapped into the target type** — the low bits, reinterpreted at the target's width. This is the same wrap arithmetic does, so a cast is a bit operation, never a range check.
+- Casting **to `bool`** is the nonzero test: every value but `0` is `true`. Casting **from `bool`** yields its value, `0` or `1`.
+- `char` takes part as its byte: `char` ↔ an integer behaves exactly like the same-width unsigned type (`u8`).
+
+```
+let a: i8 = 12888 as i8;        // 88   — 0x3258, low byte 0x58
+let b: u8 = -1 as u8;           // 255  — the wrap of -1
+let c: u64 = -1i32 as u64;      // 18446744073709551615
+let d: bool = 42 as bool;       // true — nonzero
+let e: i32 = true as i32;       // 1
+let f: char = 65 as char;       // 'A'
+```
+
+**A constant cast wraps exactly like a runtime one.** `200 as i8` folds to `-56`, `(-1) as u8` folds to `255`; there is no compile-error form of `as` for range. This is the deliberate carve-out from the rule under [`Constants`](#constants): arithmetic on constants is checked because the source named every operand and a result outgrowing the type is a mistake, while a cast *asks* for a new type and the answer is the wrap.
+
+The operand of `as` is parsed **without an expected type** — the target already says everything — so a lone literal there is an `i32` unless it carries a suffix: in `1 as u8` the `1` is an `i32` that then wraps, and `1u8 as u8` is a no-op on an already-`u8` value. A cast whose target is the type it already has is legal and does nothing.
+
+`as` binds tighter than every binary operator and looser than unary `-`/`!`/`~` (`expressions.md#precedence`): `x + 1 as i32` is `x + (1 as i32)`, `-x as i8` is `(-x) as i8`. To cast a sum, parenthesize it: `(x + 1) as i32`.
+
+A value of type `void` has no bits to convert — `f() as i32` where `f` returns nothing is a compile error.
+
 ## Constants {#constants}
 
-A **constant expression** is one the parser can evaluate while reading it: literals, unary `-` / `!` / `~`, arithmetic, and comparisons. It appears wherever a value is required — a `let` initializer, a global's initializer, an assignment RHS, a call argument. Reading a variable, or calling a function, is not constant (`expressions.md#typing-rules`).
+A **constant expression** is one the parser can evaluate while reading it: literals, unary `-` / `!` / `~`, arithmetic, comparisons, and `as` casts. It appears wherever a value is required — a `let` initializer, a global's initializer, an assignment RHS, a call argument. Reading a variable, or calling a function or a primitive, is not constant (`expressions.md#typing-rules`).
 
 A global's initializer *must* be a constant expression. A `let` initializer need not be, but whatever part of it is constant is still folded.
 
@@ -48,7 +76,7 @@ This is the one place where compile time and runtime differ on purpose, so it is
 - A **constant expression is a value the source names.** `let x: u8 = 255u8 + 255u8;` — both `255u8`s are written down, so the sum `510` is known now, and no `u8` holds it. Rejecting it costs nothing and catches a real mistake.
 - A **runtime expression is a rule about the machine.** `a + b` on two `u8` has to do *something* for every pair of values. Wrapping is the only total choice short of undefined behaviour, and undefined behaviour is ruled out (`language.md#semantics`).
 
-So: a constant that leaves its type is a **compile error**; the same operation on two variables **wraps**. Neither is a special case of the other.
+So: a constant that leaves its type is a **compile error**; the same operation on two variables **wraps**. Neither is a special case of the other. The one deliberate exception is `as` (`#casts`): a cast wraps by definition, constant or not, because the source is *asking* for a new type rather than a value outgrowing its own.
 
 ### The two states of a folded constant
 
@@ -59,9 +87,9 @@ A constant is evaluated exactly, as a number, in the type of its operands. It co
 | **A value of that type** | `1 + 2` → `3`, `1i64 << 40i64` → `2^40` | a value in the type it was folded in; the position has to be that type |
 | **In no type** | `4294967296u64 * 4294967296u64` = `2^64` | `too large for any type` — a compile error, never a wrapped number |
 
-The second state is the one that is easy to get wrong, because wrapping a value that is in no type produces a number that looks legitimate: `2^64` wraps to `0`, and `0` fits everything. A constant never wraps into an answer — that is the whole point of the split above.
+The second state is the one that is easy to get wrong, because wrapping a value that is in no type produces a number that looks legitimate: `2^64` wraps to `0`, and `0` fits everything. A constant never wraps into an answer — that is the whole point of the split above. (A cast is the exception that proves it: `as` is the one spelling that *means* wrap, so it has no "in no type" state — see `#casts`.)
 
-There is no third state and no placeholder. A literal's type is named by its suffix or by the position it fills, never held open, so `18446744073709551615u64` is a `u64` value and `18446744073709551615` is an `i32` literal that does not fit. The only ops that can leave the range are `+`, `-` and `*`, and the **negation** of `imin`; division by zero and `%` by zero are compile errors too. `<<` is *not* one of them: it is checked in the type it is folded in, and the shift count masks to that width first, so `1i64 << 66i64` is `1 << 2` = `4`, not an overflow.
+There is no third state and no placeholder. A literal's type is named by its suffix or by the position it fills, never held open, so `18446744073709551615u64` is a `u64` value and `18446744073709551615` is an `i32` literal that does not fit. The only ops that can leave the range are `+`, `-` and `*`, and the **negation** of `imin`; division by zero and `%` by zero are compile errors too. `as` is not among them: a cast always lands *in* its target type, by wrapping (`#casts`). `<<` is *not* one of them either: it is checked in the type it is folded in, and the shift count masks to that width first, so `1i64 << 66i64` is `1 << 2` = `4`, not an overflow.
 
 ### A comparison reads values, not patterns
 

@@ -1,0 +1,166 @@
+// The erax standard library (docs/std.md): ordinary erax, compiled with every
+// program. No globals, no `main`, no privileges — only primitives and functions
+// in the same language user code has.
+
+// Output: the number or the word only, no spacing around it — composition is
+// the caller's (docs/std.md). `print` has one declaration per type: the
+// integers widen through `as` into two cores by signedness, each recursing on
+// `/10` and writing one digit per step with `primitive print_char` —
+// `primitive print` ends its line, so it stays out of this. The digits are the
+// decimal the type reads: signed values print their sign, unsigned values never
+// have one.
+fn print(value: u64) {
+    if (value >= 10) {
+        print(value / 10);
+    }
+    primitive print_char((('0' as u64) + value % 10) as char);
+}
+
+// A signed value prints its sign, then its digits through the unsigned core.
+// i64min has no positive counterpart — `-imin` wraps back to `imin` — so it is
+// written out, once, as the digits after the sign.
+fn print(value: i64) {
+    if (value < 0) {
+        primitive print_char('-');
+        if (value == -9223372036854775808) {
+            print(9223372036854775808u64);
+            return;
+        }
+        value = -value;
+    }
+    print(value as u64);
+}
+
+// Every other width is its own declaration — overloads take no implicit
+// conversions — and hands its value to its signedness's core; `as` widens
+// without changing the digits it prints.
+fn print(value: i8) { print(value as i64); }
+fn print(value: i16) { print(value as i64); }
+fn print(value: i32) { print(value as i64); }
+fn print(value: u8) { print(value as u64); }
+fn print(value: u16) { print(value as u64); }
+fn print(value: u32) { print(value as u64); }
+
+fn print(value: bool) {
+    if (value) {
+        primitive print_char('t');
+        primitive print_char('r');
+        primitive print_char('u');
+        primitive print_char('e');
+    } else {
+        primitive print_char('f');
+        primitive print_char('a');
+        primitive print_char('l');
+        primitive print_char('s');
+        primitive print_char('e');
+    }
+}
+
+// A char prints as the byte it is; print() is the newline.
+fn print(value: char) { primitive print_char(value); }
+fn print() { primitive print_char('\n'); }
+
+fn put_space() { primitive print_char(' '); }
+fn put_newline() { primitive print_char('\n'); }
+
+// Char: ASCII classification and conversion. A `char` is a byte, so the ranges
+// compare as the unsigned values they are.
+fn is_digit(c: char): bool { return c >= '0' && c <= '9'; }
+fn is_upper(c: char): bool { return c >= 'A' && c <= 'Z'; }
+fn is_lower(c: char): bool { return c >= 'a' && c <= 'z'; }
+fn is_alpha(c: char): bool { return is_upper(c) || is_lower(c); }
+fn is_alnum(c: char): bool { return is_alpha(c) || is_digit(c); }
+
+// `to_digit` returns the digit's value, or -1 when `c` is not one: `as` takes
+// the byte apart, so the value is computed rather than written out.
+fn to_digit(c: char): i32 {
+    if (!is_digit(c)) {
+        return -1;
+    }
+    return (c as i32) - ('0' as i32);
+}
+
+fn to_upper(c: char): char {
+    if (is_lower(c)) {
+        return c - ('a' - 'A');
+    }
+    return c;
+}
+
+fn to_lower(c: char): char {
+    if (is_upper(c)) {
+        return c + ('a' - 'A');
+    }
+    return c;
+}
+
+// Math. Arithmetic wraps exactly as the language says (language.md#semantics).
+fn abs_i64(value: i64): i64 {
+    if (value < 0) {
+        return -value;
+    }
+    return value;
+}
+
+fn min_i64(a: i64, b: i64): i64 {
+    if (a < b) {
+        return a;
+    }
+    return b;
+}
+
+fn max_i64(a: i64, b: i64): i64 {
+    if (a > b) {
+        return a;
+    }
+    return b;
+}
+
+fn min_u64(a: u64, b: u64): u64 {
+    if (a < b) {
+        return a;
+    }
+    return b;
+}
+
+fn max_u64(a: u64, b: u64): u64 {
+    if (a > b) {
+        return a;
+    }
+    return b;
+}
+
+// Exponentiation by squaring; every multiplication is a wrapping `u64` one, so
+// `pow` is total: it answers the wrapped product for any inputs.
+fn pow(base: u64, exponent: u64): u64 {
+    let result: u64 = 1;
+    let factor: u64 = base;
+    let e: u64 = exponent;
+    while (e > 0) {
+        if (e % 2 == 1) {
+            result = result * factor;
+        }
+        e = e / 2;
+        factor = factor * factor;
+    }
+    return result;
+}
+
+fn gcd(a: u64, b: u64): u64 {
+    let x: u64 = a;
+    let y: u64 = b;
+    while (y != 0) {
+        let t: u64 = x % y;
+        x = y;
+        y = t;
+    }
+    return x;
+}
+
+// `assert` writes nothing of its own: a failed assertion is the abort code and
+// nothing else, so print context first if it should say something.
+fn assert(cond: bool) {
+    if (!cond) {
+        primitive abort();
+    }
+}

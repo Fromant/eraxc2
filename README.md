@@ -21,7 +21,7 @@ default. A flag only ever stops the pipeline earlier:
 
 | Command | What it does |
 | ------- | ------------ |
-| `.\build\eraxc.exe file.erx` | Parse, validate, and run: program `print` output and final globals on stdout, **exit code = the entrypoint's `i32` return** |
+| `.\build\eraxc.exe file.erx` | Parse, validate, and run: the program's stdout bytes and final globals on stdout, **exit code = the entrypoint's `i32` return** (or `exit`/`abort`'s code) |
 | `.\build\eraxc.exe --run file.erx` | The no-flag behavior, written out |
 | `.\build\eraxc.exe --jir file.erx` | Stop after lowering: print the validated JIR — what a backend executes |
 | `.\build\eraxc.exe --tokenize file.erx` | Stop after the lexer: print the token list |
@@ -92,7 +92,7 @@ global 0: i32 0x2                        # the final global state
 # exits 2
 ```
 
-A program with no globals and no `print` writes nothing of its own — globals plus exit code is still the whole result unless `print` is called, which is the one way a v0.1 program writes to stdout. Stdin works everywhere a file does, which is the fastest way to try a snippet:
+A program with no globals and no output writes nothing of its own — globals plus exit code is still the whole result unless it calls `primitive print` / `primitive print_char` (or a std function that does), which are the only ways a v0.1 program writes to stdout. Stdin works everywhere a file does, which is the fastest way to try a snippet:
 
 ```powershell
 'fn main(): i32 { return 7; }' | .\build\eraxc.exe   # exits 7
@@ -117,6 +117,7 @@ src/
     tokenizer/             Tokenizer, Token, SourceLocation, LexError
     parser/                ProgramParser: source -> JIR, no AST (SemType, Value, ParseContext)
   middleend/jir/           Type, Op, Operand, Cfg, Builder, constant folding, printing, Validator
+  primitives/              Primitives.{hpp,cpp}: the shared primitive catalog (print, print_char, read_char, exit, abort)
   interp/                  Interpreter: the reference executor (one cell array + frame pointer)
 docs/
   core/language.md         language contract: grammar, operators, reserved words, semantics
@@ -125,7 +126,11 @@ docs/
   core/statements.md       statements, functions, globals
   frontend/tokenizer.md    tokenizer contract
   middleend/JIR.md         the shared IR contract
+  primitive.md             the `primitive` keyword and the closed primitive catalog
+  std.md                   the standard library contract
 TODO.md                    roadmap, serialization & format versioning
+stdlib/
+  std.erx                  the standard library (pure erax, auto-imported before every program)
 tests/
   Tokenizer.test.cpp       lexer tests
   ParserTest.hpp           shared parser-test helpers (parse_ok / parse_error / ops_of)
@@ -135,6 +140,8 @@ tests/
   Parser.errors.test.cpp   rejection messages and error locations
   Jir.test.cpp             JIR types, builder, and folding
   Validator.test.cpp       the seven validator checks, one rule broken at a time
+  Primitives.test.cpp      the primitive catalog as the frontend, validator, and interpreter share it
+  Std.test.cpp             std.erx functions: signatures taken, output overloads, char and math helpers
   Interpreter.test.cpp     what programs do when they run, plus the examples/ corpus
 examples/                  .erx programs — the syntax vision and the conformance corpus
 main.cpp                   CLI: run a file or stdin by default; `--jir` / `--tokenize` stop the pipeline earlier
@@ -216,10 +223,13 @@ fn main(): i32 {
 - No Unicode identifiers.
 - Strings store raw escape text; `\"`-style unescaping happens with the parser.
 - Digit separators must sit between digits — `1_000` is fine, `1_` and `0x_1` are lexer errors.
-- The language is v1-incomplete on purpose: no `string`, no standard library, no float, no `?.`/member access, no
+- The language is v1-incomplete on purpose: no `string`, no float, no `?.`/member access, no
   `match`, no user types. The parser rejects them with a clear error rather than guessing.
-- One way to print: the builtin `print(a, b, …)` writes each value as the decimal its type reads, space-separated,
-  ending in one newline — no strings or formatting yet. `std.print` arrives with strings.
+- Two ways to print: `primitive print(a, b, …)` writes each value as the decimal its type reads, space-separated,
+  ending in one newline; `primitive print_char(c)` writes one byte. The standard library (`stdlib/std.erx`,
+  auto-imported before every program) builds on them — `print` is overloaded per type (`i8` … `u64`, `bool`, `char`,
+  and a zero-argument `print()` that writes one newline) and writes just the value with no spacing, composed with
+  `put_space`/`put_newline`. No strings or formatting yet — those arrive with `string`.
 - The interpreter bounds its own recursion and cell array (`Limits`, in `src/interp/Interpreter.hpp`) and reports
   `StackExhausted` rather than growing until the host gives out.
 
@@ -236,4 +246,4 @@ fn main(): i32 {
   folds constants with, so a folded answer and a computed one cannot drift apart.
 - **A cell is one `u64`.** A value is never held in a host type, so wrapping and narrowing are the IR's business:
   an `i32` cell is zero-extended, and `i32 -1` is `0xFFFFFFFF`.
-- **Shared test corpus.** Programs under `examples/` double as the conformance suite: same files, every backend, identical observable result — the bytes `print` wrote, final global state, and the entrypoint's return code. The builtin `print` is the only stdout in v0.1; the stdlib (strings, `std.print`, formatting) arrives later.
+- **Shared test corpus.** Programs under `examples/` double as the conformance suite: same files, every backend, identical observable result — the stdout bytes (`primitive print` / `print_char`, directly or through std), final global state, and the exit code (the entrypoint's return, or the code `exit`/`abort` gave). The primitives are the only stdout in v0.1; strings and `std.print` arrive later.

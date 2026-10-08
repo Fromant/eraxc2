@@ -7,6 +7,7 @@
 
 #include "ConstantRange.hpp"
 #include "middleend/jir/Fold.hpp"
+#include "primitives/Primitives.hpp"
 
 namespace erax::frontend {
 
@@ -18,6 +19,27 @@ namespace erax::frontend {
 
     ParseError at(std::string message, SourceLocation location) {
       return ParseError {std::move(message), location};
+    }
+
+    /// The source type a catalog signature type spells. The two enums list the
+    /// same types in the same order but alias nothing: the mapping is stated so
+    /// a catalog edit that forgets a type is a compile error here, not a silent
+    /// mismatch.
+    SemType sem_of(primitives::SigType type) noexcept {
+      switch (type) {
+        case primitives::SigType::Void: return SemType::Void;
+        case primitives::SigType::Bool: return SemType::Bool;
+        case primitives::SigType::Char: return SemType::Char;
+        case primitives::SigType::I8: return SemType::I8;
+        case primitives::SigType::U8: return SemType::U8;
+        case primitives::SigType::I16: return SemType::I16;
+        case primitives::SigType::U16: return SemType::U16;
+        case primitives::SigType::I32: return SemType::I32;
+        case primitives::SigType::U32: return SemType::U32;
+        case primitives::SigType::I64: return SemType::I64;
+        case primitives::SigType::U64: return SemType::U64;
+      }
+      return SemType::Void;
     }
 
     bool is_radix_letter(char c) noexcept {
@@ -186,7 +208,59 @@ namespace erax::frontend {
   }
 
   ExpressionParser::result ExpressionParser::multiplicative_expression(std::optional<SemType> expected) {
-    return binary_level(&ExpressionParser::unary_expression, expected, {"*", "/", "%"}, true);
+    return binary_level(&ExpressionParser::cast_expression, expected, {"*", "/", "%"}, true);
+  }
+
+  ExpressionParser::result ExpressionParser::cast_expression(std::optional<SemType> expected) {
+    // A cast's operand takes no expected type — the target says everything — so the
+    // position's type is dropped when an `as` follows the operand, and reaches a
+    // plain operand unchanged. `12888 as i8` reads `12888` as the `i32` it would be
+    // anywhere else and then wraps it, rather than being range-checked against `i8`.
+    const std::optional<SemType> operand_expected =
+        context().cursor.keyword_follows(Keyword::As) ? std::nullopt : expected;
+    result value = unary_expression(operand_expected);
+    if (!value)
+      return value;
+    while (context().cursor.at_keyword(Keyword::As)) {
+      const SourceLocation location = context().cursor.location();
+      context().cursor.take();
+      auto target = expect_type(context().cursor, "after 'as'");
+      if (!target)
+        return std::unexpected(target.error());
+      value = cast_to(*value, *target, location);
+      if (!value)
+        return value;
+    }
+    return value;
+  }
+
+  ExpressionParser::result ExpressionParser::cast_to(const Value& value, SemType target, SourceLocation location) {
+    if (value.type == SemType::Void) {
+      return std::unexpected(at("cannot cast a value of type void", location));
+    }
+    if (value.type == target)
+      return value;
+    // `bool` has no type of its own in the IR — it is an `i8` 0/1 cell — so a cast TO
+    // bool is the compare the machine already spells "nonzero" with, whatever integer
+    // (or char, or bool, handled above) sits on the left.
+    if (target == SemType::Bool) {
+      const Value zero {value.type, Operand::instant(lower(value.type), 0), ConstInt::of(0, lower(value.type))};
+      return apply(Op::CmpNe, SemType::Bool, value, zero, location);
+    }
+    const Type from = lower(value.type);
+    const Type to = lower(target);
+    // `char` and `u8` — and `bool` and `i8` — name one cell two ways: the bits are
+    // already the target's, so only the source-level type changes.
+    if (from == to)
+      return Value {target, value.operand, value.constant};
+    if (value.constant) {
+      const std::uint64_t bits = middleend::fold::convert(to, from, value.constant->bits);
+      const ConstInt constant = ConstInt::bits_of(bits, to);
+      return Value {target, Operand::instant(to, constant.bits), constant};
+    }
+    const std::uint64_t destination = context().builder.alloc(to);
+    context().builder.emit(Op::Cast, {Operand::vreg(to, destination), value.as_operand()});
+    return Value {target, Operand::vreg(to, destination), std::nullopt};
   }
 
   ExpressionParser::result ExpressionParser::binary_level(operand_level operand, std::optional<SemType> expected,
@@ -476,20 +550,26 @@ namespace erax::frontend {
   }
 
   ExpressionParser::result ExpressionParser::call(const std::string& name, SourceLocation location) {
-    const FunctionInfo* function = context().find_function(name);
-    if (!function) {
+    const std::vector<FunctionInfo>* candidates = context().find_functions(name);
+    if (candidates == nullptr) {
       return std::unexpected(at("call to undeclared function '" + name + "'", location));
     }
     if (const_mode_) {
       return std::unexpected(at("a constant expression may not call '" + name + "'", location));
     }
 
+    // One declaration types each argument the way it declares the parameter;
+    // several are an overload set, where every argument is typed on its own and
+    // matched against the candidates exactly, with no conversion in between.
+    const bool overloaded = candidates->size() > 1;
+    const FunctionInfo* function = overloaded ? nullptr : &(*candidates)[0];
+
     std::vector<Value> arguments;
     if (!context().cursor.at(TokenType::RParen)) {
       while (true) {
         // An argument past the last parameter has no type to take, so it is
         // left untyped and the count check below is what rejects it.
-        const std::optional<SemType> expected = arguments.size() < function->params.size() ?
+        const std::optional<SemType> expected = !overloaded && arguments.size() < function->params.size() ?
             std::optional<SemType> {function->params[arguments.size()]} :
             std::nullopt;
         auto argument = expression(expected);
@@ -506,7 +586,27 @@ namespace erax::frontend {
           break;
       }
     }
-    if (arguments.size() != function->params.size()) {
+    if (overloaded) {
+      std::vector<SemType> types;
+      types.reserve(arguments.size());
+      for (const Value& argument : arguments)
+        types.push_back(argument.type);
+      for (const FunctionInfo& candidate : *candidates) {
+        if (candidate.params == types) {
+          function = &candidate;
+          break;
+        }
+      }
+      if (function == nullptr) {
+        std::string listed;
+        for (const SemType type : types) {
+          if (!listed.empty())
+            listed += ", ";
+          listed.append(to_string(type));
+        }
+        return std::unexpected(at("no overload of '" + name + "' matches the arguments (" + listed + ")", location));
+      }
+    } else if (arguments.size() != function->params.size()) {
       return std::unexpected(at("'" + name + "' takes " + std::to_string(function->params.size()) + " arguments, but " +
                                     std::to_string(arguments.size()) + " were given",
                                 location));
@@ -529,22 +629,35 @@ namespace erax::frontend {
     return Value {function->return_type, Operand::vreg(return_type, destination), std::nullopt};
   }
 
-  ExpressionParser::result ExpressionParser::print_call(SourceLocation location) {
+  ExpressionParser::result ExpressionParser::primitive_call(const std::string& name, SourceLocation location) {
     if (const_mode_) {
-      return std::unexpected(at("a constant expression may not call 'print'", location));
+      return std::unexpected(at("a constant expression may not call a primitive", location));
+    }
+    const primitives::Signature* signature = primitives::by_name(name);
+    if (!signature) {
+      return std::unexpected(at("no primitive named '" + name + "'", location));
     }
 
     std::vector<Operand> args;
     if (!context().cursor.at(TokenType::RParen)) {
       while (true) {
-        // A printed value has no expected type to take, so it is left untyped —
-        // exactly as an argument past the last parameter is: the value's own type
-        // is what prints.
-        auto argument = expression(std::nullopt);
+        // A fixed parameter types its argument the way a call's does, so a lone
+        // literal takes the parameter's type; a variadic value has none to take
+        // and is left untyped, exactly as an argument past the last parameter is.
+        const std::optional<SemType> expected = args.size() < signature->param_count ?
+            std::optional<SemType> {sem_of(signature->params[args.size()])} :
+            std::nullopt;
+        auto argument = expression(expected);
         if (!argument)
           return argument;
         if (argument->type == SemType::Void) {
-          return std::unexpected(at("'print' cannot print a value of type void", location));
+          return std::unexpected(at("'" + name + "' cannot take a value of type void", location));
+        }
+        if (expected && argument->type != *expected) {
+          return std::unexpected(at("argument " + std::to_string(args.size() + 1) + " of '" + name + "' is " +
+                                        std::string {to_string(*expected)} + ", not " +
+                                        std::string {to_string(argument->type)},
+                                    location));
         }
         args.push_back(argument->as_operand());
         if (!context().cursor.match(TokenType::Comma))
@@ -552,13 +665,24 @@ namespace erax::frontend {
       }
     }
     if (context().cursor.take().type != TokenType::RParen) {
-      return std::unexpected(at("expected ')' after the arguments of 'print'", context().cursor.location()));
+      return std::unexpected(at("expected ')' after the arguments of '" + name + "'", context().cursor.location()));
+    }
+    if (!signature->variadic_values && args.size() != signature->param_count) {
+      return std::unexpected(at("'" + name + "' takes " + std::to_string(signature->param_count) + " arguments, but " +
+                                    std::to_string(args.size()) + " were given",
+                                location));
     }
 
-    context().builder.emit(Op::Print, std::move(args));
-    // `print` is an expression of type void, which is the one type a statement
-    // position accepts without complaint.
-    return Value {SemType::Void, Operand::empty(), std::nullopt};
+    // The result slot comes first: `EMPTY` when the primitive returns nothing,
+    // a fresh cell of its return type otherwise.
+    const Type return_type = primitives::lower(signature->return_type);
+    const std::uint64_t destination = return_type == Type::Void ? 0 : context().builder.alloc(return_type);
+    args.insert(args.begin(), return_type == Type::Void ? Operand::empty() : Operand::vreg(return_type, destination));
+    context().builder.emit(Op::Primitive, std::move(args), static_cast<std::uint32_t>(signature->id));
+
+    if (return_type == Type::Void)
+      return Value {SemType::Void, Operand::empty(), std::nullopt};
+    return Value {sem_of(signature->return_type), Operand::vreg(return_type, destination), std::nullopt};
   }
 
   ExpressionParser::result ExpressionParser::primary(std::optional<SemType> expected, bool negated) {
@@ -597,7 +721,7 @@ namespace erax::frontend {
       default: return std::unexpected(at("expected an expression", location));
     }
 
-    // An identifier is a name: a call, a local, or a global.
+    // An identifier is a name: a primitive call, a call, a local, or a global.
     const std::string name = token.text;
     const Keyword keyword = keyword_of(name);
     if (keyword == Keyword::True || keyword == Keyword::False) {
@@ -607,6 +731,28 @@ namespace erax::frontend {
       const std::int64_t value = keyword == Keyword::True ? 1 : 0;
       const ConstInt constant = ConstInt::of(value, Type::I8);
       return Value {SemType::Bool, Operand::instant(Type::I8, constant.bits), constant};
+    }
+    if (keyword == Keyword::Primitive) {
+      // `primitive name(…)` is the only thing the keyword introduces
+      // (`docs/primitive.md#calling`). A dot would be the start of a namespace,
+      // and v1 has none: a name is one identifier.
+      cursor.take();
+      if (cursor.at(TokenType::Dot)) {
+        return std::unexpected(at("'.' is not part of a name in v1", location));
+      }
+      if (!cursor.at(TokenType::Identifier)) {
+        return std::unexpected(at("expected a primitive name after 'primitive'", cursor.location()));
+      }
+      const Token callee = cursor.take();
+      if (cursor.at(TokenType::Dot)) {
+        return std::unexpected(at("'.' is not part of a name in v1", location));
+      }
+      if (!cursor.at(TokenType::LParen)) {
+        return std::unexpected(
+            at("expected '(' after primitive '" + std::string {callee.text} + "'", cursor.location()));
+      }
+      cursor.take();
+      return primitive_call(callee.text, location);
     }
     if (keyword != Keyword::None) {
       return std::unexpected(at("'" + name + "' is a reserved word", location));
@@ -618,24 +764,14 @@ namespace erax::frontend {
     if (cursor.at(TokenType::Dot)) {
       return std::unexpected(at("'.' is not part of a name in v1", location));
     }
-    if (name == "print") {
-      // No `fn print` may be declared, so the whole name is the builtin's: a call
-      // lowers to `PRINT`, and a bare `print` is the same error a function name
-      // that exists gets.
-      if (!cursor.at(TokenType::LParen)) {
-        return std::unexpected(at("'print' is a builtin function and can only be called", location));
-      }
-      cursor.take();
-      return print_call(location);
-    }
     if (cursor.at(TokenType::LParen)) {
-      if (context().find_function(name) == nullptr) {
+      if (context().find_functions(name) == nullptr) {
         return std::unexpected(at("call to undeclared function '" + name + "'", location));
       }
       cursor.take();
       return call(name, location);
     }
-    if (context().find_function(name) != nullptr) {
+    if (context().find_functions(name) != nullptr) {
       return std::unexpected(at("'" + name + "' is a function and can only be called", location));
     }
 

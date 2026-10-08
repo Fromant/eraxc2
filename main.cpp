@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
@@ -6,7 +7,9 @@
 #include <iterator>
 #include <optional>
 #include <string>
+#include <vector>
 
+#include "StdSource.hpp"
 #include "frontend/parser/ProgramParser.hpp"
 #include "frontend/tokenizer/Tokenizer.hpp"
 #include "interp/Interpreter.hpp"
@@ -60,6 +63,24 @@ namespace {
     std::cerr << "error: " << erax::interp::to_string(failure) << '\n';
     return EXIT_FAILURE;
   }
+
+  /// The program's own stdin, one byte at a time: `read_char` sees the stream the
+  /// driver was given, not a copy of the source. A byte is 0-255, and end of input
+  /// is -1 — the same contract a backend's stdin has to honor for the programs to
+  /// be comparable (`docs/primitive.md#read_char`).
+  ///
+  /// When the source itself came from stdin there is nothing left to read, and the
+  /// first `read_char` is an immediate end of input: the stream is one stream.
+  class StdinInput : public erax::interp::Input {
+public:
+    int read_byte() override {
+      char byte = 0;
+      std::cin.read(&byte, 1);
+      if (!std::cin)
+        return -1;
+      return static_cast<unsigned char>(byte);
+    }
+  };
 
   /// The program's whole observable result, printed as the driver sees it: the bytes
   /// the program itself wrote, then the final global state. The exit code is the
@@ -136,13 +157,28 @@ int main(int argc, char* argv[]) {
     return report(tokens.error());
 
   if (action == Action::Tokenize) {
+    // The lexer's view is the user's file alone: auto-import is a front-of-parse
+    // step, so what tokenization shows is what was written (docs/std.md).
     for (const Token& token : *tokens) {
       std::cout << to_string(token.type) << " '" << token.text << "' " << token.location.to_string() << '\n';
     }
     return EXIT_SUCCESS;
   }
 
-  auto program = ProgramParser {*tokens}.parse();
+  // Auto-import: std is parsed before the file it was given, so its declarations
+  // land in the same flat namespace and every program may call them (docs/std.md).
+  // Its tokens carry the name `std.erx`, so an error inside the library says so.
+  auto imported = Tokenizer {}.tokenize(erax::std_source, "std.erx");
+  if (!imported)
+    return report(imported.error());
+  std::vector<Token> all;
+  all.reserve(imported->size() + tokens->size());
+  // The trailing end-of-file of each half would stop the parser in the middle,
+  // so only std's copy goes; the user's ends the stream.
+  all.insert(all.end(), imported->begin(), std::prev(imported->end()));
+  all.insert(all.end(), tokens->begin(), tokens->end());
+
+  auto program = ProgramParser {all}.parse();
   if (!program)
     return report(program.error());
   // `JIR.md#validator`: the program is checked before anything is done with it,
@@ -156,7 +192,8 @@ int main(int argc, char* argv[]) {
     std::cout << erax::middleend::print(*program);
     return EXIT_SUCCESS;
   }
-  auto outcome = erax::interp::run(*program);
+  StdinInput input;
+  auto outcome = erax::interp::run(*program, {}, &input);
   if (!outcome)
     return report(outcome.error());
   return report(*outcome, *program);

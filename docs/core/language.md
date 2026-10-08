@@ -6,6 +6,8 @@ Source-level contract of the erax language: grammar, types, and semantics. The d
 - Types and literals: `types.md`.
 - Expressions and precedence: `expressions.md`.
 - Statements, functions, globals: `statements.md`.
+- Primitives — the backend-provided `primitive` calls: `docs/primitive.md`.
+- The standard library (auto-imported `stdlib/std.erx`): `docs/std.md`.
 - Lexing (tokens, trivia, literals' lexical shape) is specified in `docs/frontend/tokenizer.md`.
 - Lowering and runtime behavior of the machine level are in `docs/middleend/JIR.md`; the source contract here is the part the parser must enforce and can reject.
 - Roadmap and versioning live in `TODO.md`.
@@ -64,16 +66,18 @@ equality       = relational { ( "==" | "!=" ) relational } ;
 relational     = shift { ( "<" | "<=" | ">" | ">=" ) shift } ;
 shift          = additive { ( "<<" | ">>" ) additive } ;
 additive       = multiplicative { ( "+" | "-" ) multiplicative } ;
-multiplicative = unary { ( "*" | "/" | "%" ) unary } ;
+multiplicative = cast { ( "*" | "/" | "%" ) cast } ;
+cast           = unary { "as" type } ;
 unary          = ( "-" | "!" | "~" ) unary | postfix ;
 postfix        = primary | call ;
 call           = IDENT "(" [ expr { "," expr } ] ")" ;
-primary        = INT | CHAR | "true" | "false" | IDENT | "(" expr ")" ;
+primitive-call = "primitive" IDENT "(" [ expr { "," expr } ] ")" ;
+primary        = INT | CHAR | "true" | "false" | IDENT | primitive-call | "(" expr ")" ;
 
 lvalue         = IDENT ;
 const-expr     = expr limited to literals, the unary `-`/`!`/`~`, arithmetic and
-                 comparison operators, and references to globals declared earlier
-                 in the file;
+                 comparison operators, `as` casts, and references to globals
+                 declared earlier in the file;
 ```
 
 Notes:
@@ -83,10 +87,10 @@ Notes:
 - A call names its callee with a bare `IDENT` followed by `(`. A `.` after a name is a syntax error:
   v1 has no member access and no namespaces (`TODO.md` carries dot namespaces as future work).
 - `[` `]` lex but are not part of v1 (arrays are future work); using them is a syntax error.
-- `const-expr` is enforced additionally: it must be constant-foldable and contain no calls.
-- `print` is the one call not answered by a declaration: `primary` briefly pulls an `IDENT` named `print` aside and
-  only ever lets it through as `print "(" … ")"` — no callee lookup happens, any number of values (including none)
-  may be printed, and the result is `void` (see `expressions.md#typing-rules` and `statements.md#print`).
+- `const-expr` is enforced additionally: it must be constant-foldable and contain no calls (a `primitive` call is a call).
+- Every program is compiled with `stdlib/std.erx` parsed first (auto-import), so std's declarations are part of the program and need no import of their own (`docs/std.md`).
+- A `primitive-call` is answered by the built-in primitive catalog, never by a declaration: `primitive` + `IDENT` + `(` reaches exactly that primitive and nothing else (`docs/primitive.md#calling`). Primitives live in their own namespace — a plain `call` never resolves to one, and a function may share a primitive's name.
+- A `cast`'s right side is a `type`, not an expression: `x as i8 + 1` is `(x as i8) + 1` and `x + 1 as i32` is `x + (1 as i32)` (`expressions.md#precedence`). The conversion rules — which types may cast to which, and what wrapping means — are `types.md#casts`.
 
 ## Operator set
 
@@ -121,13 +125,15 @@ Every keyword is reserved: it cannot be used as an `IDENT` (declaration or refer
 | `break` | exit the nearest loop |
 | `continue` | next iteration of the nearest loop |
 | `return` | return from the current function |
+| `primitive` | call a backend primitive |
+| `as` | cast a value to another type |
 | `true` | `bool` constant |
 | `false` | `bool` constant |
 | `i8` `u8` `i16` `u16` `i32` `u32` `i64` `u64` `bool` `char` | type names |
 
 Type names, `true`, and `false` are reserved because they carry their meaning in type and literal position.
 
-`string`, `std`, `text`, … are ordinary identifiers, not reserved words: they may be used as names. Writing `string` in *type* position is a forward-looking error (see `types.md#literals`). Two names carry their meaning without being reserved: `main` is the entry point — a rule on the name, see `statements.md#functions` — and `print` is the builtin output function, also a rule on the name (see `statements.md#print`). Neither may be given a declaration of its own, and neither stops the tokenizer; a bare `print` in expression position is an error, however, because it can only ever be a call.
+`string`, `std`, `text`, … are ordinary identifiers, not reserved words: they may be used as names. Writing `string` in *type* position is a forward-looking error (see `types.md#literals`). One name carries its meaning without being reserved: `main` is the entry point — a rule on the name, see `statements.md#functions`. It may not be given a declaration of its own, and it does not stop the tokenizer.
 
 ## Semantics
 
@@ -155,4 +161,5 @@ The language lowers 1:1 to JIR:
 | `&&` `\|\|` `^^` | `AND` `OR` `XOR` on `bool` (both operands always evaluated) |
 | `if`/`while`/`do`/`for` | CFG edges + `Condition` |
 | function call | `CALL` |
-| `print(...)` | `PRINT` |
+| `primitive p(...)` | `PRIM` |
+| `x as T` | `CAST` — except a to-`bool` cast, which is a compare against `0` (JIR has no `bool` type) |

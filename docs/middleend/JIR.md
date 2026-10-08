@@ -12,6 +12,7 @@ global      = type , optional init cfg          ; empty init = zero-initialized
 function    = function id , return type , param types , frame size , cfg
 entrypoint  = function id                       ; zero params, returns i32
 command     = OP operand*                       ; args[0] is the result slot of ops that produce one
+             | "PRIM" primitive operand*        ; primitive = a catalog name; args[0] is the result slot
 ```
 
 A function's **frame size** is the number of cells its frame occupies — one more than its highest vreg id. All control flow between blocks lives on CFG edges; there are no jump commands.
@@ -35,7 +36,7 @@ Every operand is `(kind, type, value)` — self-describing; nothing is resolved 
 - A `VReg` id is an **offset within the current frame**, always `0 ≤ k < frame_size`.
 - A `Fn` operand carries the callee's return type; a `Global` operand carries the global's type.
 - An `Instant`'s value is the **raw bit pattern** of the cell it fills; its printed form is interpreted with the type's signedness (`i8 0xFF` prints as `i8 -1`).
-- The `EMPTY` sentinel is `(VReg, void, u64(-1))` — a phantom offset that names "no cell". It is legal only as the result slot of a `CALL`.
+- The `EMPTY` sentinel is `(VReg, void, u64(-1))` — a phantom offset that names "no cell". It is legal only as the result slot of a `CALL` or a `PRIM`.
 
 ## Types
 
@@ -61,7 +62,7 @@ Every operand is `(kind, type, value)` — self-describing; nothing is resolved 
 
 - One shape for every command: `OP arg0 arg1 …`. Roles come from the op table; an op that produces a result writes `args[0]` (a vreg, or for `MOV` also a global).
 - A function body (and a global initializer) is a **CFG**: nodes are ordered lists of commands; node `0` is the entry. Every node has **0 to 2 outgoing edges**:
-  - `0` — the block ends in `RET`;
+  - `0` — the block ends in `RET`, or in a terminating `PRIM` (`exit`/`abort`);
   - `1` — unconditional;
   - `2` — a branch: one edge carries a `Condition`, the other is the fallthrough.
 - A `Condition` is `(cmp, a, b)` with `cmp ∈ CMP_EQ…CMP_GE` — the same ops as the `CMP_*` commands, drawn from the one op table — e.g. "`x` is nonzero" is `(CMP_NE, x, 0)`. Execution follows the edge whose condition holds, else the fallthrough.
@@ -74,6 +75,14 @@ Every operand is `(kind, type, value)` — self-describing; nothing is resolved 
 | Op    | Shape      | Semantics                                                    |
 | ----- | ---------- | ------------------------------------------------------------ |
 | `MOV` | `MOV dst src` | `dst = src` (`src`: instant/vreg/global; `dst`: vreg/global). The only way to read or write a global. |
+
+### Conversions
+
+| Op     | Shape         | Semantics                                                    |
+| ------ | ------------- | ------------------------------------------------------------ |
+| `CAST` | `CAST dst src` | read `src` in **its** type, then keep the low bits of its two's-complement pattern at the width of **`dst`**'s type (wrap). The two operand types are the explicit ones on the operands: they may differ (that is the point) or be equal (a no-op). No `void` — `need_value` covers it. |
+
+A cast to the source's `bool` never reaches the IR as `CAST`: `bool` *is* `i8` here, so `CAST … i8` could not tell `x as i8` from `x as bool`. The parser lowers a to-`bool` cast to the compare the machine already spells nonzero with — `CMP_NE dst src 0` (the same shape [`!` uses](#comparisons)) — and a from-`bool` value is an ordinary `i8` 0/1 cell, so every other direction is a plain `CAST`.
 
 ### Integer arithmetic
 
@@ -108,7 +117,7 @@ Logical negation is `CMP_NE i8 $dst i8 $a i8 0`.
 | Op     | Shape                              | Semantics                                                  |
 | ------ | ---------------------------------- | ---------------------------------------------------------- |
 | `CALL` | `CALL dst &f a0 … an-1`            | call `f`, see [calls](#calls)                              |
-| `PRINT` | `PRINT a0 … an-1`                 | write each value's decimal to stdout, see [output](#output) |
+| `PRIM` | `PRIM p dst a0 … an-1`             | run primitive `p`, see [primitives](#primitives)           |
 | `RET`  | `RET src` / `RET`                  | return `src` (non-void) / nothing; a `RET` block has no edges |
 
 ## Calls
@@ -142,32 +151,34 @@ CALL EMPTY &log i32 $3                  ; EMPTY dst — no value comes back
 2. Each non-empty `init cfg` runs in declaration order (a normal CFG — zero params, globals pre-defined).
 3. The entrypoint runs; its `i32` return value is the process exit code.
 
-## Output
+## Primitives
 
-`PRINT a0 …` writes one line to the process's stdout: each operand as the decimal its type reads — signed for `i*`, unsigned for `u*` — operands joined by single spaces, the line ended with one newline. `PRINT` with no operands writes just the newline.
+`PRIM p dst a0 …` hands control to the backend-provided primitive named `p`. The catalog — names, ids, signatures, and the exact behaviour of every primitive — is the language-level contract in `docs/primitive.md`; this section is only how the instruction is shaped and checked.
 
-- `PRINT` has **no result slot**: every operand is a read, and the op takes any number of them (arity `0..∞`).
-- Any value type prints: `bool`/`char` print as the `i8`/`u8` cell they lower to.
-- The run's observable result now includes the bytes `PRINT` wrote, in order (see [execution model](#execution-model)). It is the one way a v1 program touches the world; strings and a formatted stdlib arrive later (`TODO.md`).
+- `p` is a name from the fixed catalog. The text form spells the name; the serialized form stores the primitive's **id** (catalog order, frozen with the format).
+- `args[0]` is the result slot: the `EMPTY` sentinel iff the primitive returns void, otherwise a vreg of its return type — the same rule as `CALL`. `args[1..]` are the arguments; their count and types must match the primitive's signature. The parser has already resolved lone literals to their parameter types, so the IR carries exact types and no rule about literals survives lowering.
+- `print` is the one variadic primitive: any number of value operands, none of them `void` (arity `0..∞`), `dst` `EMPTY` — every operand is a read.
+- `print` and `print_char` write to stdout; those bytes are part of the observable result ([execution model](#execution-model)). `exit` and `abort` terminate the run: a block ending in either has no outgoing edges, like a `RET` block.
+- `PRIM` is the one way a program touches the world; strings and formatted output arrive later (`TODO.md`).
 
 ## Runtime semantics
 
 Every value is defined in this contract or the program is rejected by the validator — there is no undefined behavior.
 
-- **Overflow wraps** (two's complement): `i64max + 1 = i64min`.
+- **Overflow wraps** (two's complement): `i64max + 1 = i64min`. `CAST` wraps the same way by definition — it always lands *in* the target's type, wide or narrow.
 - **Divide-by-zero = process death**; `iMIN / -1` dies too.
 - **Div/mod truncate toward zero**, signed and unsigned.
 - **Shift counts wrap to the operand width**: `count & (width-1)` — `i8`/`u8` → 3 bits, `i16`/`u16` → 4, `i32`/`u32` → 5, `i64`/`u64` → 6.
 - **Signedness**: signed for `i*`, unsigned for `u*` (comparisons, div/mod, `SAR`).
 - **Bool**: `i8` 0/1; a condition is always a `(cmp, a, b)` pair with C's "nonzero" rule.
-- **Determinism**: ordered IR, single-threaded. The same program has the same observable result (the bytes `PRINT` wrote, final global state, entrypoint return) on every backend.
+- **Determinism**: ordered IR, single-threaded. The same program has the same observable result (the bytes written to stdout, final global state, the exit code — the entrypoint's return or the one `exit`/`abort` gave) on every backend.
 
 ## Validator
 
 Runs on every `Program` before any backend sees it. A producer leaves the CFG canonical: it drops the blocks no edge can reach (the parser knows which source constructs cannot run) and never lets a path fall off the end of a function.
 
-1. **CFG**: entry block is 0; every block reachable; every edge's `from`/`to` valid; 0–2 outgoing edges per block; a two-edge block has exactly one conditional edge; no outgoing edges iff the block ends in `RET`, and a `RET` is that block's last command.
-2. **Commands**: arity and operand roles match the op table; operand types are the explicit ones on each operand; ops requiring same-type operands get them; no implicit conversions.
+1. **CFG**: entry block is 0; every block reachable; every edge's `from`/`to` valid; 0–2 outgoing edges per block; a two-edge block has exactly one conditional edge; no outgoing edges iff the block ends in a `RET` or a terminating `PRIM` (`exit`/`abort`), and that command is the block's last command.
+2. **Commands**: arity and operand roles match the op table; a `PRIM`'s name, result slot, and arguments match its catalog entry (signature, `EMPTY`-iff-void, `print`'s variadic values); operand types are the explicit ones on each operand; ops requiring same-type operands get them — `CAST` is the one op whose two operands differ on purpose; no implicit conversions.
 3. **Frames**: a function's frame is never empty and holds its params in `$0..n-1`; every vreg id `< frame_size`.
 4. **Definitions**: every vreg read has a reaching definition from entry (params and globals count as defined at entry); every vreg has one consistent type across all reads and writes.
 5. **Calls**: `args[1]` is a `Fn` operand naming a valid function — the one slot an `Fn` may sit in; `args[2..]` count and types match the callee's params and are all defined; `args[0]` is the `EMPTY` sentinel iff the callee returns void — a sentinel anywhere else is an error, and a non-void `dst` matches the callee's return type.
@@ -187,8 +198,8 @@ Signedness is in the op's name, so the operands have to agree: `SDIV`, `SMOD`, `
 The interpreter of `src/interp/` is this contract made executable, and its results are what a backend is compared against. It is where the parts of the contract that leave room to the executor are pinned down:
 
 - **A cell is one `u64`** holding the raw bit pattern of whatever type the IR gave it. A value is never held in a host type, so narrowing and wrapping are the IR's business: an `i32` cell is zero-extended, and `i32 -1` is `0xFFFFFFFF`.
-- **Arithmetic is the same code that folds constants** (`fold::binary`/`fold::unary`), so a folded answer and a computed one cannot drift apart.
+- **Arithmetic is the same code that folds constants** (`fold::binary`/`fold::unary`, and `fold::convert` for `CAST`), so a folded answer and a computed one cannot drift apart.
 - **A global initializer is a frame of its own** — the IR gives it no `frame_size`, so the machine gives it the cells its vregs name, and it runs before the entrypoint exists.
 - **The machine validates first.** Every operand is read through an index, so a program the validator rejects never reaches the cell array; it comes back as a list of errors instead.
 - **Limits are the machine's, not the IR's.** A frame's size and how deep recursion may go are not in this contract, so an executor has to say where it stops rather than asking the host for memory it may not have. The reference interpreter counts both the entrypoint's own frame and the initializers', and reports three ways to stop: a stack deeper than the limit, a frame wider than the whole cell array, and a cell array with no room left.
-- **What a run leaves behind is the observable result** and nothing else: the bytes `PRINT` wrote, final global state (one cell per global, in declaration order), and the entrypoint's `i32` return. A trap keeps the call stack it happened on, because the IR is nameless and the stack is the only way to say where a program was.
+- **What a run leaves behind is the observable result** and nothing else: the bytes the output primitives wrote to stdout (in order), final global state (one cell per global, in declaration order), and the exit code — the entrypoint's `i32` return, or the code `exit`/`abort` gave. A trap keeps the call stack it happened on, because the IR is nameless and the stack is the only way to say where a program was.

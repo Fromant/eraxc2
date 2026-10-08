@@ -76,6 +76,20 @@ TEST_CASE("a name is bound once, and the message says which kind") {
         "'f' is already declared");
   // `main` is no exception, so two entrypoints are a duplicate and not a feature.
   CHECK(parse_error("fn main(): i32 { return 0; } fn main(): i32 { return 0; }") == "'main' is already declared");
+  // A new parameter list under one name is an overload set, not a repeat: it
+  // declares. Only the same parameters twice are the same declaration twice.
+  parse_ok("fn f(x: i32): i32 { return x; } fn f(x: bool): i32 { return 1; } fn main(): i32 { return f(1); }");
+  parse_ok("fn f(): i32 { return 1; } fn f(x: i32): i32 { return x; } fn main(): i32 { return f(); }");
+  CHECK(parse_error("fn f(x: i32): i32 { return x; } fn f(x: i32): i32 { return x; } fn main(): i32 { return 0; }") ==
+        "'f' is already declared");
+  // The return type is not part of a function's identity, so it never separates two.
+  CHECK(parse_error("fn f(): i32 { return 1; } fn f(): bool { return true; } fn main(): i32 { return 0; }") ==
+        "'f' is already declared");
+  // A global shares the flat namespace with every member of a set, either order.
+  CHECK(parse_error("fn f(x: i32): i32 { return x; } let f: i32 = 1; fn main(): i32 { return 0; }") ==
+        "'f' is already declared");
+  CHECK(parse_error("let f: i32 = 1; fn f(x: i32): i32 { return x; } fn main(): i32 { return 0; }") ==
+        "'f' is already declared");
   // Shadowing an *outer* local is allowed, so the message only ever fires for the
   // scope the name was introduced in.
   parse_ok("fn main(): i32 { let x: i32 = 1; if (true) { let x: i32 = 2; } return x; }");
@@ -92,6 +106,16 @@ TEST_CASE("a call names a function that exists, or says which one it wanted") {
   CHECK(parse_error("fn main(): i32 { let f: i32 = 0; return f(); }") == "call to undeclared function 'f'");
   // A function that is declared is callable, so this is about the signature instead.
   CHECK(parse_error("fn f(): i32 { return 0; } fn main(): i32 { return f(1); }") != "call to undeclared function 'f'");
+  // An overload set with no candidate for these arguments says which ones it saw,
+  // in the order they were written.
+  CHECK(parse_error("fn f(x: i32): i32 { return x; } fn f(x: bool): i32 { return 1; }"
+                    " fn main(): i32 { return f(true, 1); }") ==
+        "no overload of 'f' matches the arguments (bool, i32)");
+  CHECK(parse_error("fn f(x: i32): i32 { return x; } fn f(a: i32, b: i32): i32 { return a; }"
+                    " fn main(): i32 { return f(); }") == "no overload of 'f' matches the arguments ()");
+  CHECK(parse_error("fn f(x: i32): i32 { return x; } fn f(x: i64): i32 { return 1; }"
+                    " fn main(): i32 { let b: bool = true; return f(b); }") ==
+        "no overload of 'f' matches the arguments (bool)");
 }
 
 TEST_CASE("a for header is init; test; step, and each part says what it wanted") {
@@ -221,11 +245,28 @@ TEST_CASE("a comment is not code") {
 }
 
 TEST_CASE("every keyword is a reserved word, not a name") {
-  for (const char* word : {"let",   "fn", "if", "else", "while", "do",  "for", "break", "continue", "return", "true",
-                           "false", "i8", "u8", "i16",  "u16",   "i32", "u32", "i64",   "u64",      "bool",   "char"}) {
+  for (const char* word :
+       {"let", "fn", "if",  "else", "while", "do",  "for", "break", "continue", "return", "true",      "false",
+        "i8",  "u8", "i16", "u16",  "i32",   "u32", "i64", "u64",   "bool",     "char",   "primitive", "as"}) {
     const std::string source = "fn main(): i32 { let " + std::string {word} + ": i32 = 1; return 0; }";
     CHECK(parse_error(source) == "'" + std::string {word} + "' is a reserved word");
   }
   // A keyword in a call position is still a reserved word.
   CHECK(parse_error("fn main(): i32 { return for(1); }") == "'for' is a reserved word");
+}
+
+TEST_CASE("a cast takes a type and a value that has bits") {
+  // The type comes right after `as`, and anything else is said at the `as`.
+  CHECK(parse_error("fn main(): i32 { let x: i32 = 5 as; return 0; }") == "expected a type after 'as'");
+  CHECK(parse_error("fn main(): i32 { let x: i32 = 5 as nope; return 0; }") == "expected a type after 'as'");
+  CHECK(parse_error("fn main(): i32 { let x: i32 = 5 as string; return 0; }") == "string is not supported yet");
+  // Nothing comes out of a void call: there are no bits to convert.
+  CHECK(parse_error("fn f() { } fn main(): i32 { let x: i32 = f() as i32; return 0; }") ==
+        "cannot cast a value of type void");
+  // The cast is the conversion, so the result is the target's type and the
+  // position still has to match it — no second conversion on the way in.
+  CHECK(parse_error("fn main(): i32 { let x: u64 = 5 as u8; return 0; }") != "");
+  // `as` names a type after itself and nothing else: not a name, not a type.
+  CHECK(parse_error("fn main(): i32 { let as: i32 = 1; return 0; }") == "'as' is a reserved word");
+  CHECK(parse_error("fn main(): i32 { let x: as = 1; return 0; }") == "expected a type");
 }

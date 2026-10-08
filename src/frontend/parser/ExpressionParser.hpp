@@ -45,6 +45,7 @@ private:
     result shift_expression(std::optional<SemType> expected);
     result additive_expression(std::optional<SemType> expected);
     result multiplicative_expression(std::optional<SemType> expected);
+    result cast_expression(std::optional<SemType> expected);
     result unary_expression(std::optional<SemType> expected);
     result primary(std::optional<SemType> expected, bool negated = false);
 
@@ -65,6 +66,12 @@ private:
     /// Applies a JIR unary op, folding when the operand is a constant.
     result apply_unary(middleend::Op op, SemType type, const Value& operand, SourceLocation location);
 
+    /// One `as target` of a cast chain: converts \p value's type to \p target,
+    /// wrapping (`docs/core/types.md#casts`). Same type both ways changes nothing;
+    /// a to-`bool` cast is the nonzero compare rather than a `CAST`, since `bool`
+    /// is an `i8` in the IR.
+    result cast_to(const Value& value, SemType target, SourceLocation location);
+
     /// Reads an integer literal, typed by \p expected or by its own suffix. A lone
     /// literal takes the type of the position it fills; a literal inside an operator
     /// does not, and is an `i32` unless it says otherwise.
@@ -77,9 +84,10 @@ private:
     /// A call of \p name with the arguments at the cursor.
     result call(const std::string& name, SourceLocation location);
 
-    /// A call of the builtin `print`, whose arguments are any values and whose
-    /// result is void: `print(1, 2)` writes `1 2\n`, `print()` only a newline.
-    result print_call(SourceLocation location);
+    /// A `primitive name(…)` call: \p name is looked up in the closed catalog
+    /// (`docs/primitive.md#catalog`), the arguments are checked against its
+    /// signature, and it lowers to one `PRIM` carrying the primitive's id.
+    result primitive_call(const std::string& name, SourceLocation location);
 
     ParseContext& context() noexcept {
       return *context_;

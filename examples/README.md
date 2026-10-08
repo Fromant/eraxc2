@@ -8,7 +8,7 @@ These small programs show what erax looks like today (v1). They only use feature
 - `fib.erx` -- A recursive function. `CALL dst &f a0…` has `args[0]` = result slot, `args[1]` = callee, `args[2..]` = arguments.
 - `folded_test.erx` -- A `while (true)` whose test is constant is still a loop; only the `if (i > 3)` branch remains.
 - `types.erx` -- All types in one place (`i8`–`u64`, `bool`, `char`). The boundary values show why the two widest need a suffix: `i64min` is written as `-9223372036854775807i64 - 1i64` and `u64max` as `18446744073709551615u64`, because a bare literal is an `i32` unless the position says otherwise (`types.md#literals`).
-- `print.erx` -- The builtin `print`: values print as the decimal their type reads, separated by single spaces and ended by one newline.
+- `print.erx` -- `primitive print`: values print as the decimal their type reads, separated by single spaces and ended by one newline.
 - `helloworld.erx` -- An aspirational example that uses `string` and `std.print`. Those are not in v1, so it is expected to fail lowering at the moment.
 
 To see the lowered JIR for any of these:
