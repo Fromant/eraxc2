@@ -67,6 +67,23 @@ file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/generated/StdSource.hpp"
     "}  // namespace erax\n")
 target_include_directories(eraxc PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated")
 
+# `stdlib/std.test.erx`, the std self-test, embedded the same way: the test
+# that checks the suite runs the checked-in copy and only that copy.
+file(READ "${CMAKE_SOURCE_DIR}/stdlib/std.test.erx" ERAX_STD_TEST_SOURCE)
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/stdlib/std.test.erx")
+file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/generated/StdTestSource.hpp"
+    "#pragma once\n"
+    "\n"
+    "#include <string_view>\n"
+    "\n"
+    "namespace erax {\n"
+    "\n"
+    "  /// stdlib/std.test.erx as it stands in the source tree, embedded so the\n"
+    "  /// interpreter test runs the checked-in copy (docs/std.md).\n"
+    "  inline constexpr std::string_view std_test_source = R\"ERAX(${ERAX_STD_TEST_SOURCE})ERAX\";\n"
+    "\n"
+    "}  // namespace erax\n")
+
 if(ERAX_BUILD_TESTS)
     enable_testing()
     add_subdirectory(tests)

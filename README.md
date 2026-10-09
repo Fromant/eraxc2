@@ -131,6 +131,7 @@ docs/
 TODO.md                    roadmap, serialization & format versioning
 stdlib/
   std.erx                  the standard library (pure erax, auto-imported before every program)
+  std.test.erx             the std self-test: plain checks and a tally, returns the failure count
 tests/
   Tokenizer.test.cpp       lexer tests
   ParserTest.hpp           shared parser-test helpers (parse_ok / parse_error / ops_of)

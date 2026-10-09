@@ -1,0 +1,68 @@
+// The std self-test (docs/std.md): ordinary erax asserts against the checked-in
+// library, so it runs wherever the compiler runs. No framework and no pretty
+// printing — two counters and a tally. `main` returns the number of failed
+// checks, so the exit code is 0 exactly when the whole suite passed. The
+// interpreter test pins the tally against the harness's own count.
+let checks: i32 = 0;
+let failed: i32 = 0;
+
+fn check(cond: bool) {
+    checks = checks + 1;
+    if (!cond) {
+        failed = failed + 1;
+    }
+}
+
+fn main(): i32 {
+    // Char: classification and conversion in one line each.
+    check(is_digit('5'));
+    check(!is_digit('x'));
+    check(is_alpha('z'));
+    check(!is_alpha('0'));
+    check(is_alnum('7'));
+    check(!is_alnum('-'));
+    check(is_upper('Q'));
+    check(!is_upper('q'));
+    check(is_lower('q'));
+    check(!is_lower('Q'));
+    check(to_digit('7') == 7);
+    check(to_digit('0') == 0);
+    check(to_digit('x') == -1);
+    check(to_upper('q') == 'Q');
+    check(to_upper('3') == '3');
+    check(to_lower('W') == 'w');
+    check(to_lower('4') == '4');
+    // Math: values the doc calls out, one check each.
+    check(abs(-99) == 99);
+    check(abs(4) == 4);
+    check(min(3, -2) == -2);
+    check(max(3, -2) == 3);
+    check(min(3u64, 2u64) == 2u64);
+    check(max(3u64, 2u64) == 3u64);
+    check(pow(2, 10) == 1024);
+    check(pow(10, 0) == 1);
+    check(pow(0, 0) == 1);
+    check(pow(2, 64) == 0);
+    check(pow(3, 5) == 243);
+    check(gcd(48, 18) == 6);
+    check(gcd(0, 0) == 0);
+    check(gcd(7, 0) == 7);
+    // Output: one representative of each way of writing, so running the suite
+    // by hand shows the numbers and the words.
+    print(-42);
+    print(' ');
+    print(9223372036854775807i64);
+    print(' ');
+    print(18446744073709551615u64);
+    print(' ');
+    print(true);
+    print(' ');
+    print('A');
+    print('\n');
+    // The tally, then the suite's exit code is the failure count.
+    print(checks);
+    primitive print_char(' ');
+    print(failed);
+    print();
+    return failed;
+}

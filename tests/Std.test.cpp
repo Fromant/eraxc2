@@ -4,6 +4,7 @@
 #include <vector>
 
 #include "StdSource.hpp"
+#include "StdTestSource.hpp"
 #include "frontend/parser/ProgramParser.hpp"
 #include "frontend/tokenizer/Tokenizer.hpp"
 #include "interp/Interpreter.hpp"
@@ -30,6 +31,21 @@ namespace {
 
   std::expected<Outcome, erax::interp::Failure> run_with_std(std::string_view source) {
     auto program = parse_with_std(source);
+    REQUIRE(program.has_value());
+    return erax::interp::run(*program);
+  }
+
+  /// Lowers std plus the checked-in std.test.erx, mirroring parse_with_std's
+  /// concatenation: std's tokens first, the self-test's, one parse.
+  std::expected<Outcome, erax::interp::Failure> run_std_test_suite() {
+    auto imported = Tokenizer {}.tokenize(erax::std_source, "std.erx");
+    REQUIRE(imported.has_value());
+    auto tests = Tokenizer {}.tokenize(erax::std_test_source, "std.test.erx");
+    REQUIRE(tests.has_value());
+    std::vector<erax::frontend::Token> all;
+    all.insert(all.end(), imported->begin(), std::prev(imported->end()));
+    all.insert(all.end(), tests->begin(), tests->end());
+    auto program = ProgramParser {all}.parse();
     REQUIRE(program.has_value());
     return erax::interp::run(*program);
   }
@@ -140,4 +156,15 @@ TEST_CASE("std has no privileges: user code composes the same way") {
         "1 true\n");
   // And std functions call each other — is_alnum is is_alpha || is_digit.
   CHECK(run_with_std("fn main(): i32 { print(is_alnum('a')); return 0; }")->output == "true");
+}
+
+TEST_CASE("std.test.erx runs to a zero-failure tally") {
+  // The self-test is ordinary erax, so the interpreter runs it like any
+  // program: `main` returns the failed count — 0 here — and the tally line
+  // state says checks <checks> then <failed>. The pinned count is 31, so a
+  // dropped check below changes this test.
+  const auto outcome = run_std_test_suite();
+  REQUIRE(outcome.has_value());
+  CHECK(outcome->code == 0);
+  CHECK(outcome->output == "-42 9223372036854775807 18446744073709551615 true A\n31 0\n");
 }

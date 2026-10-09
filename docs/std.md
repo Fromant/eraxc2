@@ -4,6 +4,8 @@
 
 The source of truth is `stdlib/std.erx` itself; it is embedded in the compiler at build time, so compiling never depends on files next to the source.
 
+Alongside it, `stdlib/std.test.erx` is the **std self-test**: ordinary erax, no harness past two counters — `check(cond)` bumps a `checks` counter and a `failed` counter, `main` runs one assertion per behavior, prints the tally, and *returns* the failure count, so the exit code is 0 exactly when the suite passed. It runs anywhere the compiler runs, and the interpreter test suite lowers the checked-in copy (embedded like std itself) and pins its output and exit code.
+
 ## Rules
 
 - **std's names follow the ordinary name rules.** std's functions land in the same flat namespace as the user's (v1 has no namespaces), and std is parsed first. A template reserves its name for exactly one template — declaring a second is the ordinary duplicate-declaration error (`statements.md#templates`). A *concrete* declaration is a new parameter list: it joins the name rather than clashing — so `fn print(x: i32, y: i32)` and even `fn print(x: i32)` coexist with the `print` template — and only a repeated signature clashes (`statements.md#functions`).
