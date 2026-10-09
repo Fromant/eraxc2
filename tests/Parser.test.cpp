@@ -361,6 +361,35 @@ TEST_CASE("a template's declaration rules are enforced") {
                     " fn main(): i32 { f<u8>(1); return 0; }") != "");
 }
 
+TEST_CASE("a template's type list only closes on well-formed bounds") {
+  // The grammar around `extends` and `>` rejects each broken shape with its own
+  // message, before any deduction is involved.
+  CHECK(parse_error("fn f<T extends & Ordered>(x: T): T { return x; } fn main(): i32 { return 0; }") ==
+        "expected a capability after 'extends'");
+  CHECK(parse_error("fn f<T extends Ordered & Ordered>(x: T): T { return x; } fn main(): i32 { return 0; }") ==
+        "capability 'Ordered' is listed twice");
+  CHECK(parse_error("fn f< & Ordered>(x: i32): i32 { return x; } fn main(): i32 { return 0; }") ==
+        "expected an identifier");
+  // Without a comma or `>`, the next token cannot open the parameter list.
+  CHECK(parse_error("fn f<T extends Ordered(x: T): T { return x; } fn main(): i32 { return 0; }") == "expected '>'");
+  // The template's type list does not excuse the parameter list `)`.
+  CHECK(parse_error("fn f<T extends Ordered>(x: T { return x; } fn main(): i32 { return 0; }") == "expected ')'");
+}
+
+TEST_CASE("a template body is checked once per instantiation, not before") {
+  // An empty body's missing return is an instantiation error, not a
+  // declaration error: the declaration parses, and the call's deduction names
+  // it before the body is checked.
+  CHECK(parse_error("fn f<T extends Ordered>(x: T): T { } fn main(): i32 { f(3); return 0; }") ==
+        "control reaches the end of 'f', which returns i32");
+  // What is valid in the abstract can fail against a concrete type — `x - 1i32`
+  // narrows the literal to a `u8` that does not fit — and the error surfaces
+  // when the instantiation is lowered, in a later loop of the same pass.
+  CHECK(parse_error(
+            "fn sub<T extends Arithmetic>(x: T): T { return x - 1i32; } fn main(): i32 { sub(3u8); return 0; }") ==
+        "'1i32' does not fit u8");
+}
+
 TEST_CASE("primitive is a call to the catalog of the same name") {
   // One statement lowers to exactly one `PRIM print`: an `EMPTY` result slot,
   // then the printed values in order. The id is the catalog's (`primitive.md`).
