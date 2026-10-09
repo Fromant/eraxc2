@@ -41,13 +41,15 @@ public:
 
 private:
     /// A function's name, its parameters, and its return type — everything a
-    /// call needs before the function itself is parsed.
+    /// call needs before the function itself is parsed. A non-empty `type_params`
+    /// makes it a template, whose parameter and return types may name them.
     struct Signature {
       std::string name;
       SourceLocation location;
+      std::vector<TypeParam> type_params;
       std::vector<std::string> param_names;
-      std::vector<SemType> params;
-      SemType return_type = SemType::Void;
+      std::vector<TemplateType> params;
+      TemplateType return_type;
     };
 
     /// Whether control can reach the end of a statement or a block. A block's end
@@ -80,6 +82,10 @@ private:
     step declare_function(TokenCursor& cursor);
     step global();
     step function();
+    /// Parses one deduced instantiation's body into an ordinary function, with its
+    /// type parameters standing for \p inst's type arguments. Called after the item
+    /// pass, once per instantiation that a call requested.
+    step instantiate_function(const Instantiation& inst);
 
     static std::expected<Signature, ParseError> signature(TokenCursor& cursor);
     /// Skips a `{ … }` body, brace for brace.

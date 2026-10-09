@@ -84,6 +84,11 @@ private:
     /// A call of \p name with the arguments at the cursor.
     result call(const std::string& name, SourceLocation location);
 
+    /// Deduces the template's type arguments from the argument types read so far,
+    /// or returns the first error the deduction meets.
+    std::optional<ParseError> deduce(const TemplateInfo* tmpl, const std::vector<SemType>& types,
+                                     SourceLocation location, std::vector<SemType>& type_args) const;
+
     /// A `primitive name(…)` call: \p name is looked up in the closed catalog
     /// (`docs/primitive.md#catalog`), the arguments are checked against its
     /// signature, and it lowers to one `PRIM` carrying the primitive's id.

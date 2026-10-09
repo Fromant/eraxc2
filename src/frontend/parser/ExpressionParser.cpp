@@ -224,7 +224,8 @@ namespace erax::frontend {
     while (context().cursor.at_keyword(Keyword::As)) {
       const SourceLocation location = context().cursor.location();
       context().cursor.take();
-      auto target = expect_type(context().cursor, "after 'as'");
+      // The target may name a type parameter of the enclosing instantiation.
+      auto target = context().read_type(context().cursor, "after 'as'");
       if (!target)
         return std::unexpected(target.error());
       value = cast_to(*value, *target, location);
@@ -551,26 +552,28 @@ namespace erax::frontend {
 
   ExpressionParser::result ExpressionParser::call(const std::string& name, SourceLocation location) {
     const std::vector<FunctionInfo>* candidates = context().find_functions(name);
-    if (candidates == nullptr) {
+    const TemplateInfo* tmpl = context().find_template(name);
+    if (candidates == nullptr && tmpl == nullptr) {
       return std::unexpected(at("call to undeclared function '" + name + "'", location));
     }
     if (const_mode_) {
       return std::unexpected(at("a constant expression may not call '" + name + "'", location));
     }
 
-    // One declaration types each argument the way it declares the parameter;
-    // several are an overload set, where every argument is typed on its own and
-    // matched against the candidates exactly, with no conversion in between.
-    const bool overloaded = candidates->size() > 1;
-    const FunctionInfo* function = overloaded ? nullptr : &(*candidates)[0];
+    // One concrete declaration types each argument the way it declares the
+    // parameter. Several declarations are an overload set, and a template deduces
+    // its type arguments — in both of those every argument is typed on its own
+    // (a lone literal is `i32`), with no conversion in between.
+    const bool contextual = candidates != nullptr && candidates->size() == 1 && tmpl == nullptr;
+    const FunctionInfo* primary = contextual ? &(*candidates)[0] : nullptr;
 
     std::vector<Value> arguments;
     if (!context().cursor.at(TokenType::RParen)) {
       while (true) {
         // An argument past the last parameter has no type to take, so it is
         // left untyped and the count check below is what rejects it.
-        const std::optional<SemType> expected = !overloaded && arguments.size() < function->params.size() ?
-            std::optional<SemType> {function->params[arguments.size()]} :
+        const std::optional<SemType> expected = contextual && arguments.size() < primary->params.size() ?
+            std::optional<SemType> {primary->params[arguments.size()]} :
             std::nullopt;
         auto argument = expression(expected);
         if (!argument)
@@ -586,18 +589,38 @@ namespace erax::frontend {
           break;
       }
     }
-    if (overloaded) {
-      std::vector<SemType> types;
-      types.reserve(arguments.size());
-      for (const Value& argument : arguments)
-        types.push_back(argument.type);
+    std::vector<SemType> types;
+    types.reserve(arguments.size());
+    for (const Value& argument : arguments)
+      types.push_back(argument.type);
+
+    // An exact concrete match beats a template: `print('x')` is the concrete
+    // `print(char)`, not an instantiation.
+    const FunctionInfo* function = nullptr;
+    if (candidates != nullptr) {
       for (const FunctionInfo& candidate : *candidates) {
         if (candidate.params == types) {
           function = &candidate;
           break;
         }
       }
-      if (function == nullptr) {
+    }
+    // No concrete declaration took the arguments: either deduce the template's
+    // type arguments, or report why none of the declarations match.
+    std::vector<SemType> type_args;
+    bool deduced = false;
+    if (function == nullptr && tmpl != nullptr) {
+      std::optional<ParseError> deduction_error = deduce(tmpl, types, location, type_args);
+      if (deduction_error) {
+        if (candidates == nullptr || candidates->size() == 1) {
+          return std::unexpected(*deduction_error);
+        }
+      } else {
+        deduced = true;
+      }
+    }
+    if (function == nullptr && !deduced) {
+      if (candidates != nullptr && candidates->size() > 1) {
         std::string listed;
         for (const SemType type : types) {
           if (!listed.empty())
@@ -606,27 +629,94 @@ namespace erax::frontend {
         }
         return std::unexpected(at("no overload of '" + name + "' matches the arguments (" + listed + ")", location));
       }
-    } else if (arguments.size() != function->params.size()) {
-      return std::unexpected(at("'" + name + "' takes " + std::to_string(function->params.size()) + " arguments, but " +
-                                    std::to_string(arguments.size()) + " were given",
-                                location));
+      if (candidates != nullptr) {
+        // The single concrete declaration's argument errors were already reported
+        // where the arguments were read; what remains is the count.
+        function = &(*candidates)[0];
+        if (arguments.size() != function->params.size()) {
+          return std::unexpected(at("'" + name + "' takes " + std::to_string(function->params.size()) +
+                                        " arguments, but " + std::to_string(arguments.size()) + " were given",
+                                    location));
+        }
+      }
     }
     if (context().cursor.take().type != TokenType::RParen) {
       return std::unexpected(at("expected ')' after the arguments of '" + name + "'", context().cursor.location()));
     }
 
-    const Type return_type = lower(function->return_type);
-    const std::uint64_t destination = return_type == Type::Void ? 0 : context().builder.alloc(return_type);
+    // A template call names the instantiation it deduced, which the item pass will
+    // turn into a function of its own before the program ships.
+    SemType return_type;
+    std::size_t callee = 0;
+    if (deduced) {
+      return_type = tmpl->return_type.param >= 0 ? type_args[static_cast<std::size_t>(tmpl->return_type.param)] :
+                                                   tmpl->return_type.type;
+      const auto instantiated = context().instantiate(name, type_args, location);
+      if (!instantiated)
+        return std::unexpected(instantiated.error());
+      callee = *instantiated;
+    } else {
+      return_type = function->return_type;
+      callee = function->id;
+    }
+    const Type lowered = lower(return_type);
+    const std::uint64_t destination = lowered == Type::Void ? 0 : context().builder.alloc(lowered);
     std::vector<Operand> args;
-    args.push_back(return_type == Type::Void ? Operand::empty() : Operand::vreg(return_type, destination));
-    args.push_back(Operand::function(return_type, function->id));
+    args.push_back(lowered == Type::Void ? Operand::empty() : Operand::vreg(lowered, destination));
+    args.push_back(Operand::function(lowered, callee));
     for (const Value& argument : arguments)
       args.push_back(argument.as_operand());
     context().builder.emit(Op::Call, std::move(args));
 
-    if (return_type == Type::Void)
+    if (lowered == Type::Void)
       return Value {SemType::Void, Operand::empty(), std::nullopt};
-    return Value {function->return_type, Operand::vreg(return_type, destination), std::nullopt};
+    return Value {return_type, Operand::vreg(lowered, destination), std::nullopt};
+  }
+
+  /// Deduces the template \p tmpl's type arguments from argument types \p types,
+  /// or returns the first error the deduction meets. A concrete parameter demands
+  /// its type exactly; a type parameter binds the argument's type, all its
+  /// occurrences agreeing, and must satisfy the parameter's capability bounds.
+  std::optional<ParseError> ExpressionParser::deduce(const TemplateInfo* tmpl, const std::vector<SemType>& types,
+                                                     SourceLocation location, std::vector<SemType>& type_args) const {
+    if (types.size() != tmpl->params.size()) {
+      return ParseError {"'" + tmpl->name + "' takes " + std::to_string(tmpl->params.size()) + " arguments, but " +
+                             std::to_string(types.size()) + " were given",
+                         location};
+    }
+    type_args.assign(tmpl->type_params.size(), SemType::Void);
+    std::vector<bool> bound(tmpl->type_params.size(), false);
+    for (std::size_t index = 0; index < types.size(); ++index) {
+      const TemplateType& param = tmpl->params[index];
+      if (param.param >= 0) {
+        const std::size_t slot = static_cast<std::size_t>(param.param);
+        if (bound[slot] && type_args[slot] != types[index]) {
+          return ParseError {"cannot deduce '" + tmpl->type_params[slot].name + "' of '" + tmpl->name +
+                                 "': the arguments give " + std::string {to_string(type_args[slot])} + " and " +
+                                 std::string {to_string(types[index])},
+                             location};
+        }
+        type_args[slot] = types[index];
+        bound[slot] = true;
+      } else if (types[index] != param.type) {
+        return ParseError {"argument " + std::to_string(index + 1) + " of '" + tmpl->name + "' is " +
+                               std::string {to_string(param.type)} + ", not " + std::string {to_string(types[index])},
+                           location};
+      }
+    }
+    for (std::size_t slot = 0; slot < tmpl->type_params.size(); ++slot) {
+      if (!bound[slot])
+        continue;
+      for (const Capability capability : tmpl->type_params[slot].bounds) {
+        if (!satisfies(type_args[slot], capability)) {
+          return ParseError {std::string {to_string(type_args[slot])} + " does not satisfy " +
+                                 std::string {to_string(capability)} + " (required by '" +
+                                 tmpl->type_params[slot].name + "' of '" + tmpl->name + "')",
+                             location};
+        }
+      }
+    }
+    return std::nullopt;
   }
 
   ExpressionParser::result ExpressionParser::primitive_call(const std::string& name, SourceLocation location) {
@@ -765,13 +855,13 @@ namespace erax::frontend {
       return std::unexpected(at("'.' is not part of a name in v1", location));
     }
     if (cursor.at(TokenType::LParen)) {
-      if (context().find_functions(name) == nullptr) {
+      if (context().find_functions(name) == nullptr && context().find_template(name) == nullptr) {
         return std::unexpected(at("call to undeclared function '" + name + "'", location));
       }
       cursor.take();
       return call(name, location);
     }
-    if (context().find_functions(name) != nullptr) {
+    if (context().find_functions(name) != nullptr || context().find_template(name) != nullptr) {
       return std::unexpected(at("'" + name + "' is a function and can only be called", location));
     }
 

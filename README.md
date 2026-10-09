@@ -141,7 +141,7 @@ tests/
   Jir.test.cpp             JIR types, builder, and folding
   Validator.test.cpp       the seven validator checks, one rule broken at a time
   Primitives.test.cpp      the primitive catalog as the frontend, validator, and interpreter share it
-  Std.test.cpp             std.erx functions: signatures taken, output overloads, char and math helpers
+  Std.test.cpp             std.erx functions: name rules, output templates, char and math helpers
   Interpreter.test.cpp     what programs do when they run, plus the examples/ corpus
 examples/                  .erx programs — the syntax vision and the conformance corpus
 main.cpp                   CLI: run a file or stdin by default; `--jir` / `--tokenize` stop the pipeline earlier
@@ -228,8 +228,8 @@ fn main(): i32 {
 - Two ways to print: `primitive print(a, b, …)` writes each value as the decimal its type reads, space-separated,
   ending in one newline; `primitive print_char(c)` writes one byte. The standard library (`stdlib/std.erx`,
   auto-imported before every program) builds on them — `print` is overloaded per type (`i8` … `u64`, `bool`, `char`,
-  and a zero-argument `print()` that writes one newline) and writes just the value with no spacing, composed with
-  `put_space`/`put_newline`. No strings or formatting yet — those arrive with `string`.
+  and a zero-argument `print()` that writes one newline) and writes just the value with no spacing; compose
+  separators with `print(' ')` / `print('\n')`. No strings or formatting yet — those arrive with `string`.
 - The interpreter bounds its own recursion and cell array (`Limits`, in `src/interp/Interpreter.hpp`) and reports
   `StackExhausted` rather than growing until the host gives out.
 

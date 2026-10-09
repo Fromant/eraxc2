@@ -45,12 +45,64 @@ namespace erax::frontend {
     Char,
     Primitive,
     As,
+    Extends,
   };
 
   Keyword keyword_of(std::string_view text) noexcept;
   std::string_view to_string(Keyword keyword) noexcept;
   /// The type a type keyword names; every other keyword is not a type.
   std::optional<SemType> type_of(Keyword keyword) noexcept;
+
+  /// A capability: a named set of operators a type supports, the closed vocabulary
+  /// a template's type parameters are bounded by (`docs/core/types.md#capabilities`).
+  enum class Capability {
+    Ordered,
+    Negatable,
+    Arithmetic
+  };
+
+  std::string_view to_string(Capability capability) noexcept;
+  /// The capability a bound names, or nothing when the name is not one.
+  std::optional<Capability> capability_of(std::string_view text) noexcept;
+  /// Whether a type structurally satisfies a capability — no declaration, just the
+  /// operator rules already in place.
+  bool satisfies(SemType type, Capability capability) noexcept;
+
+  /// One type parameter of a template: its name and the capabilities it promises.
+  struct TypeParam {
+    std::string name;
+    std::vector<Capability> bounds;
+  };
+
+  /// A type as written in a template signature: a concrete type, or one of the
+  /// template's type parameters (identified by its index in `type_params`).
+  struct TemplateType {
+    SemType type = SemType::Void;
+    int param = -1;
+  };
+
+  /// A `fn name<T …>(…)` declaration (`docs/core/statements.md#templates`). Its body
+  /// is not parsed where it is written: `body_index` is the `{` that opens it, and
+  /// the body is parsed once per deduced instantiation.
+  struct TemplateInfo {
+    std::string name;
+    SourceLocation location;
+    std::vector<TypeParam> type_params;
+    std::vector<std::string> param_names;
+    std::vector<TemplateType> params;
+    TemplateType return_type;
+    std::size_t body_index = 0;
+  };
+
+  /// One template instantiation a call requested, keyed by name and deduced type
+  /// arguments. `id` is the function's index in the program (source functions come
+  /// first, instantiations after); `generated` says whether its body has been parsed.
+  struct Instantiation {
+    std::size_t id = 0;
+    std::string name;
+    std::vector<SemType> type_args;
+    bool generated = false;
+  };
 
   /// Every error carries a message and a position, the shape `LexError` has, and
   /// the parser returns them the same all-or-nothing way the tokenizer does.
@@ -79,6 +131,11 @@ public:
 
     std::size_t index() const noexcept {
       return index_;
+    }
+    /// Moves the cursor to \p index: a template's body is parsed by seeking to the
+    /// `{` that opens it.
+    void seek(std::size_t index) noexcept {
+      index_ = index;
     }
     bool at_end() const noexcept {
       return current().type == TokenType::EndOfFile;
@@ -227,6 +284,9 @@ public:
     /// Every declaration of \p name — one entry, or several forming an overload
     /// set — or null when the name has none.
     const std::vector<FunctionInfo>* find_functions(const std::string& name) const noexcept;
+    /// The template \p name carries, or null when it carries none (a name carries
+    /// at most one, `docs/core/statements.md#templates`).
+    const TemplateInfo* find_template(const std::string& name) const noexcept;
     /// The declaration of \p name whose parameters are exactly \p params: how a
     /// duplicate signature is detected and how the two passes agree on an id.
     const FunctionInfo* find_function(const std::string& name, const std::vector<SemType>& params) const noexcept;
@@ -238,8 +298,39 @@ public:
     std::size_t declare_global(const std::string& name, GlobalInfo info);
     /// Adds a function, numbering it in declaration order.
     std::size_t declare_function(const std::string& name, FunctionInfo info);
+    /// Records the one template \p name may carry.
+    void declare_template(const std::string& name, TemplateInfo info);
     /// Declares a local in the innermost scope, failing if the name is taken.
     std::expected<void, ParseError> declare_local(const std::string& name, LocalInfo info);
+
+    /// The id of the instantiation of \p name for \p type_args, registering it if
+    /// this is its first call. The id is the program function it will become: source
+    /// functions keep the ids the declaration pass gave them, and instantiations are
+    /// numbered after them in the order they are first requested.
+    std::expected<std::size_t, ParseError> instantiate(const std::string& name, const std::vector<SemType>& type_args,
+                                                       SourceLocation location);
+    /// Every instantiation requested so far; a body may be parsed later, in the
+    /// order the vector lists.
+    std::vector<Instantiation>& instantiations() noexcept {
+      return instantiations_;
+    }
+    const std::vector<Instantiation>& instantiations() const noexcept {
+      return instantiations_;
+    }
+
+    /// Sets the type-parameter substitution active while an instantiation's body is
+    /// parsed: a `let` or a cast naming a type parameter reads the deduced type.
+    void set_type_substitution(std::unordered_map<std::string, SemType> substitution);
+    void clear_type_substitution() noexcept {
+      type_substitution_.clear();
+    }
+    /// The type at the cursor, resolving a type-parameter name through the active
+    /// substitution before falling back to a concrete type name.
+    std::expected<SemType, ParseError> read_type(TokenCursor& cursor, std::string_view context = {}) const;
+
+    /// A chain of instantiations demanding new types forever is a compile-time
+    /// error (`docs/core/statements.md#templates`); this bounds the set.
+    static constexpr std::size_t max_instantiations = 1024;
 
     void push_scope();
     void pop_scope();
@@ -298,6 +389,13 @@ public:
 private:
     std::unordered_map<std::string, GlobalInfo> globals_;
     std::unordered_map<std::string, std::vector<FunctionInfo>> functions_;
+    std::unordered_map<std::string, TemplateInfo> templates_;
+    std::vector<Instantiation> instantiations_;
+    /// The instantiation key (name plus its type arguments) to its index in
+    /// `instantiations_`, so a second call with the same types reuses the first.
+    std::unordered_map<std::string, std::size_t> instantiation_ids_;
+    /// The active type-parameter substitution, empty outside an instantiation body.
+    std::unordered_map<std::string, SemType> type_substitution_;
     std::vector<Scope> scopes_;
     std::vector<LoopTargets> loops_;
   };

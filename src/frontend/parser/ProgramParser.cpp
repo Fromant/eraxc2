@@ -1,8 +1,11 @@
 #include "ProgramParser.hpp"
 
+#include <algorithm>
 #include <cstddef>
+#include <ranges>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -65,6 +68,29 @@ namespace erax::frontend {
       return false;
     }
 
+    /// A type in a function signature: a type keyword, a type parameter of the
+    /// enclosing template, or a note that `string` has no type yet.
+    std::expected<TemplateType, ParseError> expect_signature_type(TokenCursor& cursor,
+                                                                  const std::vector<TypeParam>& type_params) {
+      if (cursor.at(TokenType::Identifier)) {
+        const std::string& text = cursor.current().text;
+        if (const std::optional<SemType> type = type_of(keyword_of(text)); type) {
+          cursor.take();
+          return TemplateType {*type, -1};
+        }
+        for (std::size_t index = 0; index < type_params.size(); ++index) {
+          if (type_params[index].name == text) {
+            cursor.take();
+            return TemplateType {SemType::Void, static_cast<int>(index)};
+          }
+        }
+        if (text == "string") {
+          return std::unexpected(ParseError {"string is not supported yet", cursor.location()});
+        }
+      }
+      return std::unexpected(ParseError {"expected a type", cursor.location()});
+    }
+
   }  // namespace
 
   ProgramParser::ProgramParser(const std::vector<Token>& tokens) : context_(tokens), expressions_(context_) {}
@@ -89,6 +115,21 @@ namespace erax::frontend {
       if (!item)
         return std::unexpected(item.error());
     }
+
+    // A call above may have deduced a template's type arguments; each such
+    // instantiation is a function of its own, parsed now, one per entry — but a
+    // body can request further instantiations, hence the check on the running size
+    // rather than a snapshot.
+    for (std::size_t index = 0; index < context_.instantiations().size(); ++index) {
+      if (context_.instantiations()[index].generated)
+        continue;
+      const Instantiation inst = context_.instantiations()[index];
+      if (auto parsed = instantiate_function(inst); !parsed) {
+        return std::unexpected(parsed.error());
+      }
+      context_.instantiations()[index].generated = true;
+    }
+
     if (!has_entrypoint_) {
       return std::unexpected(ParseError {"the program must declare 'fn main(): i32'", context_.cursor.location()});
     }
@@ -121,6 +162,48 @@ namespace erax::frontend {
     signature.name = *name;
     signature.location = start;
 
+    // `<T, U extends Ordered & Negatable>` makes the declaration a template; the
+    // names are bound here and may be used as types in the parameter list below.
+    if (cursor.at_op("<")) {
+      cursor.take();
+      while (true) {
+        auto param = expect_identifier(cursor);
+        if (!param)
+          return std::unexpected(param.error());
+        for (const TypeParam& existing : signature.type_params) {
+          if (existing.name == *param) {
+            return std::unexpected(ParseError {"type parameter '" + *param + "' is declared twice", cursor.location()});
+          }
+        }
+        TypeParam type_param;
+        type_param.name = *param;
+        if (cursor.at_keyword(Keyword::Extends)) {
+          cursor.take();
+          while (true) {
+            if (!cursor.at(TokenType::Identifier)) {
+              return std::unexpected(ParseError {"expected a capability after 'extends'", cursor.location()});
+            }
+            const std::string capability = cursor.current().text;
+            const std::optional<Capability> known = capability_of(capability);
+            if (!known)
+              return std::unexpected(ParseError {"'" + capability + "' is not a capability", cursor.location()});
+            if (std::ranges::find(type_param.bounds, *known) != type_param.bounds.end()) {
+              return std::unexpected(ParseError {"capability '" + capability + "' is listed twice", cursor.location()});
+            }
+            type_param.bounds.push_back(*known);
+            cursor.take();
+            if (!cursor.match_op("&"))
+              break;
+          }
+        }
+        signature.type_params.push_back(std::move(type_param));
+        if (!cursor.match(TokenType::Comma))
+          break;
+      }
+      if (auto close = expect_op(cursor, ">"); !close)
+        return std::unexpected(close.error());
+    }
+
     if (auto open = expect(cursor, TokenType::LParen); !open) {
       return std::unexpected(open.error());
     }
@@ -132,7 +215,7 @@ namespace erax::frontend {
         if (auto colon = expect(cursor, TokenType::Colon); !colon) {
           return std::unexpected(colon.error());
         }
-        auto type = expect_type(cursor);
+        auto type = expect_signature_type(cursor, signature.type_params);
         if (!type)
           return std::unexpected(type.error());
         signature.param_names.push_back(*param);
@@ -145,7 +228,7 @@ namespace erax::frontend {
       return std::unexpected(close.error());
     }
     if (cursor.match(TokenType::Colon)) {
-      auto type = expect_type(cursor);
+      auto type = expect_signature_type(cursor, signature.type_params);
       if (!type)
         return std::unexpected(type.error());
       signature.return_type = *type;
@@ -188,7 +271,8 @@ namespace erax::frontend {
     if (auto equals = expect_op(cursor, "="); !equals) {
       return std::unexpected(equals.error());
     }
-    if (context_.find_global(*name) || context_.find_functions(*name) != nullptr) {
+    if (context_.find_global(*name) || context_.find_functions(*name) != nullptr ||
+        context_.find_template(*name) != nullptr) {
       return std::unexpected(ParseError {"'" + *name + "' is already declared", start});
     }
     // The id is assigned here, before the value: a function declared above a
@@ -210,18 +294,64 @@ namespace erax::frontend {
     if (context_.find_global(found.name)) {
       return std::unexpected(ParseError {"'" + found.name + "' is already declared", found.location});
     }
+
+    if (!found.type_params.empty()) {
+      // A template is not an overload; it is recorded beside the concrete
+      // declarations and instantiated per call.
+      if (found.name == "main") {
+        return std::unexpected(ParseError {"the entry point must be 'fn main(): i32'", found.location});
+      }
+      if (context_.find_template(found.name) != nullptr) {
+        return std::unexpected(ParseError {"'" + found.name + "' is already declared", found.location});
+      }
+      // Deduction works from the parameter types, so a type parameter that never
+      // appears in one has nothing to bind it (`docs/core/statements.md#templates`).
+      for (std::size_t index = 0; index < found.type_params.size(); ++index) {
+        bool used = false;
+        for (const TemplateType& param : found.params) {
+          if (param.param == static_cast<int>(index))
+            used = true;
+        }
+        if (!used) {
+          return std::unexpected(ParseError {
+              "type parameter '" + found.type_params[index].name + "' of '" + found.name + "' is not in the parameters",
+              found.location});
+        }
+      }
+      TemplateInfo info;
+      info.name = found.name;
+      info.location = found.location;
+      info.type_params = found.type_params;
+      info.param_names = found.param_names;
+      info.params = found.params;
+      info.return_type = found.return_type;
+      // The cursor sits on the `{` that opens the body; the body is parsed once per
+      // instantiation, so only its position is kept.
+      info.body_index = cursor.index();
+      context_.declare_template(found.name, std::move(info));
+      if (auto body = skip_body(cursor); !body) {
+        return std::unexpected(body.error());
+      }
+      return {};
+    }
+
+    std::vector<SemType> params;
+    params.reserve(found.params.size());
+    for (const TemplateType& param : found.params)
+      params.push_back(param.type);
+
     // A new parameter list under the same name joins the overload set; the same
     // parameters twice are the same declaration written twice.
-    if (context_.find_function(found.name, found.params) != nullptr) {
+    if (context_.find_function(found.name, params) != nullptr) {
       return std::unexpected(ParseError {"'" + found.name + "' is already declared", found.location});
     }
     if (found.name == "main") {
-      if (!found.params.empty() || found.return_type != SemType::I32) {
+      if (!params.empty() || found.return_type.type != SemType::I32) {
         return std::unexpected(ParseError {"the entry point must be 'fn main(): i32'", found.location});
       }
       has_entrypoint_ = true;
     }
-    context_.declare_function(found.name, FunctionInfo {found.params, found.return_type, 0});
+    context_.declare_function(found.name, FunctionInfo {params, found.return_type.type, 0});
     if (auto body = skip_body(cursor); !body) {
       return std::unexpected(body.error());
     }
@@ -293,20 +423,30 @@ namespace erax::frontend {
     if (!parsed)
       return std::unexpected(parsed.error());
     const Signature& found = *parsed;
-    const FunctionInfo* recorded = context_.find_function(found.name, found.params);
 
+    // A template declares no function of its own here: its body is parsed once per
+    // deduced instantiation, when the item pass is done (`instantiate_function`).
+    if (!found.type_params.empty()) {
+      return skip_body(cursor);
+    }
+
+    std::vector<SemType> param_types;
     std::vector<Type> params;
+    param_types.reserve(found.params.size());
     params.reserve(found.params.size());
-    for (const SemType param : found.params)
-      params.push_back(lower(param));
+    for (const TemplateType& param : found.params) {
+      param_types.push_back(param.type);
+      params.push_back(lower(param.type));
+    }
+    const FunctionInfo* recorded = context_.find_function(found.name, param_types);
 
     current_function_ = found.name;
-    current_return_type_ = found.return_type;
+    current_return_type_ = found.return_type.type;
     context_.reset_frame(params);
     context_.push_scope();
-    for (std::size_t index = 0; index < found.params.size(); ++index) {
+    for (std::size_t index = 0; index < param_types.size(); ++index) {
       if (auto declared = context_.declare_local(
-              found.param_names[index], LocalInfo {params[index], found.params[index], index, true, found.location});
+              found.param_names[index], LocalInfo {params[index], param_types[index], index, true, found.location});
           !declared) {
         return std::unexpected(declared.error());
       }
@@ -316,9 +456,9 @@ namespace erax::frontend {
     if (!body)
       return std::unexpected(body.error());
     if (body->falls_through) {
-      if (found.return_type != SemType::Void) {
+      if (found.return_type.type != SemType::Void) {
         return std::unexpected(ParseError {
-            "control reaches the end of '" + found.name + "', which returns " + type_name(found.return_type),
+            "control reaches the end of '" + found.name + "', which returns " + type_name(found.return_type.type),
             found.location});
       }
       if (!context_.builder.terminated())
@@ -332,7 +472,7 @@ namespace erax::frontend {
 
     middleend::Function lowered;
     lowered.params = params;
-    lowered.return_type = lower(found.return_type);
+    lowered.return_type = lower(found.return_type.type);
     lowered.frame_size = context_.builder.frame_size();
     lowered.cfg = context_.builder.take();
     const std::size_t id = program_.functions.size();
@@ -344,6 +484,80 @@ namespace erax::frontend {
       // they hand out have to agree.
       return std::unexpected(ParseError {"internal error: '" + found.name + "' changed id", found.location});
     }
+    return {};
+  }
+
+  ProgramParser::step ProgramParser::instantiate_function(const Instantiation& inst) {
+    const TemplateInfo* tmpl = context_.find_template(inst.name);
+    if (tmpl == nullptr) {
+      return std::unexpected(
+          ParseError {"internal error: no template '" + inst.name + "' to instantiate", SourceLocation {}});
+    }
+
+    // Substitute the deduced type arguments into the signature.
+    std::unordered_map<std::string, SemType> substitution;
+    std::vector<SemType> param_types;
+    std::vector<Type> params;
+    param_types.reserve(tmpl->params.size());
+    params.reserve(tmpl->params.size());
+    const auto resolve = [&inst](const TemplateType& type) {
+      return type.param >= 0 ? inst.type_args[static_cast<std::size_t>(type.param)] : type.type;
+    };
+    for (const TemplateType& param : tmpl->params) {
+      param_types.push_back(resolve(param));
+      params.push_back(lower(param_types.back()));
+    }
+    const SemType return_type = resolve(tmpl->return_type);
+    for (std::size_t index = 0; index < tmpl->type_params.size(); ++index)
+      substitution.emplace(tmpl->type_params[index].name, inst.type_args[index]);
+
+    // Reposition the cursor at the template's `{` so its body parses as an ordinary
+    // function body, with the type parameters resolved through the substitution.
+    const std::size_t saved = context_.cursor.index();
+    context_.cursor.seek(tmpl->body_index);
+    context_.set_type_substitution(std::move(substitution));
+
+    current_function_ = tmpl->name;
+    current_return_type_ = return_type;
+    context_.reset_frame(params);
+    context_.push_scope();
+    for (std::size_t index = 0; index < tmpl->param_names.size(); ++index) {
+      if (auto declared = context_.declare_local(
+              tmpl->param_names[index], LocalInfo {params[index], param_types[index], index, true, tmpl->location});
+          !declared) {
+        context_.clear_type_substitution();
+        return std::unexpected(declared.error());
+      }
+    }
+
+    auto body = block();
+    context_.clear_type_substitution();
+    if (!body)
+      return std::unexpected(body.error());
+    if (body->falls_through) {
+      if (return_type != SemType::Void) {
+        return std::unexpected(
+            ParseError {"control reaches the end of '" + tmpl->name + "', which returns " + type_name(return_type),
+                        tmpl->location});
+      }
+      if (!context_.builder.terminated())
+        context_.builder.emit(Op::Ret, {});
+    }
+    context_.pop_scope();
+    context_.builder.prune();
+
+    middleend::Function lowered;
+    lowered.params = params;
+    lowered.return_type = lower(return_type);
+    lowered.frame_size = context_.builder.frame_size();
+    lowered.cfg = context_.builder.take();
+    const std::size_t id = program_.functions.size();
+    if (id != inst.id) {
+      return std::unexpected(
+          ParseError {"internal error: instantiation '" + tmpl->name + "' changed id", tmpl->location});
+    }
+    program_.functions.push_back(std::move(lowered));
+    context_.cursor.seek(saved);
     return {};
   }
 
@@ -361,7 +575,7 @@ namespace erax::frontend {
     if (auto colon = expect(cursor, TokenType::Colon); !colon) {
       return std::unexpected(colon.error());
     }
-    auto type = expect_type(cursor);
+    auto type = context_.read_type(cursor);
     if (!type)
       return std::unexpected(type.error());
 

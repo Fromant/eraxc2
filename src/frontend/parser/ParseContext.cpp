@@ -39,6 +39,7 @@ namespace erax::frontend {
         {"char", Keyword::Char},
         {"primitive", Keyword::Primitive},
         {"as", Keyword::As},
+        {"extends", Keyword::Extends},
     };
 
     std::string expected_text(TokenType type) {
@@ -95,6 +96,37 @@ namespace erax::frontend {
       case Keyword::U64: return SemType::U64;
       default: return std::nullopt;
     }
+  }
+
+  std::string_view to_string(Capability capability) noexcept {
+    switch (capability) {
+      case Capability::Ordered: return "Ordered";
+      case Capability::Negatable: return "Negatable";
+      case Capability::Arithmetic: return "Arithmetic";
+    }
+    return "<capability>";
+  }
+
+  std::optional<Capability> capability_of(std::string_view text) noexcept {
+    if (text == "Ordered")
+      return Capability::Ordered;
+    if (text == "Negatable")
+      return Capability::Negatable;
+    if (text == "Arithmetic")
+      return Capability::Arithmetic;
+    return std::nullopt;
+  }
+
+  bool satisfies(SemType type, Capability capability) noexcept {
+    switch (capability) {
+      // `Ordered` (`< <= > >=`) and `Arithmetic` (`+ - * / %`) accept the integers
+      // and `char`, which is exactly the set `is_integer` names; `bool` is neither.
+      case Capability::Ordered:
+      case Capability::Arithmetic: return is_integer(type);
+      // Unary `-` needs a negative side, which only a signed integer has.
+      case Capability::Negatable: return is_integer(type) && is_signed(type);
+    }
+    return false;
   }
 
   const Token& TokenCursor::peek(std::size_t ahead) const noexcept {
@@ -312,6 +344,11 @@ namespace erax::frontend {
     return found != functions_.end() ? &found->second : nullptr;
   }
 
+  const TemplateInfo* ParseContext::find_template(const std::string& name) const noexcept {
+    const auto found = templates_.find(name);
+    return found != templates_.end() ? &found->second : nullptr;
+  }
+
   const FunctionInfo* ParseContext::find_function(const std::string& name,
                                                   const std::vector<SemType>& params) const noexcept {
     const std::vector<FunctionInfo>* candidates = find_functions(name);
@@ -342,6 +379,52 @@ namespace erax::frontend {
     info.id = id;
     functions_[name].push_back(std::move(info));
     return id;
+  }
+
+  void ParseContext::declare_template(const std::string& name, TemplateInfo info) {
+    templates_[name] = std::move(info);
+  }
+
+  std::expected<std::size_t, ParseError> ParseContext::instantiate(const std::string& name,
+                                                                   const std::vector<SemType>& type_args,
+                                                                   SourceLocation location) {
+    std::string key = name;
+    for (const SemType type : type_args) {
+      key += ':';
+      key += to_string(type);
+    }
+    const auto found = instantiation_ids_.find(key);
+    if (found != instantiation_ids_.end())
+      return instantiations_[found->second].id;
+    if (instantiations_.size() >= max_instantiations) {
+      return std::unexpected(ParseError {"template instantiation of '" + name + "' does not terminate", location});
+    }
+    // Source functions take ids `0..function_count-1` as the declaration pass gives
+    // them out, and every instantiation is appended to the program after all of
+    // them. The two are numbered in the same order they are first requested, so the
+    // id a call is written with is the index the function ends up at.
+    const std::size_t id = function_count + instantiations_.size();
+    instantiation_ids_.emplace(std::move(key), instantiations_.size());
+    instantiations_.push_back(Instantiation {id, name, type_args, false});
+    return id;
+  }
+
+  void ParseContext::set_type_substitution(std::unordered_map<std::string, SemType> substitution) {
+    type_substitution_ = std::move(substitution);
+  }
+
+  std::expected<SemType, ParseError> ParseContext::read_type(TokenCursor& cursor, std::string_view context) const {
+    // While an instantiation's body is parsed, a type parameter names the deduced
+    // concrete type; everywhere else the substitution is empty and this is the
+    // ordinary type read.
+    if (cursor.at(TokenType::Identifier)) {
+      const auto found = type_substitution_.find(cursor.current().text);
+      if (found != type_substitution_.end()) {
+        cursor.take();
+        return found->second;
+      }
+    }
+    return expect_type(cursor, context);
   }
 
   std::expected<void, ParseError> ParseContext::declare_local(const std::string& name, LocalInfo info) {

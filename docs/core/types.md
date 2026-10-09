@@ -63,6 +63,22 @@ The operand of `as` is parsed **without an expected type** — the target alread
 
 A value of type `void` has no bits to convert — `f() as i32` where `f` returns nothing is a compile error.
 
+## Capabilities {#capabilities}
+
+A **capability** is a named set of operators a type supports. Capabilities are a closed vocabulary in v1, and they exist to constrain a template's type parameters (`statements.md#templates`):
+
+| Capability | Operators | Types that satisfy it |
+| ---------- | --------- | --------------------- |
+| `Ordered` | `<` `<=` `>` `>=` | the integer types and `char` |
+| `Negatable` | unary `-` | the signed integer types |
+| `Arithmetic` | `+` `-` `*` `/` `%` | the integer types and `char` |
+
+- A type **structurally** satisfies a capability when the operator rules already accept those operators on it (`expressions.md#typing-rules`) — nothing is declared and there is no `implements`. `u8` satisfies `Ordered` and `Arithmetic` but not `Negatable`; `bool` satisfies none of them (it is not ordered, has no arithmetic, and cannot be negated), even though `==`/`!=` accept any two same-typed values.
+- `char` is an integer byte, so it takes part in `Ordered` and `Arithmetic` as its unsigned value (`#types`); being unsigned, it is not `Negatable`.
+- Capabilities are independent: `Negatable` does not imply `Arithmetic`, so a template lists every capability its body uses.
+- A cast (`#casts`) works on every type and needs no capability.
+- The bound is checked at each call, against the deduced type (`expressions.md#typing-rules`) — which is why `abs(12u8)` is rejected for wanting `Negatable` rather than failing somewhere inside the body.
+
 ## Constants {#constants}
 
 A **constant expression** is one the parser can evaluate while reading it: literals, unary `-` / `!` / `~`, arithmetic, comparisons, and `as` casts. It appears wherever a value is required — a `let` initializer, a global's initializer, an assignment RHS, a call argument. Reading a variable, or calling a function or a primitive, is not constant (`expressions.md#typing-rules`).

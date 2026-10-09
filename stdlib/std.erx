@@ -3,43 +3,25 @@
 // in the same language user code has.
 
 // Output: the number or the word only, no spacing around it — composition is
-// the caller's (docs/std.md). `print` has one declaration per type: the
-// integers widen through `as` into two cores by signedness, each recursing on
-// `/10` and writing one digit per step with `primitive print_char` —
-// `primitive print` ends its line, so it stays out of this. The digits are the
-// decimal the type reads: signed values print their sign, unsigned values never
-// have one.
-fn print(value: u64) {
+// the caller's (docs/std.md). Every integer prints through one recursive
+// template: the digits drop off the right, one per `print_char`, highest
+// first — `value / 10` is written before the digit that uses it. A negative
+// value prints its sign, then its magnitude read as a wrapping `u64`: for
+// `i64min` the sign-forward fold `0u64 - (value as u64)` is the magnitude
+// with nothing special to write. `primitive print` ends its line, so it stays
+// out of this. `bool` and `char` have their own declarations below, and any
+// other type's print is the caller's to compose.
+fn print<T extends Ordered & Arithmetic>(value: T) {
+    if (value < 0) {
+        primitive print_char('-');
+        print(0u64 - (value as u64));
+        return;
+    }
     if (value >= 10) {
         print(value / 10);
     }
-    primitive print_char((('0' as u64) + value % 10) as char);
+    primitive print_char((('0' as u64) + (value % 10) as u64) as char);
 }
-
-// A signed value prints its sign, then its digits through the unsigned core.
-// i64min has no positive counterpart — `-imin` wraps back to `imin` — so it is
-// written out, once, as the digits after the sign.
-fn print(value: i64) {
-    if (value < 0) {
-        primitive print_char('-');
-        if (value == -9223372036854775808) {
-            print(9223372036854775808u64);
-            return;
-        }
-        value = -value;
-    }
-    print(value as u64);
-}
-
-// Every other width is its own declaration — overloads take no implicit
-// conversions — and hands its value to its signedness's core; `as` widens
-// without changing the digits it prints.
-fn print(value: i8) { print(value as i64); }
-fn print(value: i16) { print(value as i64); }
-fn print(value: i32) { print(value as i64); }
-fn print(value: u8) { print(value as u64); }
-fn print(value: u16) { print(value as u64); }
-fn print(value: u32) { print(value as u64); }
 
 fn print(value: bool) {
     if (value) {
@@ -59,9 +41,6 @@ fn print(value: bool) {
 // A char prints as the byte it is; print() is the newline.
 fn print(value: char) { primitive print_char(value); }
 fn print() { primitive print_char('\n'); }
-
-fn put_space() { primitive print_char(' '); }
-fn put_newline() { primitive print_char('\n'); }
 
 // Char: ASCII classification and conversion. A `char` is a byte, so the ranges
 // compare as the unsigned values they are.
@@ -94,48 +73,36 @@ fn to_lower(c: char): char {
     return c;
 }
 
-// Math. Arithmetic wraps exactly as the language says (language.md#semantics).
-fn abs_i64(value: i64): i64 {
+// Math, each a template over the capability its operations need; arithmetic
+// wraps exactly as the language says (language.md#semantics), so `abs(imin)`
+// is `-imin` wrapped, the way the machine takes it.
+fn abs<T extends Ordered & Negatable>(value: T): T {
     if (value < 0) {
         return -value;
     }
     return value;
 }
 
-fn min_i64(a: i64, b: i64): i64 {
+fn min<T extends Ordered>(a: T, b: T): T {
     if (a < b) {
         return a;
     }
     return b;
 }
 
-fn max_i64(a: i64, b: i64): i64 {
+fn max<T extends Ordered>(a: T, b: T): T {
     if (a > b) {
         return a;
     }
     return b;
 }
 
-fn min_u64(a: u64, b: u64): u64 {
-    if (a < b) {
-        return a;
-    }
-    return b;
-}
-
-fn max_u64(a: u64, b: u64): u64 {
-    if (a > b) {
-        return a;
-    }
-    return b;
-}
-
-// Exponentiation by squaring; every multiplication is a wrapping `u64` one, so
-// `pow` is total: it answers the wrapped product for any inputs.
-fn pow(base: u64, exponent: u64): u64 {
-    let result: u64 = 1;
-    let factor: u64 = base;
-    let e: u64 = exponent;
+// Exponentiation by squaring; every multiply is a wrapping one, so `pow` is
+// total: it answers the wrapped product for any inputs.
+fn pow<T extends Ordered & Arithmetic>(base: T, exponent: T): T {
+    let result: T = 1;
+    let factor: T = base;
+    let e: T = exponent;
     while (e > 0) {
         if (e % 2 == 1) {
             result = result * factor;
@@ -146,11 +113,12 @@ fn pow(base: u64, exponent: u64): u64 {
     return result;
 }
 
-fn gcd(a: u64, b: u64): u64 {
-    let x: u64 = a;
-    let y: u64 = b;
+// Euclid's algorithm; `gcd(0, 0)` is `0`.
+fn gcd<T extends Arithmetic>(a: T, b: T): T {
+    let x: T = a;
+    let y: T = b;
     while (y != 0) {
-        let t: u64 = x % y;
+        let t: T = x % y;
         x = y;
         y = t;
     }

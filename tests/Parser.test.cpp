@@ -247,6 +247,120 @@ TEST_CASE("a call picks the declaration its argument types match") {
   CHECK(callee_of(zero, 2) == 0);
 }
 
+TEST_CASE("a call deduces a template's type arguments") {
+  // Each distinct type set is one instantiation, a real function of its own
+  // that the CALL names. Source functions keep ids `0..N-1`; instantiations
+  // follow in the order the calls first asked for them.
+  const Program program = parse_ok("fn twice<T extends Arithmetic>(x: T): T { return x + x; }"
+                                   " fn main(): i32 { let a: i32 = twice(21); let b: i32 = twice(2); return a + b; }");
+  REQUIRE(program.functions.size() == 2);  // main, plus the one i32 instance
+  CHECK(program.functions[1].params == std::vector<Type> {Type::I32});
+  CHECK(program.functions[1].return_type == Type::I32);
+  const auto calls = commands_of(program, 0);
+  const auto call = std::find_if(calls.begin(), calls.end(), [](const Command& command) {
+    return command.op == Op::Call;
+  });
+  REQUIRE(call != calls.end());
+  CHECK(call->args[1].value == 1);
+
+  // A different type set is a different function, in request order — main's
+  // first CALL goes to the i32 instance, its second to the u8 one.
+  const Program two =
+      parse_ok("fn twice<T extends Arithmetic>(x: T): T { return x + x; }"
+               " fn main(): i32 { let a: i32 = twice(21); let b: u8 = twice(3u8); return a + b as i32; }");
+  REQUIRE(two.functions.size() == 3);
+  CHECK(two.functions[1].params == std::vector<Type> {Type::I32});
+  CHECK(two.functions[2].params == std::vector<Type> {Type::U8});
+  std::vector<std::uint64_t> callees;
+  for (const Command& command : commands_of(two, 0)) {
+    if (command.op == Op::Call)
+      callees.push_back(command.args[1].value);
+  }
+  REQUIRE(callees.size() == 2);
+  CHECK(callees[0] == 1);
+  CHECK(callees[1] == 2);
+}
+
+TEST_CASE("a template may call itself, as the one instantiation") {
+  // `fib(n - 1)` and `fib(n - 2)` deduce the same type as the body's own
+  // parameter, so the recursion is an ordinary call to the same function.
+  const Program program = parse_ok("fn fib<T extends Ordered & Arithmetic>(n: T): T {"
+                                   " if (n <= 1) { return n; } return fib(n - 1) + fib(n - 2); }"
+                                   " fn main(): i32 { return fib(6); }");
+  REQUIRE(program.functions.size() == 2);
+  CHECK(program.functions[1].params == std::vector<Type> {Type::I32});
+  CHECK(program.functions[1].return_type == Type::I32);
+}
+
+TEST_CASE("a template body reads, writes, and casts the deduced type") {
+  const Program program = parse_ok("fn wrap<T extends Arithmetic>(x: T): T { let y: T = x + x; return y; }"
+                                   " fn main(): i32 { return wrap(21); }");
+  REQUIRE(program.functions.size() == 2);
+  CHECK(program.functions[1].return_type == Type::I32);
+  CHECK(has_op(ops_of(program, 1), Op::Add));
+
+  // `as T` and `as` to a concrete type in the same body both resolve: the two
+  // calls below deduce u32 and i32, each narrowed through the same `as u8`.
+  const Program casted = parse_ok("fn low<T extends Ordered & Arithmetic>(x: T): u8 { let y: u8 = x as u8; return y; }"
+                                  " fn main(): i32 { return (low(300u32) + low(7)) as i32; }");
+  REQUIRE(casted.functions.size() == 3);
+  CHECK(casted.functions[1].params == std::vector<Type> {Type::U32});
+  CHECK(casted.functions[2].params == std::vector<Type> {Type::I32});
+}
+
+TEST_CASE("an exact concrete declaration beats a template of the same name") {
+  const Program program = parse_ok("fn pick<T extends Ordered & Arithmetic>(x: T): i32 { return 1; }"
+                                   " fn pick(x: char): i32 { return 2; }"
+                                   " fn main(): i32 { let a: i32 = pick('x'); let b: i32 = pick(5); return a + b; }");
+  // Concrete pick(char) is function 0, main 1, the i32 instantiation 2.
+  REQUIRE(program.functions.size() == 3);
+  std::vector<std::uint64_t> callees;
+  for (const Command& command : commands_of(program, 1)) {
+    if (command.op == Op::Call)
+      callees.push_back(command.args[1].value);
+  }
+  REQUIRE(callees.size() == 2);
+  CHECK(callees[0] == 0);  // 'x' resolves concretely
+  CHECK(callees[1] == 2);  // 5 deduces the template
+}
+
+TEST_CASE("a template call checks its bounds after deduction") {
+  // abs(12u8): T deduces to u8, which negation is not defined on.
+  CHECK(parse_error("fn abs<T extends Ordered & Negatable>(x: T): T { return x; }"
+                    " fn main(): i32 { abs(12u8); return 0; }") ==
+        "u8 does not satisfy Negatable (required by 'T' of 'abs')");
+  // min(1, 2u64): the two arguments bind T twice, disagreeing.
+  CHECK(parse_error("fn min<T extends Ordered>(a: T, b: T): T { return a; }"
+                    " fn main(): i32 { min(1, 2u64); return 0; }") ==
+        "cannot deduce 'T' of 'min': the arguments give i32 and u64");
+  // A template's argument count is exact, like a concrete call's.
+  CHECK(parse_error("fn f<T extends Arithmetic>(a: T): T { return a; }"
+                    " fn main(): i32 { f(1, 2); return 0; }") == "'f' takes 1 arguments, but 2 were given");
+  // A single concrete parameter is exact too, with the ordinary argument error.
+  CHECK(parse_error("fn f<T extends Ordered & Arithmetic>(x: i32, y: T): T { return y; }"
+                    " fn main(): i32 { f(true, 1); return 0; }") == "argument 1 of 'f' is i32, not bool");
+  CHECK(parse_error("fn f<T extends Ordered & Arithmetic>(x: i32, y: T): T { return y; }"
+                    " fn main(): i32 { f(1i64, 2); return 0; }") == "argument 1 of 'f' is i32, not i64");
+}
+
+TEST_CASE("a template's declaration rules are enforced") {
+  // The entry point names one concrete `fn main(): i32`.
+  CHECK(parse_error("fn main<T>(x: T) { }") == "the entry point must be 'fn main(): i32'");
+  // One template per name.
+  CHECK(parse_error("fn f<T>(x: T) { } fn f<U>(x: U) { } fn main(): i32 { return 0; }") == "'f' is already declared");
+  // A type parameter is declared once, with bounds that exist.
+  CHECK(parse_error("fn f<T, T>(a: T) { } fn main(): i32 { return 0; }") == "type parameter 'T' is declared twice");
+  CHECK(parse_error("fn f<T extends Foo>(a: T) { } fn main(): i32 { return 0; }") == "'Foo' is not a capability");
+  // Deduction needs a foothold: every type parameter must appear in a
+  // parameter's type.
+  CHECK(parse_error("fn make<T>(x: i32): i32 { return x; } fn main(): i32 { return 0; }") ==
+        "type parameter 'T' of 'make' is not in the parameters");
+  // A template is a name plus a type list, not anything the expression
+  // grammar accepts: explicit `f<u8>(…)` is not v1.
+  CHECK(parse_error("fn f<T extends Ordered & Arithmetic>(x: T): T { return x; }"
+                    " fn main(): i32 { f<u8>(1); return 0; }") != "");
+}
+
 TEST_CASE("primitive is a call to the catalog of the same name") {
   // One statement lowers to exactly one `PRIM print`: an `EMPTY` result slot,
   // then the printed values in order. The id is the catalog's (`primitive.md`).
@@ -526,6 +640,9 @@ TEST_CASE("reserved words are not names") {
   // ... or a function, or a global.
   CHECK(parse_error("fn fn(): i32 { return 0; }") == "'fn' is a reserved word");
   CHECK(parse_error("let bool: i32 = 1; fn main(): i32 { return 0; }") == "'bool' is a reserved word");
+  // `extends` is reserved for a type parameter's bounds.
+  CHECK(parse_error("fn main(): i32 { let extends: i32 = 1; return 0; }") == "'extends' is a reserved word");
+  CHECK(parse_error("fn extends(): i32 { return 0; }") == "'extends' is a reserved word");
 }
 
 TEST_CASE("float and string are not types yet") {

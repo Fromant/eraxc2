@@ -24,6 +24,26 @@ The statement grammar is in `language.md#grammar`; this file gives each statemen
 - A function sees only its own parameters/locals and the globals — never another function's locals.
 - **Entry point.** The program must declare exactly one `fn main(): i32` (no parameters). Its return value is the process exit code — as is the `code` given to `primitive exit` if the program terminates that way (`docs/primitive.md`) — and it runs after all global initializers have run. `main` is a rule on the *name* (it is not a reserved word); no other function may be named `main`.
 
+## Templates
+
+A function may declare **type parameters** — `fn name<T extends Ordered & Negatable>(…)` — which makes it a **template**. A type parameter is an ordinary name bound inside the declaration and usable wherever a type is (parameter and return types, `let` annotations, cast targets):
+
+```
+fn abs<T extends Ordered & Negatable>(val: T): T {
+    if (val < 0) {
+        return -val;
+    }
+    return val;
+}
+```
+
+- A type parameter may carry a **bound**: one or more capabilities joined by `&` (`types.md#capabilities`). The bound is what the template promises about `T`; a type that does not satisfy it cannot instantiate the template, and the call is rejected (`expressions.md#typing-rules`).
+- **Every type parameter must appear in a parameter type.** A parameter list that never names `T` gives deduction nothing to work from, so `fn make<T>(): T` is an error at the declaration — `type parameter 'T' of 'make' is not in the parameters`.
+- **A name carries at most one template** (v1), and may carry concrete declarations beside it. On a call, a concrete declaration that matches the argument types exactly is chosen first; the template is the fallback (`expressions.md#typing-rules`). This is what lets `print<T>` sit beside an ordinary `print(char)`.
+- **A template is monomorphized.** There are no templates in the IR: each distinct set of type arguments **instantiates** an ordinary function (same name, concrete parameter and return types), and calls lower to a `CALL` to it (`language.md#machine-level-contract`). An instantiation is reused for every call that deduces the same type arguments, so a template that calls itself with the same types is ordinary recursion.
+- **The body is checked per instantiation**, with `T` standing for the deduced type. The bound is a promise made at the call, not a proof that the body stays inside it: an operation the bound did not name is rejected when that instantiation is compiled. (Checking the body once, against the bound, is future work — `TODO.md`.)
+- A chain of instantiations that keeps demanding *new* types does not terminate, and is a compile-time error.
+
 ## Globals
 
 A `global` is a top-level `let` with a required, explicitly written initializer:
