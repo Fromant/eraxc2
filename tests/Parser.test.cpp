@@ -98,8 +98,9 @@ TEST_CASE("precedence follows the operator table") {
                                    " let x: bool = a + b * c < 8; return 0; }");
   const Cfg& cfg = body_of(program, 0);
   std::vector<Op> ops;
-  for (const Command& command : cfg.blocks[0].commands)
+  for (const Command& command : cfg.blocks[0].commands) {
     ops.push_back(command.op);
+  }
   // Mul before Add before CmpLt, and the `&&` level binds looser than either.
   const auto index_of = [&ops](Op op) {
     return std::find(ops.begin(), ops.end(), op) - ops.begin();
@@ -273,8 +274,9 @@ TEST_CASE("a call deduces a template's type arguments") {
   CHECK(two.functions[2].params == std::vector<Type> {Type::U8});
   std::vector<std::uint64_t> callees;
   for (const Command& command : commands_of(two, 0)) {
-    if (command.op == Op::Call)
+    if (command.op == Op::Call) {
       callees.push_back(command.args[1].value);
+    }
   }
   REQUIRE(callees.size() == 2);
   CHECK(callees[0] == 1);
@@ -316,8 +318,9 @@ TEST_CASE("an exact concrete declaration beats a template of the same name") {
   REQUIRE(program.functions.size() == 3);
   std::vector<std::uint64_t> callees;
   for (const Command& command : commands_of(program, 1)) {
-    if (command.op == Op::Call)
+    if (command.op == Op::Call) {
       callees.push_back(command.args[1].value);
+    }
   }
   REQUIRE(callees.size() == 2);
   CHECK(callees[0] == 0);  // 'x' resolves concretely
@@ -548,8 +551,9 @@ TEST_CASE("a test that folds keeps one edge") {
   const Program program =
       parse_ok("fn main(): i32 { let x: i32 = 1; if (1 < 2) { x = 2; } else { x = 3; } return x; }");
   const Cfg& cfg = body_of(program, 0);
-  for (const BasicBlock& block : cfg.blocks)
+  for (const BasicBlock& block : cfg.blocks) {
     CHECK(block.edge_count() <= 1);
+  }
   // The whole body is straight-line: entry, then, return.
   CHECK(cfg.size() == 3);
 }

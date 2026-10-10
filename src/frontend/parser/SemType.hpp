@@ -68,10 +68,12 @@ namespace erax::frontend {
   /// Structural equality, so a pointer type built in one place matches the same
   /// type built in another.
   inline bool operator==(const SemType& a, const SemType& b) noexcept {
-    if (a.kind != b.kind)
+    if (a.kind != b.kind) {
       return false;
-    if (a.kind != SemType::Kind::Ptr)
+    }
+    if (a.kind != SemType::Kind::Ptr) {
       return true;
+    }
     return *a.pointee == *b.pointee;
   }
 

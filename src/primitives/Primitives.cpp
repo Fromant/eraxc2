@@ -34,15 +34,18 @@ namespace erax::primitives {
   }
 
   const Signature* by_name(std::string_view name) noexcept {
-    for (const Signature& signature : table)
-      if (signature.name == name)
+    for (const Signature& signature : table) {
+      if (signature.name == name) {
         return &signature;
+      }
+    }
     return nullptr;
   }
 
   const Signature* by_id(std::uint32_t id) noexcept {
-    if (id >= table.size())
+    if (id >= table.size()) {
       return nullptr;
+    }
     return &table[id];
   }
 
@@ -65,8 +68,9 @@ namespace erax::primitives {
   }
 
   bool terminates(const middleend::Command& command) noexcept {
-    if (command.op != middleend::Op::Primitive)
+    if (command.op != middleend::Op::Primitive) {
       return false;
+    }
     const Signature* signature = by_id(command.prim);
     return signature && signature->terminating;
   }

@@ -29,15 +29,17 @@ namespace {
 
   std::vector<std::string> texts(const Tokens& ts) {
     std::vector<std::string> out;
-    for (const Token& t : ts)
+    for (const Token& t : ts) {
       out.push_back(t.text);
+    }
     return out;
   }
 
   std::vector<TokenType> kinds(const Tokens& ts) {
     std::vector<TokenType> out;
-    for (const Token& t : ts)
+    for (const Token& t : ts) {
       out.push_back(t.type);
+    }
     return out;
   }
 

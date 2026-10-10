@@ -25,8 +25,9 @@ namespace erax::frontend {
     std::string qualified_path(const std::vector<std::string>& parts) {
       std::string qualified;
       for (const std::string& segment : parts) {
-        if (!qualified.empty())
+        if (!qualified.empty()) {
           qualified += '.';
+        }
         qualified += segment;
       }
       return qualified;
@@ -63,17 +64,20 @@ namespace erax::frontend {
     /// A `Number` token is a float when it has a fraction or an exponent. A radix
     /// literal is never one, even though `0xE` holds an `E`.
     bool is_float_literal(std::string_view text) noexcept {
-      if (text.size() > 2 && text[0] == '0' && is_radix_letter(text[1]))
+      if (text.size() > 2 && text[0] == '0' && is_radix_letter(text[1])) {
         return false;
+      }
       return text.find('.') != std::string_view::npos || text.find('e') != std::string_view::npos ||
           text.find('E') != std::string_view::npos;
     }
 
     int radix_of(char c) noexcept {
-      if (c == 'x' || c == 'X')
+      if (c == 'x' || c == 'X') {
         return 16;
-      if (c == 'o' || c == 'O')
+      }
+      if (c == 'o' || c == 'O') {
         return 8;
+      }
       return 2;
     }
 
@@ -102,8 +106,9 @@ namespace erax::frontend {
       std::uint64_t value = 0;
       for (; index < text.size(); ++index) {
         const char c = text[index];
-        if (c == '_')
+        if (c == '_') {
           continue;
+        }
         // The tokenizer has already rejected a digit outside the base, so what is left
         // here is a letter that is not one -- a suffix this parser does not know. It is
         // caught rather than folded into the number, because `64ul` read as a base-10
@@ -127,10 +132,12 @@ namespace erax::frontend {
     /// The code point of a character literal, whose token text is the raw inner
     /// slice with the escape still spelled out.
     std::expected<std::uint64_t, std::string> parse_char(std::string_view raw) {
-      if (raw.size() == 1)
+      if (raw.size() == 1) {
         return static_cast<std::uint64_t>(static_cast<unsigned char>(raw[0]));
-      if (raw[0] != '\\' || raw.size() < 2)
+      }
+      if (raw[0] != '\\' || raw.size() < 2) {
         return std::unexpected("expected a character literal");
+      }
       const char escape = raw[1];
       switch (escape) {
         case 'n': return std::uint64_t {'\n'};
@@ -173,8 +180,9 @@ namespace erax::frontend {
     const_mode_ = true;
     auto value = or_expression(expected);
     const_mode_ = was_const;
-    if (!value)
+    if (!value) {
       return value;
+    }
     if (!value->constant) {
       return std::unexpected(at("this must be a constant expression", start));
     }
@@ -233,18 +241,21 @@ namespace erax::frontend {
     const std::optional<SemType> operand_expected =
         context().cursor.keyword_follows(Keyword::As) ? std::nullopt : expected;
     result value = unary_expression(operand_expected);
-    if (!value)
+    if (!value) {
       return value;
+    }
     while (context().cursor.at_keyword(Keyword::As)) {
       const SourceLocation location = context().cursor.location();
       context().cursor.take();
       // The target may name a type parameter of the enclosing instantiation.
       auto target = context().read_type(context().cursor, "after 'as'");
-      if (!target)
+      if (!target) {
         return std::unexpected(target.error());
+      }
       value = cast_to(*value, *target, location);
-      if (!value)
+      if (!value) {
         return value;
+      }
     }
     return value;
   }
@@ -253,8 +264,9 @@ namespace erax::frontend {
     if (value.type == SemType::Void) {
       return std::unexpected(at("cannot cast a value of type void", location));
     }
-    if (value.type == target)
+    if (value.type == target) {
       return value;
+    }
     // `bool` has no type of its own in the IR — it is an `i8` 0/1 cell — so a cast TO
     // bool is the compare the machine already spells "nonzero" with, whatever integer
     // (or char, or bool, handled above) sits on the left.
@@ -266,8 +278,9 @@ namespace erax::frontend {
     const Type to = lower(target);
     // `char` and `u8` — and `bool` and `i8` — name one cell two ways: the bits are
     // already the target's, so only the source-level type changes.
-    if (from == to)
+    if (from == to) {
       return Value {target, value.operand, value.constant};
+    }
     if (value.constant) {
       const std::uint64_t bits = middleend::fold::convert(to, from, value.constant->bits);
       const ConstInt constant = ConstInt::bits_of(bits, to);
@@ -300,8 +313,9 @@ namespace erax::frontend {
       first_expected = std::nullopt;
     }
     auto first = (this->*operand)(first_expected);
-    if (!first)
+    if (!first) {
       return first;
+    }
     Value left = *first;
 
     while (true) {
@@ -312,8 +326,9 @@ namespace erax::frontend {
           break;
         }
       }
-      if (op.empty())
+      if (op.empty()) {
         break;
+      }
 
       const SourceLocation location = context().cursor.location();
       context().cursor.take();
@@ -321,13 +336,15 @@ namespace erax::frontend {
       // Each operand takes the type of the operand before it, so `x + 1` types the
       // `1` as whatever `x` is.
       auto parsed = (this->*operand)(left.type);
-      if (!parsed)
+      if (!parsed) {
         return parsed;
+      }
       Value right = *parsed;
 
       auto combined = combine(op, left, right, location);
-      if (!combined)
+      if (!combined) {
         return std::unexpected(combined.error());
+      }
       left = *combined;
     }
 
@@ -365,40 +382,53 @@ namespace erax::frontend {
     if (!is_integer(left.type)) {
       return std::unexpected(at(quoted + " is not defined for " + std::string {to_string(left.type)}, location));
     }
-    if (op == "<")
+    if (op == "<") {
       return apply(Op::CmpLt, SemType::Bool, left, right, location);
-    if (op == "<=")
+    }
+    if (op == "<=") {
       return apply(Op::CmpLe, SemType::Bool, left, right, location);
-    if (op == ">")
+    }
+    if (op == ">") {
       return apply(Op::CmpGt, SemType::Bool, left, right, location);
-    if (op == ">=")
+    }
+    if (op == ">=") {
       return apply(Op::CmpGe, SemType::Bool, left, right, location);
+    }
 
     if (!is_integer(left.type)) {
       return std::unexpected(at(quoted + " is not defined for " + std::string {to_string(left.type)}, location));
     }
 
-    if (op == "|")
+    if (op == "|") {
       return apply(Op::Or, left.type, left, right, location);
-    if (op == "^")
+    }
+    if (op == "^") {
       return apply(Op::Xor, left.type, left, right, location);
-    if (op == "&")
+    }
+    if (op == "&") {
       return apply(Op::And, left.type, left, right, location);
-    if (op == "+")
+    }
+    if (op == "+") {
       return apply(Op::Add, left.type, left, right, location);
-    if (op == "-")
+    }
+    if (op == "-") {
       return apply(Op::Sub, left.type, left, right, location);
-    if (op == "*")
+    }
+    if (op == "*") {
       return apply(Op::Mul, left.type, left, right, location);
+    }
     // Signedness comes from the operand's type, which is a real type now: there is no
     // placeholder left for it to be guessed from.
     const bool arithmetic = is_signed(left.type);
-    if (op == "/")
+    if (op == "/") {
       return apply(arithmetic ? Op::Sdiv : Op::Udiv, left.type, left, right, location);
-    if (op == "%")
+    }
+    if (op == "%") {
       return apply(arithmetic ? Op::Smod : Op::Umod, left.type, left, right, location);
-    if (op == "<<")
+    }
+    if (op == "<<") {
       return apply(Op::Shl, left.type, left, right, location);
+    }
     // A signed shift right is arithmetic; an unsigned one — which is every
     // `char`, a 0-255 byte — is logical.
     return apply(arithmetic ? Op::Sar : Op::Shr, left.type, left, right, location);
@@ -412,8 +442,9 @@ namespace erax::frontend {
       // done in it, whatever the result is: a comparison folds its `i32` operands and
       // lands an `i8`, and every other op's result is that same type back.
       auto folded = range::fold(op, lower(left.type), *left.constant, *right.constant);
-      if (!folded)
+      if (!folded) {
         return std::unexpected(at(folded.error(), location));
+      }
       const ConstInt constant = ConstInt::bits_of(folded->bits, result_type);
       return Value {result, Operand::instant(result_type, constant.bits), constant};
     }
@@ -432,8 +463,9 @@ namespace erax::frontend {
         // which is the split `docs/core/types.md#constants` is about. The `-` on the
         // literal itself was read with the sign in view, so it is not this one.
         auto negated = range::negate(operand_type, *operand.constant);
-        if (!negated)
+        if (!negated) {
           return std::unexpected(at(negated.error(), location));
+        }
         return Value {type, Operand::instant(operand_type, negated->bits), *negated};
       }
       // `~` maps every value of a type onto another value of it, so there is nothing
@@ -477,8 +509,9 @@ namespace erax::frontend {
     }
 
     auto parsed = parse_number(digits);
-    if (!parsed)
+    if (!parsed) {
       return std::unexpected(at(parsed.error(), token.location));
+    }
 
     // A suffix wins over the position, and disagreeing with it is an error rather
     // than a silent conversion: `let x: i32 = 5i64;` says `i32` and `i64` in one
@@ -518,17 +551,22 @@ namespace erax::frontend {
       const std::optional<SemType> operand_expected =
           expected && expected->is_pointer() ? std::optional<SemType> {*expected->pointee} : std::nullopt;
       result operand = unary_expression(operand_expected);
-      if (!operand)
+      if (!operand) {
         return operand;
+      }
       const Value value = *operand;
-      if (value.type == SemType::Void)
+      if (value.type == SemType::Void) {
         return std::unexpected(at("cannot take the address of a value of type void", location));
-      if (value.constant)
+      }
+      if (value.constant) {
         return std::unexpected(at("cannot take the address of a constant", location));
-      if (value.operand.kind != middleend::OperandKind::VReg && value.operand.kind != middleend::OperandKind::Global)
+      }
+      if (value.operand.kind != middleend::OperandKind::VReg && value.operand.kind != middleend::OperandKind::Global) {
         return std::unexpected(at("cannot take the address of this expression", location));
-      if (!value.addressable)
+      }
+      if (!value.addressable) {
         return std::unexpected(at("cannot take the address of this expression", location));
+      }
       const SemType pointer = SemType::pointer(value.type);
       const Type lowered = lower(pointer);
       const std::uint64_t destination = context().builder.alloc(lowered);
@@ -544,11 +582,13 @@ namespace erax::frontend {
       const std::optional<SemType> operand_expected =
           expected ? std::optional<SemType> {SemType::pointer(*expected)} : std::nullopt;
       result operand = unary_expression(operand_expected);
-      if (!operand)
+      if (!operand) {
         return operand;
+      }
       const Value value = *operand;
-      if (!value.type.is_pointer())
+      if (!value.type.is_pointer()) {
         return std::unexpected(at("'*' needs a pointer, but got " + std::string {to_string(value.type)}, location));
+      }
       const SemType pointee = *value.type.pointee;
       const Type lowered = lower(pointee);
       const std::uint64_t destination = context().builder.alloc(lowered);
@@ -557,12 +597,15 @@ namespace erax::frontend {
     }
 
     std::string_view op;
-    if (cursor.at_op("-"))
+    if (cursor.at_op("-")) {
       op = "-";
-    if (cursor.at_op("!"))
+    }
+    if (cursor.at_op("!")) {
       op = "!";
-    if (cursor.at_op("~"))
+    }
+    if (cursor.at_op("~")) {
       op = "~";
+    }
 
     if (!op.empty()) {
       const SourceLocation location = cursor.location();
@@ -586,8 +629,9 @@ namespace erax::frontend {
         return integer_literal(token, operand_expected, true);
       }
       result operand = unary_expression(operand_expected);
-      if (!operand)
+      if (!operand) {
         return operand;
+      }
       const Value value = *operand;
       if (op == "!") {
         if (value.type != SemType::Bool) {
@@ -634,8 +678,9 @@ namespace erax::frontend {
             std::optional<SemType> {primary->params[arguments.size()]} :
             std::nullopt;
         auto argument = expression(expected);
-        if (!argument)
+        if (!argument) {
           return argument;
+        }
         if (expected && argument->type != *expected) {
           return std::unexpected(at("argument " + std::to_string(arguments.size() + 1) + " of '" + qualified + "' is " +
                                         std::string {to_string(*expected)} + ", not " +
@@ -643,14 +688,16 @@ namespace erax::frontend {
                                     location));
         }
         arguments.push_back(*argument);
-        if (!context().cursor.match(TokenType::Comma))
+        if (!context().cursor.match(TokenType::Comma)) {
           break;
+        }
       }
     }
     std::vector<SemType> types;
     types.reserve(arguments.size());
-    for (const Value& argument : arguments)
+    for (const Value& argument : arguments) {
       types.push_back(argument.type);
+    }
 
     // An exact concrete match beats a template: `print('x')` is the concrete
     // `print(char)`, not an instantiation.
@@ -681,8 +728,9 @@ namespace erax::frontend {
       if (candidates != nullptr && candidates->size() > 1) {
         std::string listed;
         for (const SemType& type : types) {
-          if (!listed.empty())
+          if (!listed.empty()) {
             listed += ", ";
+          }
           listed.append(to_string(type));
         }
         return std::unexpected(
@@ -712,8 +760,9 @@ namespace erax::frontend {
       return_type = tmpl->return_type.param >= 0 ? type_args[static_cast<std::size_t>(tmpl->return_type.param)] :
                                                    tmpl->return_type.type;
       const auto instantiated = context().instantiate(tmpl, type_args, location);
-      if (!instantiated)
+      if (!instantiated) {
         return std::unexpected(instantiated.error());
+      }
       callee = *instantiated;
     } else {
       return_type = function->return_type;
@@ -724,12 +773,14 @@ namespace erax::frontend {
     std::vector<Operand> args;
     args.push_back(lowered == Type::Void ? Operand::empty() : Operand::vreg(lowered, destination));
     args.push_back(Operand::function(lowered, callee));
-    for (const Value& argument : arguments)
+    for (const Value& argument : arguments) {
       args.push_back(argument.as_operand());
+    }
     context().builder.emit(Op::Call, std::move(args));
 
-    if (lowered == Type::Void)
+    if (lowered == Type::Void) {
       return Value {SemType::Void, Operand::empty(), std::nullopt};
+    }
     return Value {return_type, Operand::vreg(lowered, destination), std::nullopt};
   }
 
@@ -765,8 +816,9 @@ namespace erax::frontend {
       }
     }
     for (std::size_t slot = 0; slot < tmpl->type_params.size(); ++slot) {
-      if (!bound[slot])
+      if (!bound[slot]) {
         continue;
+      }
       for (const Capability capability : tmpl->type_params[slot].bounds) {
         if (!satisfies(type_args[slot], capability)) {
           return ParseError {std::string {to_string(type_args[slot])} + " does not satisfy " +
@@ -798,8 +850,9 @@ namespace erax::frontend {
             std::optional<SemType> {sem_of(signature->params[args.size()])} :
             std::nullopt;
         auto argument = expression(expected);
-        if (!argument)
+        if (!argument) {
           return argument;
+        }
         if (argument->type == SemType::Void) {
           return std::unexpected(at("'" + name + "' cannot take a value of type void", location));
         }
@@ -810,8 +863,9 @@ namespace erax::frontend {
                                     location));
         }
         args.push_back(argument->as_operand());
-        if (!context().cursor.match(TokenType::Comma))
+        if (!context().cursor.match(TokenType::Comma)) {
           break;
+        }
       }
     }
     if (context().cursor.take().type != TokenType::RParen) {
@@ -830,8 +884,9 @@ namespace erax::frontend {
     args.insert(args.begin(), return_type == Type::Void ? Operand::empty() : Operand::vreg(return_type, destination));
     context().builder.emit(Op::Primitive, std::move(args), static_cast<std::uint32_t>(signature->id));
 
-    if (return_type == Type::Void)
+    if (return_type == Type::Void) {
       return Value {SemType::Void, Operand::empty(), std::nullopt};
+    }
     return Value {sem_of(signature->return_type), Operand::vreg(return_type, destination), std::nullopt};
   }
 
@@ -848,8 +903,9 @@ namespace erax::frontend {
       case TokenType::Char: {
         cursor.take();
         auto code = parse_char(token.text);
-        if (!code)
+        if (!code) {
           return std::unexpected(at(code.error(), token.location));
+        }
         if (*code > 255) {
           return std::unexpected(at("character literal is not a 0-255 code point", token.location));
         }
@@ -861,8 +917,9 @@ namespace erax::frontend {
       case TokenType::LParen: {
         cursor.take();
         auto inner = or_expression(expected);
-        if (!inner)
+        if (!inner) {
           return inner;
+        }
         if (cursor.take().type != TokenType::RParen) {
           return std::unexpected(at("expected ')'", cursor.location()));
         }
@@ -917,8 +974,9 @@ namespace erax::frontend {
     while (cursor.at(TokenType::Dot)) {
       cursor.take();
       auto segment = expect_identifier(cursor);
-      if (!segment)
+      if (!segment) {
         return std::unexpected(segment.error());
+      }
       parts.push_back(*segment);
     }
     const std::string qualified = qualified_path(parts);
@@ -930,8 +988,9 @@ namespace erax::frontend {
     if (parts.size() > 1) {
       const std::vector<std::string> path(parts.begin(), parts.end() - 1);
       auto resolved = context().resolve_namespace(path, location);
-      if (!resolved)
+      if (!resolved) {
         return std::unexpected(resolved.error());
+      }
       ns = *resolved;
     }
     const std::string& leaf = parts.back();

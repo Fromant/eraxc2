@@ -43,8 +43,9 @@ namespace erax::interp {
       std::size_t highest = 0;
       bool named = false;
       auto consider = [&](const Operand& operand) {
-        if (operand.kind != OperandKind::VReg || operand.is_empty())
+        if (operand.kind != OperandKind::VReg || operand.is_empty()) {
           return;
+        }
         if (!named || operand.value > highest) {
           highest = static_cast<std::size_t>(operand.value);
           named = true;
@@ -52,11 +53,13 @@ namespace erax::interp {
       };
       for (const BasicBlock& block : cfg.blocks) {
         for (const Command& command : block.commands) {
-          for (const Operand& operand : command.args)
+          for (const Operand& operand : command.args) {
             consider(operand);
+          }
         }
-        if (!block.branch)
+        if (!block.branch) {
           continue;
+        }
         consider(block.branch->condition.a);
         consider(block.branch->condition.b);
       }
@@ -74,20 +77,24 @@ namespace erax::interp {
         // Every operand is read through an index, so the machine asks the
         // validator first: a program it rejects never gets near the cell array.
         auto valid = middleend::check(program_);
-        if (!valid)
+        if (!valid) {
           return std::unexpected(Failure {Rejected {std::move(valid.error())}});
+        }
 
         for (std::size_t index = 0; index < program_.globals.size(); ++index) {
           const middleend::Cfg& init = program_.globals[index].init;
-          if (init.blocks.empty())
+          if (init.blocks.empty()) {
             continue;  // zeroed by the machine, nothing to run
+          }
           if (!push(Subject::GlobalInit, index, cells_named(init), Site {Subject::GlobalInit, index, 0, 0, 1})) {
             return std::unexpected(failure());
           }
-          if (!execute())
+          if (!execute()) {
             return std::unexpected(failure());
-          if (exiting_)
+          }
+          if (exiting_) {
             return Outcome {globals_, *exiting_, output_};
+          }
         }
 
         if (program_.entrypoint >= program_.functions.size()) {
@@ -99,10 +106,12 @@ namespace erax::interp {
                   Site {Subject::Function, program_.entrypoint, 0, 0, 1})) {
           return std::unexpected(failure());
         }
-        if (!execute())
+        if (!execute()) {
           return std::unexpected(failure());
-        if (exiting_)
+        }
+        if (exiting_) {
           return Outcome {globals_, *exiting_, output_};
+        }
         if (!returning_) {
           break_("the entrypoint returned no value to be its exit code");
           return std::unexpected(failure());
@@ -116,16 +125,18 @@ namespace erax::interp {
         while (!frames_.empty()) {
           const Frame frame = frames_.back();
           const middleend::Cfg* cfg = cfg_of(frame);
-          if (!cfg)
+          if (!cfg) {
             return false;
+          }
           if (frame.block >= cfg->blocks.size()) {
             break_("a frame is in a block that does not exist");
             return false;
           }
           const BasicBlock& block = cfg->blocks[frame.block];
           if (frame.command == block.commands.size()) {
-            if (!advance(frame))
+            if (!advance(frame)) {
               return false;
+            }
             continue;
           }
           const Command& command = block.commands[frame.command];
@@ -133,8 +144,9 @@ namespace erax::interp {
           // The command advances its block before it runs: `RET` and `CALL` then
           // change the stack, and the loop reads whatever frame is on top next.
           ++frames_.back().command;
-          if (!run_command(command, frame, site))
+          if (!run_command(command, frame, site)) {
             return false;
+          }
         }
         return !died();
       }
@@ -147,8 +159,9 @@ namespace erax::interp {
         std::size_t target = 0;
         if (block.branch) {
           bool holds = false;
-          if (!holds_(block.branch->condition, frame, holds))
+          if (!holds_(block.branch->condition, frame, holds)) {
             return false;
+          }
           if (!block.next) {
             break_("a block with a branch has no fallthrough edge");
             return false;
@@ -188,16 +201,18 @@ namespace erax::interp {
           case Op::Neg:
           case Op::Not: {
             const Cell value = read(command.args[1], frame);
-            if (died())
+            if (died()) {
               return false;
+            }
             return land(middleend::fold::unary(command.op, command.args[1].type, value), command.args[0], frame, site);
           }
           case Op::Cast: {
             // Read in the source's type, re-wrap into the destination's — the
             // same `fold` code the front end folds constants with.
             const Cell source = read(command.args[1], frame);
-            if (died())
+            if (died()) {
               return false;
+            }
             write(command.args[0], middleend::fold::convert(command.args[0].type, command.args[1].type, source), frame);
             return !died();
           }
@@ -225,32 +240,38 @@ namespace erax::interp {
           }
           case Op::Load: {
             const Cell address = read(command.args[1], frame);
-            if (died())
+            if (died()) {
               return false;
+            }
             const Cell* cell = deref(address, site);
-            if (!cell)
+            if (!cell) {
               return false;
+            }
             write(command.args[0], *cell, frame);
             return !died();
           }
           case Op::Store: {
             const Cell address = read(command.args[0], frame);
-            if (died())
+            if (died()) {
               return false;
+            }
             const Cell value = read(command.args[1], frame);
-            if (died())
+            if (died()) {
               return false;
+            }
             Cell* cell = deref(address, site);
-            if (!cell)
+            if (!cell) {
               return false;
+            }
             *cell = value;
             return true;
           }
           default: {
             const Cell left = read(command.args[1], frame);
             const Cell right = read(command.args[2], frame);
-            if (died())
+            if (died()) {
               return false;
+            }
             // The operands share a type (the validator saw to that), so its
             // signedness decides div, mod, and `SAR`.
             return land(middleend::fold::binary(command.op, command.args[1].type, left, right), command.args[0], frame,
@@ -279,18 +300,22 @@ namespace erax::interp {
         const bool carries = !command.args.empty();
         if (carries) {
           value = read(command.args[0], frame);
-          if (died())
+          if (died()) {
             return false;
+          }
         }
         stack_.resize(frame.base);
         frames_.pop_back();
-        if (!carries)
+        if (!carries) {
           return true;
+        }
         // The outermost `RET` is the entrypoint's, and its value is the exit code.
-        if (frames_.empty())
+        if (frames_.empty()) {
           returning_ = value;
-        if (frame.result && !frames_.empty())
+        }
+        if (frame.result && !frames_.empty()) {
           write(*frame.result, value, frames_.back());
+        }
         return !died();
       }
 
@@ -307,15 +332,17 @@ namespace erax::interp {
         arguments.reserve(command.args.size() - 2);
         for (std::size_t slot = 2; slot < command.args.size(); ++slot) {
           arguments.push_back(read(command.args[slot], frame));
-          if (died())
+          if (died()) {
             return false;
+          }
         }
         if (arguments.size() > function.frame_size) {
           break_("a call passes more arguments than the callee's frame holds");
           return false;
         }
-        if (!push(Subject::Function, callee.index(), function.frame_size, site))
+        if (!push(Subject::Function, callee.index(), function.frame_size, site)) {
           return false;
+        }
         const std::size_t base = frames_.back().base;
         frames_.back().result = command.args[0];
         for (std::size_t slot = 0; slot < arguments.size(); ++slot) {
@@ -353,10 +380,12 @@ namespace erax::interp {
       bool print(const Command& command, Frame frame) {
         for (std::size_t slot = 1; slot < command.args.size(); ++slot) {
           const Cell value = read(command.args[slot], frame);
-          if (died())
+          if (died()) {
             return false;
-          if (slot != 1)
+          }
+          if (slot != 1) {
             output_ += ' ';
+          }
           output_ += middleend::decimal_text(command.args[slot].type, value);
         }
         output_ += '\n';
@@ -366,8 +395,9 @@ namespace erax::interp {
       /// `PRIM print_char dst c`: appends the byte and nothing else.
       bool print_char(const Command& command, Frame frame) {
         const Cell value = read(command.args[1], frame);
-        if (died())
+        if (died()) {
           return false;
+        }
         output_ += static_cast<char>(value & 0xFF);
         return true;
       }
@@ -385,8 +415,9 @@ namespace erax::interp {
       /// which the driver reports without the bytes — and no frame's `RET` runs.
       bool exit_(const Command& command, Frame frame) {
         const Cell value = read(command.args[1], frame);
-        if (died())
+        if (died()) {
           return false;
+        }
         exiting_ = value;
         frames_.clear();
         return true;
@@ -404,12 +435,14 @@ namespace erax::interp {
       /// cells (at least one). The result is a `ptr u8` into the heap region.
       bool alloc_(const Command& command, Frame frame) {
         const Cell bytes = read(command.args[1], frame);
-        if (died())
+        if (died()) {
           return false;
+        }
         const Cell cells = bytes / 8 + (bytes % 8 != 0 ? 1 : 0);
         const Cell address = allocate(cells == 0 ? 1 : static_cast<std::size_t>(cells), site_of(frame));
-        if (died())
+        if (died()) {
           return false;
+        }
         write(command.args[0], address, frame);
         return !died();
       }
@@ -418,10 +451,12 @@ namespace erax::interp {
       /// does nothing; any other pointer that names no live block is a trap.
       bool free_(const Command& command, Frame frame) {
         const Cell address = read(command.args[1], frame);
-        if (died())
+        if (died()) {
           return false;
-        if (address == 0)
+        }
+        if (address == 0) {
           return true;
+        }
         if (static_cast<Region>(address >> region_bits) != Region::Heap) {
           trap(Trap::InvalidPointer, site_of(frame));
           return false;
@@ -440,12 +475,13 @@ namespace erax::interp {
       /// enough (splitting it), otherwise by growing the heap.
       Cell allocate(std::size_t cells, const Site& site) {
         for (std::size_t slot = 0; slot < heap_free_.size(); ++slot) {
-          if (heap_free_[slot].second < cells)
+          if (heap_free_[slot].second < cells) {
             continue;
+          }
           const std::size_t start = heap_free_[slot].first;
-          if (heap_free_[slot].second == cells)
+          if (heap_free_[slot].second == cells) {
             heap_free_.erase(heap_free_.begin() + static_cast<std::ptrdiff_t>(slot));
-          else {
+          } else {
             heap_free_[slot].first += cells;
             heap_free_[slot].second -= cells;
           }
@@ -466,8 +502,9 @@ namespace erax::interp {
       bool holds_(const Condition& condition, Frame frame, bool& holds) {
         const Cell left = read(condition.a, frame);
         const Cell right = read(condition.b, frame);
-        if (died())
+        if (died()) {
           return false;
+        }
         const auto result = middleend::fold::binary(condition.cmp, condition.a.type, left, right);
         // A comparison always has an answer, and the validator keeps anything else
         // out of a branch test, so a failure here is the machine's own doing.
@@ -535,16 +572,19 @@ namespace erax::interp {
         const std::size_t index = static_cast<std::size_t>(address & index_mask_);
         switch (region) {
           case Region::Stack:
-            if (index < stack_.size())
+            if (index < stack_.size()) {
               return &stack_[index];
+            }
             break;
           case Region::Global:
-            if (index < globals_.size())
+            if (index < globals_.size()) {
               return &globals_[index];
+            }
             break;
           case Region::Heap:
-            if (index < heap_.size())
+            if (index < heap_.size()) {
               return &heap_[index];
+            }
             break;
         }
         trap(Trap::InvalidPointer, site);
@@ -601,16 +641,19 @@ namespace erax::interp {
 
       /// The first death is the one reported: a program that dies has no later state.
       void trap(Trap kind, const Site& site) {
-        if (trap_)
+        if (trap_) {
           return;
+        }
         trap_ = Trapped {kind, site, {}};
-        for (const Frame& frame : frames_)
+        for (const Frame& frame : frames_) {
           trap_->stack.push_back(frame.index);
+        }
       }
 
       void break_(std::string what) noexcept {
-        if (broken_.empty())
+        if (broken_.empty()) {
           broken_ = std::move(what);
+        }
       }
 
       bool died() const noexcept {
@@ -618,8 +661,9 @@ namespace erax::interp {
       }
 
       Failure failure() const {
-        if (trap_)
+        if (trap_) {
           return *trap_;
+        }
         return Broken {broken_};
       }
 
@@ -664,15 +708,17 @@ namespace erax::interp {
   }
 
   std::string to_string(const Failure& failure) {
-    if (const Broken* broken = std::get_if<Broken>(&failure))
+    if (const Broken* broken = std::get_if<Broken>(&failure)) {
       return broken->what;
+    }
     if (const Trapped* trapped = std::get_if<Trapped>(&failure)) {
       std::string text = to_string(trapped->site) + ": " + std::string {to_string(trapped->trap)};
       if (trapped->stack.size() > 1) {
         text += ", called from ";
         for (std::size_t depth = 1; depth < trapped->stack.size(); ++depth) {
-          if (depth > 1)
+          if (depth > 1) {
             text += ", ";
+          }
           text += "function " + std::to_string(trapped->stack[depth - 1]);
         }
       }

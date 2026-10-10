@@ -25,15 +25,17 @@ namespace erax::middleend {
 
   std::string to_string(const ValidationError& error) {
     std::string text = location_of(error);
-    if (error.command)
+    if (error.command) {
       text += ", command " + std::to_string(*error.command);
+    }
     return text + ": " + error.message;
   }
 
   std::expected<void, std::vector<ValidationError>> check(const Program& program) {
     std::vector<ValidationError> errors = validate(program);
-    if (!errors.empty())
+    if (!errors.empty()) {
       return std::unexpected(std::move(errors));
+    }
     return {};
   }
 
@@ -75,10 +77,12 @@ namespace erax::middleend {
 
     std::string arity_text(Op op) {
       const Arity spec = arity(op);
-      if (spec.max == Arity::unbounded)
+      if (spec.max == Arity::unbounded) {
         return "at least " + std::to_string(spec.min) + " arguments";
-      if (spec.min == spec.max)
+      }
+      if (spec.min == spec.max) {
         return std::to_string(spec.min) + " arguments";
+      }
       return std::to_string(spec.min) + " or " + std::to_string(spec.max) + " arguments";
     }
 
@@ -117,8 +121,9 @@ namespace erax::middleend {
       };
       for (const BasicBlock& block : cfg.blocks) {
         for (const Command& command : block.commands) {
-          for (const Operand& operand : command.args)
+          for (const Operand& operand : command.args) {
             consider(operand);
+          }
         }
         if (block.branch) {
           consider(block.branch->condition.a);
@@ -136,8 +141,9 @@ namespace erax::middleend {
 
     std::vector<bool> reachable_blocks(const Cfg& cfg) {
       std::vector<bool> reachable(cfg.blocks.size(), false);
-      if (cfg.blocks.empty())
+      if (cfg.blocks.empty()) {
         return reachable;
+      }
       std::vector<std::size_t> stack {0};
       reachable[0] = true;
       while (!stack.empty()) {
@@ -145,8 +151,9 @@ namespace erax::middleend {
         stack.pop_back();
         const std::size_t targets[2] = {block.next.value_or(no_edge), block.branch ? block.branch->target : no_edge};
         for (const std::size_t target : targets) {
-          if (target == no_edge || target >= cfg.blocks.size() || reachable[target])
+          if (target == no_edge || target >= cfg.blocks.size() || reachable[target]) {
             continue;
+          }
           reachable[target] = true;
           stack.push_back(target);
         }
@@ -161,8 +168,9 @@ namespace erax::middleend {
       for (std::size_t index = 0; index < cfg.blocks.size(); ++index) {
         const BasicBlock& block = cfg.blocks[index];
         for (const std::size_t target : {block.next.value_or(no_edge), block.branch ? block.branch->target : no_edge}) {
-          if (target == no_edge || target >= cfg.blocks.size())
+          if (target == no_edge || target >= cfg.blocks.size()) {
             continue;
+          }
           incoming[target].push_back(index);
         }
       }
@@ -173,8 +181,9 @@ namespace erax::middleend {
     std::vector<bool> written_by(const BasicBlock& block, std::size_t cells) {
       std::vector<bool> written(cells, false);
       for (const Command& command : block.commands) {
-        if (!has_result(command.op))
+        if (!has_result(command.op)) {
           continue;
+        }
         const Operand& result = command.args[0];
         if (result.kind == OperandKind::VReg && !result.is_empty() && result.value < cells) {
           written[result.value] = true;
@@ -221,10 +230,12 @@ namespace erax::middleend {
 
       // 3. Frames: the one rule every operand shares.
       void need_in_frame(const Body& body, At at, const Operand& operand, std::string_view what) {
-        if (body.frame_size == 0)
+        if (body.frame_size == 0) {
           return;  // an initializer has no frame to be outside of
-        if (operand.kind != OperandKind::VReg || operand.is_empty())
+        }
+        if (operand.kind != OperandKind::VReg || operand.is_empty()) {
           return;
+        }
         if (operand.value >= body.frame_size) {
           report(body, at,
                  std::string {what} + " names $" + std::to_string(operand.value) + " in a frame of " +
@@ -235,8 +246,9 @@ namespace erax::middleend {
       // 4. Definitions: one vreg id means one type for the whole function.
       void need_one_type(const Body& body, At at, const Operand& operand, std::string_view what,
                          std::vector<std::optional<Type>>& types) {
-        if (operand.value >= types.size())
+        if (operand.value >= types.size()) {
           return;
+        }
         if (types[operand.value] && *types[operand.value] != operand.type) {
           report(body, at,
                  std::string {what} + " uses $" + std::to_string(operand.value) + " as " +
@@ -312,11 +324,13 @@ namespace erax::middleend {
 
       void need_signedness(const Body& body, At at, const Command& command) {
         const std::optional<bool> wanted = signedness(command.op);
-        if (!wanted)
+        if (!wanted) {
           return;
+        }
         for (const std::size_t slot : {std::size_t {1}, std::size_t {2}}) {
-          if (is_signed(command.args[slot].type) == *wanted)
+          if (is_signed(command.args[slot].type) == *wanted) {
             continue;
+          }
           report(body, at,
                  std::string {to_string(command.op)} + " needs " + (*wanted ? "signed" : "unsigned") +
                      " operands, but " + slot_text(slot) + " is " + std::string {to_string(command.args[slot].type)});
@@ -351,8 +365,9 @@ namespace erax::middleend {
               report(body, At {index, slot}, "is not the last command in its block");
             }
           }
-          if (block.next)
+          if (block.next) {
             check_edge(body, at, *block.next, "its next block is");
+          }
           if (block.branch) {
             check_edge(body, at, block.branch->target, "its branch target is");
             check_condition(body, at, block.branch->condition);
@@ -360,8 +375,9 @@ namespace erax::middleend {
         }
         const std::vector<bool> reachable = reachable_blocks(cfg);
         for (std::size_t index = 0; index < cfg.blocks.size(); ++index) {
-          if (!reachable[index])
+          if (!reachable[index]) {
             report(body, At {index, std::nullopt}, "is not reachable from the entry block");
+          }
         }
       }
 
@@ -431,8 +447,9 @@ namespace erax::middleend {
         // have their own rules for it.
         if (command.op != Op::Call && command.op != Op::Primitive) {
           for (const Operand& operand : command.args) {
-            if (!operand.is_empty())
+            if (!operand.is_empty()) {
               continue;
+            }
             report(body, at,
                    command.op == Op::Ret ? "the returned value is the EMPTY sentinel, which holds no value" :
                                            "an operand is the EMPTY sentinel, which holds no value");
@@ -655,16 +672,18 @@ namespace erax::middleend {
       // 4. Definitions.
       void check_definitions(const Body& body) {
         const Cfg& cfg = *body.cfg;
-        if (cfg.blocks.empty())
+        if (cfg.blocks.empty()) {
           return;
+        }
         const std::size_t cells = cell_count(body);
         std::vector<std::optional<Type>> types(cells);
         std::vector<std::vector<bool>> entering = defined_on_entry(body, cells);
 
         const std::vector<bool> reachable = reachable_blocks(cfg);
         for (std::size_t index = 0; index < cfg.blocks.size(); ++index) {
-          if (!reachable[index])
+          if (!reachable[index]) {
             continue;  // already reported as unreachable
+          }
           std::vector<bool> defined = entering[index];
           const BasicBlock& block = cfg.blocks[index];
           for (std::size_t slot = 0; slot < block.commands.size(); ++slot) {
@@ -673,26 +692,30 @@ namespace erax::middleend {
             const std::string what = std::string {to_string(command.op)};
             for (std::size_t arg = 0; arg < command.args.size(); ++arg) {
               const Operand& operand = command.args[arg];
-              if (operand.kind != OperandKind::VReg || operand.is_empty())
+              if (operand.kind != OperandKind::VReg || operand.is_empty()) {
                 continue;
+              }
               if (!is_write(command.op, arg) && !defined[operand.value]) {
                 report(
                     body, at,
                     what + " reads $" + std::to_string(operand.value) + ", which nothing has written on the way here");
               }
               need_one_type(body, at, operand, what, types);
-              if (is_write(command.op, arg))
+              if (is_write(command.op, arg)) {
                 defined[operand.value] = true;
+              }
             }
           }
           // The branch is taken after the commands, so its operands are read
           // with everything the block has written.
-          if (!block.branch)
+          if (!block.branch) {
             continue;
+          }
           const std::string what = std::string {to_string(block.branch->condition.cmp)} + " in the branch test";
           for (const Operand& operand : {block.branch->condition.a, block.branch->condition.b}) {
-            if (operand.kind != OperandKind::VReg || operand.is_empty())
+            if (operand.kind != OperandKind::VReg || operand.is_empty()) {
               continue;
+            }
             if (!defined[operand.value]) {
               report(body, At {index, std::nullopt},
                      what + " reads $" + std::to_string(operand.value) + ", which nothing has written on the way here");
@@ -717,16 +740,18 @@ namespace erax::middleend {
         std::vector<std::vector<bool>> entering(cfg.blocks.size(), std::vector<bool>(cells, true));
         entering[0].assign(cells, false);
         for (std::size_t slot = 0; slot < (body.params ? body.params->size() : 0); ++slot) {
-          if (slot < cells)
+          if (slot < cells) {
             entering[0][slot] = true;
+          }
         }
 
         bool changed = true;
         while (changed) {
           changed = false;
           for (std::size_t index = 1; index < cfg.blocks.size(); ++index) {
-            if (!reachable[index])
+            if (!reachable[index]) {
               continue;
+            }
             std::vector<bool> meeting = entering[index];
             bool first = true;
             for (const std::size_t previous : incoming[index]) {

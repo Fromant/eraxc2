@@ -11,8 +11,9 @@ namespace erax::frontend {
     /// constant, so both halves live here.
     std::uint64_t truncate(std::uint64_t bits, middleend::Type type) noexcept {
       const std::size_t width = middleend::size_of(type) * 8;
-      if (width == 0 || width == 64)
+      if (width == 0 || width == 64) {
         return bits;
+      }
       return bits & ((std::uint64_t {1} << width) - 1);
     }
 
@@ -20,16 +21,20 @@ namespace erax::frontend {
 
   std::int64_t ConstInt::signed_value() const noexcept {
     const std::size_t width = middleend::size_of(type) * 8;
-    if (!middleend::is_signed(type))
+    if (!middleend::is_signed(type)) {
       return static_cast<std::int64_t>(truncate(bits, type));
-    if (width == 0)
+    }
+    if (width == 0) {
       return 0;
-    if (width == 64)
+    }
+    if (width == 64) {
       return static_cast<std::int64_t>(bits);
+    }
     const std::uint64_t value = truncate(bits, type);
     const std::uint64_t sign = std::uint64_t {1} << (width - 1);
-    if ((value & sign) == 0)
+    if ((value & sign) == 0) {
       return static_cast<std::int64_t>(value);
+    }
     return static_cast<std::int64_t>(value) - static_cast<std::int64_t>(std::uint64_t {1} << width);
   }
 

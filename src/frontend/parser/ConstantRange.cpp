@@ -22,14 +22,16 @@ namespace erax::frontend::range {
     bool arithmetic_of(Op op, Number a, Number b, Number& out) noexcept {
       constexpr std::uint64_t top = ~std::uint64_t {0};
       if (op == Op::Mul) {
-        if (a.magnitude != 0 && b.magnitude > top / a.magnitude)
+        if (a.magnitude != 0 && b.magnitude > top / a.magnitude) {
           return false;
+        }
         out = {a.negative != b.negative, a.magnitude * b.magnitude};
         return true;
       }
       // A subtraction is an addition of the other sign, so both come to here.
-      if (op == Op::Sub)
+      if (op == Op::Sub) {
         b.negative = !b.negative;
+      }
       if (a.negative != b.negative) {
         // The signs disagree, so the larger magnitude wins and the sign is its own.
         if (a.magnitude >= b.magnitude) {
@@ -39,8 +41,9 @@ namespace erax::frontend::range {
         }
         return true;
       }
-      if (a.magnitude > top - b.magnitude)
+      if (a.magnitude > top - b.magnitude) {
         return false;
+      }
       out = {a.negative, a.magnitude + b.magnitude};
       return true;
     }
@@ -57,24 +60,28 @@ namespace erax::frontend::range {
   }  // namespace
 
   Number number_of(const ConstInt& constant) noexcept {
-    if (!erax::middleend::is_signed(constant.type))
+    if (!erax::middleend::is_signed(constant.type)) {
       return Number {false, constant.unsigned_value()};
+    }
     const std::int64_t value = constant.signed_value();
     return value < 0 ? Number {true, magnitude(value)} : Number {false, static_cast<std::uint64_t>(value)};
   }
 
   std::optional<std::uint64_t> bits_in_range(Number value, Type type) noexcept {
     const std::size_t width = erax::middleend::size_of(type) * 8;
-    if (width == 0)
+    if (width == 0) {
       return std::nullopt;
+    }
     const std::uint64_t sign_bit = std::uint64_t {1} << (width - 1);
     if (value.negative) {
-      if (!erax::middleend::is_signed(type) || value.magnitude > sign_bit)
+      if (!erax::middleend::is_signed(type) || value.magnitude > sign_bit) {
         return std::nullopt;
+      }
     } else if (erax::middleend::is_signed(type)) {
       // Up to a signed type is one short of its sign bit, which is not a magnitude.
-      if (value.magnitude >= sign_bit)
+      if (value.magnitude >= sign_bit) {
         return std::nullopt;
+      }
     } else if (width < 64 && value.magnitude >= sign_bit * 2) {
       // Up to an unsigned type is the whole of it. A `u64` is already that, so it has
       // nothing above it that a `u64` can hold.
@@ -103,8 +110,9 @@ namespace erax::frontend::range {
         return std::unexpected("this constant expression is too large for any type");
       }
       const std::optional<std::uint64_t> bits = bits_in_range(result, type);
-      if (!bits)
+      if (!bits) {
         return std::unexpected(out_of_range);
+      }
       return ConstInt::bits_of(*bits, type);
     }
 
@@ -134,8 +142,9 @@ namespace erax::frontend::range {
     Number result = number_of(value);
     result.negative = !result.negative;
     const std::optional<std::uint64_t> bits = bits_in_range(result, type);
-    if (!bits)
+    if (!bits) {
       return std::unexpected(out_of_range);
+    }
     return ConstInt::bits_of(*bits, type);
   }
 

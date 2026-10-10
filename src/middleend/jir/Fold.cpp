@@ -22,8 +22,9 @@ namespace erax::middleend::fold {
 
     std::int64_t to_signed(std::uint64_t bits, Type type) noexcept {
       const std::size_t used = size_of(type) * 8;
-      if (used == 64)
+      if (used == 64) {
         return static_cast<std::int64_t>(bits);
+      }
       const std::uint64_t sign = std::uint64_t {1} << (used - 1);
       const std::uint64_t value = bits & ((std::uint64_t {1} << used) - 1);
       if ((value & sign) != 0) {
@@ -76,17 +77,20 @@ namespace erax::middleend::fold {
       if (is_signed(type)) {
         const std::int64_t a = to_signed(left, type);
         const std::int64_t b = to_signed(right, type);
-        if (b == 0)
+        if (b == 0) {
           return fail(Failure::DivisionByZero);
-        if (a == signed_min(type) && b == -1)
+        }
+        if (a == signed_min(type) && b == -1) {
           return fail(Failure::SignedOverflow);
+        }
         const std::int64_t result = op == Op::Sdiv ? a / b : a % b;
         return ok(narrow(static_cast<std::uint64_t>(result), type));
       }
       const std::uint64_t a = narrow(left, type);
       const std::uint64_t b = narrow(right, type);
-      if (b == 0)
+      if (b == 0) {
         return fail(Failure::DivisionByZero);
+      }
       return ok(op == Op::Udiv ? a / b : a % b);
     }
 
@@ -105,12 +109,15 @@ namespace erax::middleend::fold {
   }  // namespace
 
   Range range_of(Type type) noexcept {
-    if (!is_integer(type))
+    if (!is_integer(type)) {
       return {0, -1};
-    if (is_signed(type))
+    }
+    if (is_signed(type)) {
       return {signed_min(type), signed_max(type)};
-    if (size_of(type) == 8)
+    }
+    if (size_of(type) == 8) {
       return {0, std::numeric_limits<std::int64_t>::max()};
+    }
     return {0, static_cast<std::int64_t>(narrow(~std::uint64_t {0}, type))};
   }
 

@@ -69,16 +69,18 @@ namespace erax::frontend {
 
   Keyword keyword_of(std::string_view text) noexcept {
     for (const KeywordName& entry : keywords) {
-      if (entry.text == text)
+      if (entry.text == text) {
         return entry.keyword;
+      }
     }
     return Keyword::None;
   }
 
   std::string_view to_string(Keyword keyword) noexcept {
     for (const KeywordName& entry : keywords) {
-      if (entry.keyword == keyword)
+      if (entry.keyword == keyword) {
         return entry.text;
+      }
     }
     return "<none>";
   }
@@ -109,12 +111,15 @@ namespace erax::frontend {
   }
 
   std::optional<Capability> capability_of(std::string_view text) noexcept {
-    if (text == "Ordered")
+    if (text == "Ordered") {
       return Capability::Ordered;
-    if (text == "Negatable")
+    }
+    if (text == "Negatable") {
       return Capability::Negatable;
-    if (text == "Arithmetic")
+    }
+    if (text == "Arithmetic") {
       return Capability::Arithmetic;
+    }
     return std::nullopt;
   }
 
@@ -141,29 +146,33 @@ namespace erax::frontend {
     // closing bracket is what the caller asked for.
     const Token& consumed = (*tokens_)[index_];
     const std::size_t last = tokens_->size() - 1;
-    if (index_ < last)
+    if (index_ < last) {
       ++index_;
+    }
     return consumed;
   }
 
   bool TokenCursor::match(TokenType type) {
-    if (!at(type))
+    if (!at(type)) {
       return false;
+    }
     take();
     return true;
   }
 
   bool TokenCursor::match_op(std::string_view text) {
-    if (!at_op(text))
+    if (!at_op(text)) {
       return false;
+    }
     take();
     return true;
   }
 
   bool TokenCursor::else_follows() const {
     std::size_t index = index_ + 1;
-    if (index >= tokens_->size() || (*tokens_)[index].type != TokenType::LBrace)
+    if (index >= tokens_->size() || (*tokens_)[index].type != TokenType::LBrace) {
       return false;
+    }
     int depth = 0;
     while (index < tokens_->size()) {
       const TokenType type = (*tokens_)[index].type;
@@ -175,8 +184,9 @@ namespace erax::frontend {
       }
       ++index;
     }
-    if (index >= tokens_->size())
+    if (index >= tokens_->size()) {
       return false;
+    }
     const Token& token = (*tokens_)[index];
     return token.type == TokenType::Identifier && keyword_of(token.text) == Keyword::Else;
   }
@@ -203,8 +213,9 @@ namespace erax::frontend {
       const std::string_view text = (*tokens_)[index].text;
       // `*` and `&` are prefix here (`*p`, `&x`): an infix one always follows a
       // whole operand, so one where an operand starts can only be a prefix.
-      if (text != "-" && text != "!" && text != "~" && text != "*" && text != "&")
+      if (text != "-" && text != "!" && text != "~" && text != "*" && text != "&") {
         break;
+      }
       ++index;
     }
     // What follows the operand is the one token after it, so the operand's own extent is
@@ -220,8 +231,9 @@ namespace erax::frontend {
         index += 2;
       }
       ++index;
-      if (index < tokens_->size() && (*tokens_)[index].type == TokenType::LParen)
+      if (index < tokens_->size() && (*tokens_)[index].type == TokenType::LParen) {
         index = past_group(index);
+      }
     } else if (index < tokens_->size()) {
       ++index;
     }
@@ -230,8 +242,9 @@ namespace erax::frontend {
 
   bool TokenCursor::operator_follows(std::span<const std::string_view> operators) const {
     const std::size_t index = past_operand(index_);
-    if (index >= tokens_->size() || (*tokens_)[index].type != TokenType::Operator)
+    if (index >= tokens_->size() || (*tokens_)[index].type != TokenType::Operator) {
       return false;
+    }
     return std::ranges::find(operators, (*tokens_)[index].text) != operators.end();
   }
 
@@ -247,8 +260,9 @@ namespace erax::frontend {
       if (at(TokenType::LBrace) || at(TokenType::LParen)) {
         ++depth;
       } else if (at(TokenType::RParen)) {
-        if (depth == 0)
+        if (depth == 0) {
           return;
+        }
         --depth;
       } else if (at(TokenType::RBrace)) {
         if (depth == 0) {
@@ -316,8 +330,9 @@ namespace erax::frontend {
       if (cursor.current().text == "ptr") {
         cursor.take();
         auto pointee = expect_type(cursor, context);
-        if (!pointee)
+        if (!pointee) {
           return pointee;
+        }
         return SemType::pointer(*pointee);
       }
       if (const std::optional<SemType> type = type_of(keyword_of(cursor.current().text)); type) {
@@ -334,8 +349,9 @@ namespace erax::frontend {
   const LocalInfo* ParseContext::find_local(const std::string& name) const noexcept {
     for (auto scope = scopes_.rbegin(); scope != scopes_.rend(); ++scope) {
       const auto found = scope->locals.find(name);
-      if (found != scope->locals.end())
+      if (found != scope->locals.end()) {
         return &found->second;
+      }
     }
     return nullptr;
   }
@@ -343,8 +359,9 @@ namespace erax::frontend {
   LocalInfo* ParseContext::find_local(const std::string& name) noexcept {
     for (auto scope = scopes_.rbegin(); scope != scopes_.rend(); ++scope) {
       const auto found = scope->locals.find(name);
-      if (found != scope->locals.end())
+      if (found != scope->locals.end()) {
         return &found->second;
+      }
     }
     return nullptr;
   }
@@ -352,8 +369,9 @@ namespace erax::frontend {
   const GlobalInfo* ParseContext::find_global(const std::string& name) const noexcept {
     for (auto ns = namespace_stack_.rbegin(); ns != namespace_stack_.rend(); ++ns) {
       const auto found = (*ns)->globals.find(name);
-      if (found != (*ns)->globals.end())
+      if (found != (*ns)->globals.end()) {
         return &found->second;
+      }
     }
     return nullptr;
   }
@@ -365,8 +383,9 @@ namespace erax::frontend {
   const std::vector<FunctionInfo>* ParseContext::find_functions(const std::string& name) const noexcept {
     for (auto ns = namespace_stack_.rbegin(); ns != namespace_stack_.rend(); ++ns) {
       const auto found = (*ns)->functions.find(name);
-      if (found != (*ns)->functions.end())
+      if (found != (*ns)->functions.end()) {
         return &found->second;
+      }
     }
     return nullptr;
   }
@@ -374,8 +393,9 @@ namespace erax::frontend {
   const TemplateInfo* ParseContext::find_template(const std::string& name) const noexcept {
     for (auto ns = namespace_stack_.rbegin(); ns != namespace_stack_.rend(); ++ns) {
       const auto found = (*ns)->templates.find(name);
-      if (found != (*ns)->templates.end())
+      if (found != (*ns)->templates.end()) {
         return &found->second;
+      }
     }
     return nullptr;
   }
@@ -431,8 +451,9 @@ namespace erax::frontend {
 
   const NameSpace* ParseContext::find_namespace(const std::string& name) const noexcept {
     for (auto ns = namespace_stack_.rbegin(); ns != namespace_stack_.rend(); ++ns) {
-      if (const NameSpace* found = find_namespace(**ns, name); found != nullptr)
+      if (const NameSpace* found = find_namespace(**ns, name); found != nullptr) {
         return found;
+      }
     }
     return nullptr;
   }
@@ -475,8 +496,9 @@ namespace erax::frontend {
     NameSpace* ns = nullptr;
     std::string qualified;
     for (std::size_t index = 0; index < path.size(); ++index) {
-      if (!qualified.empty())
+      if (!qualified.empty()) {
         qualified += '.';
+      }
       qualified += path[index];
       if (index == 0) {
         // The first segment searches outward from the current namespace, so a
@@ -493,8 +515,9 @@ namespace erax::frontend {
         const auto found = ns->namespaces.find(path[index]);
         ns = found != ns->namespaces.end() ? found->second.get() : nullptr;
       }
-      if (ns == nullptr)
+      if (ns == nullptr) {
         return std::unexpected(ParseError {"unknown namespace '" + qualified + "'", location});
+      }
     }
     return ns;
   }
@@ -504,8 +527,9 @@ namespace erax::frontend {
     namespace_stack_.assign(1, &root_namespace_);
     for (const std::string& segment : path) {
       NameSpace* next = find_namespace_in_current(segment);
-      if (next == nullptr)
+      if (next == nullptr) {
         break;
+      }
       namespace_stack_.push_back(next);
     }
     return previous;
@@ -559,8 +583,9 @@ namespace erax::frontend {
       key += to_string(type);
     }
     const auto found = instantiation_ids_.find(key);
-    if (found != instantiation_ids_.end())
+    if (found != instantiation_ids_.end()) {
       return instantiations_[found->second].id;
+    }
     if (instantiations_.size() >= max_instantiations) {
       return std::unexpected(
           ParseError {"template instantiation of '" + tmpl->name + "' does not terminate", location});
@@ -588,8 +613,9 @@ namespace erax::frontend {
       if (cursor.current().text == "ptr") {
         cursor.take();
         auto pointee = read_type(cursor, context);
-        if (!pointee)
+        if (!pointee) {
           return pointee;
+        }
         return SemType::pointer(*pointee);
       }
       const auto found = type_substitution_.find(cursor.current().text);

@@ -10,12 +10,14 @@ namespace erax::middleend {
 
     std::string signed_text(std::uint64_t bits, std::size_t width) {
       const std::size_t used = width * 8;
-      if (used == 64)
+      if (used == 64) {
         return std::to_string(static_cast<std::int64_t>(bits));
+      }
       std::uint64_t value = bits & ((std::uint64_t {1} << used) - 1);
       const std::uint64_t sign = std::uint64_t {1} << (used - 1);
-      if ((value & sign) != 0)
+      if ((value & sign) != 0) {
         value |= ~((std::uint64_t {1} << used) - 1);
+      }
       return std::to_string(static_cast<std::int64_t>(value));
     }
 
@@ -36,8 +38,9 @@ namespace erax::middleend {
             const primitives::Signature* signature = primitives::by_id(command.prim);
             out += signature ? " " + std::string {signature->name} : " " + std::to_string(command.prim);
           }
-          for (const Operand& arg : command.args)
+          for (const Operand& arg : command.args) {
             out += " " + to_string(arg);
+          }
           out += "\n";
         }
         if (node.branch) {
@@ -45,8 +48,9 @@ namespace erax::middleend {
               to_string(node.branch->condition.a) + ", " + to_string(node.branch->condition.b) + " then " +
               std::to_string(node.branch->target) + "\n";
         }
-        if (node.next)
+        if (node.next) {
           out += indent + "  -> " + std::to_string(*node.next) + "\n";
+        }
       }
     }
 
@@ -110,8 +114,9 @@ namespace erax::middleend {
       case OperandKind::Instant:
         return std::string {to_string(operand.type)} + " " + decimal_text(operand.type, operand.value);
       case OperandKind::VReg:
-        if (operand.is_empty())
+        if (operand.is_empty()) {
           return "EMPTY";
+        }
         return std::string {to_string(operand.type)} + " $" + std::to_string(operand.value);
       case OperandKind::Global: return "@" + std::to_string(operand.value);
       case OperandKind::Fn: return "&" + std::to_string(operand.value);
@@ -120,8 +125,9 @@ namespace erax::middleend {
   }
 
   std::string decimal_text(Type type, std::uint64_t bits) {
-    if (is_signed(type))
+    if (is_signed(type)) {
       return signed_text(bits, size_of(type));
+    }
     return unsigned_text(bits, size_of(type));
   }
 
@@ -140,8 +146,9 @@ namespace erax::middleend {
       const Function& function = program.functions[index];
       out += "function " + std::to_string(index) + ": (";
       for (std::size_t param = 0; param < function.params.size(); ++param) {
-        if (param != 0)
+        if (param != 0) {
           out += ", ";
+        }
         out += to_string(function.params[param]);
       }
       out += ") -> " + std::string {to_string(function.return_type)} + ", frame " +

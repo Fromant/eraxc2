@@ -70,10 +70,12 @@ namespace erax::middleend {
   /// Structural equality, so a type built in one place matches the same type built
   /// in another: the scalar kinds compare by kind, a pointer also by its pointee.
   inline bool operator==(const Type& a, const Type& b) noexcept {
-    if (a.kind != b.kind)
+    if (a.kind != b.kind) {
       return false;
-    if (a.kind != Type::Kind::Ptr)
+    }
+    if (a.kind != Type::Kind::Ptr) {
       return true;
+    }
     return *a.pointee == *b.pointee;
   }
 

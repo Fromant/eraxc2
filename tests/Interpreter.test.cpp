@@ -57,8 +57,9 @@ public:
     explicit PinnedInput(std::string_view bytes) : bytes_(bytes) {}
 
     int read_byte() override {
-      if (index_ >= bytes_.size())
+      if (index_ >= bytes_.size()) {
         return -1;
+      }
       return static_cast<unsigned char>(bytes_[index_++]);
     }
 
@@ -152,8 +153,9 @@ private:
   bool lowers(std::string_view name) {
     const std::string path = example_path(name);
     auto tokens = Tokenizer {}.tokenize(read_file(path), path);
-    if (!tokens)
+    if (!tokens) {
       return false;
+    }
     return ProgramParser {*tokens}.parse().has_value();
   }
 

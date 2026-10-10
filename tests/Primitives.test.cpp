@@ -18,8 +18,9 @@ namespace {
 
   std::vector<std::string> names() {
     std::vector<std::string> listed;
-    for (const Signature& signature : catalog())
+    for (const Signature& signature : catalog()) {
       listed.emplace_back(signature.name);
+    }
     return listed;
   }
 

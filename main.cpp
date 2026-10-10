@@ -76,8 +76,9 @@ public:
     int read_byte() override {
       char byte = 0;
       std::cin.read(&byte, 1);
-      if (!std::cin)
+      if (!std::cin) {
         return -1;
+      }
       return static_cast<unsigned char>(byte);
     }
   };
@@ -106,12 +107,15 @@ int main(int argc, char* argv[]) {
   // `--run` is the action the no-flag case takes, so it is listed mostly so the
   // help can say so. Two different flags are a conflict, not a compound.
   auto action_named = [](const char* argument) -> std::optional<Action> {
-    if (std::strcmp(argument, "--tokenize") == 0)
+    if (std::strcmp(argument, "--tokenize") == 0) {
       return Action::Tokenize;
-    if (std::strcmp(argument, "--jir") == 0)
+    }
+    if (std::strcmp(argument, "--jir") == 0) {
       return Action::Jir;
-    if (std::strcmp(argument, "--run") == 0)
+    }
+    if (std::strcmp(argument, "--run") == 0) {
       return Action::Run;
+    }
     return std::nullopt;
   };
 
@@ -153,8 +157,9 @@ int main(int argc, char* argv[]) {
   }
 
   auto tokens = Tokenizer {}.tokenize(source, filename);
-  if (!tokens)
+  if (!tokens) {
     return report(tokens.error());
+  }
 
   if (action == Action::Tokenize) {
     // The lexer's view is the user's file alone: auto-import is a front-of-parse
@@ -170,8 +175,9 @@ int main(int argc, char* argv[]) {
   // (`docs/std.md`). Its tokens carry the name `std.erx`, so an error inside the
   // library says so.
   auto imported = Tokenizer {}.tokenize(erax::std_source, "std.erx");
-  if (!imported)
+  if (!imported) {
     return report(imported.error());
+  }
   std::vector<Token> all;
   all.reserve(imported->size() + tokens->size());
   // The trailing end-of-file of each half would stop the parser in the middle,
@@ -180,22 +186,25 @@ int main(int argc, char* argv[]) {
   all.insert(all.end(), tokens->begin(), tokens->end());
 
   auto program = ProgramParser {all}.parse();
-  if (!program)
+  if (!program) {
     return report(program.error());
+  }
   // `JIR.md#validator`: the program is checked before anything is done with it,
   // so `--jir` prints IR that a backend can be handed, and running executes IR
   // that is already known to be sound. A new backend plugs in next to the
   // interpreter, after the same check.
   auto valid = erax::middleend::check(*program);
-  if (!valid)
+  if (!valid) {
     return report(valid.error());
+  }
   if (action == Action::Jir) {
     std::cout << erax::middleend::print(*program);
     return EXIT_SUCCESS;
   }
   StdinInput input;
   auto outcome = erax::interp::run(*program, {}, &input);
-  if (!outcome)
+  if (!outcome) {
     return report(outcome.error());
+  }
   return report(*outcome, *program);
 }

@@ -59,10 +59,12 @@ namespace erax::frontend {
 
       Tokenizer::result run() {
         while (!error_.has_value()) {
-          if (!skip_trivia())
+          if (!skip_trivia()) {
             break;
-          if (at_end())
+          }
+          if (at_end()) {
             break;
+          }
 
           begin_token();
           const char c = peek();
@@ -145,13 +147,15 @@ namespace erax::frontend {
             continue;
           }
           if (c == '/' && peek(1) == '/') {
-            while (!at_end() && peek() != '\n')
+            while (!at_end() && peek() != '\n') {
               consume();
+            }
             continue;
           }
           if (c == '/' && peek(1) == '*') {
-            if (!skip_block_comment())
+            if (!skip_block_comment()) {
               return false;
+            }
             continue;
           }
           return true;
@@ -184,8 +188,9 @@ namespace erax::frontend {
           }
           if (peek() == '\\') {
             consume();
-            if (!scan_escape(at))
+            if (!scan_escape(at)) {
               return;
+            }
             continue;
           }
           consume();
@@ -211,8 +216,9 @@ namespace erax::frontend {
         }
         if (peek() == '\\') {
           consume();
-          if (!scan_escape(at))
+          if (!scan_escape(at)) {
             return;
+          }
         } else {
           consume();
         }
@@ -236,8 +242,9 @@ namespace erax::frontend {
         if (c == 'x' || c == 'u') {
           consume();
           const std::size_t before = pos_;
-          while (!at_end() && is_hex_digit(peek()))
+          while (!at_end() && is_hex_digit(peek())) {
             consume();
+          }
           if (pos_ == before) {
             return fail(std::string("expected hexadecimal digits after \\") + c, at);
           }
@@ -254,8 +261,9 @@ namespace erax::frontend {
           consume();
           consume();
           const std::size_t before = pos_;
-          if (!consume_digits(radix))
+          if (!consume_digits(radix)) {
             return;
+          }
           if (pos_ == before) {
             fail("radix literal requires at least one digit", token_start_);
             return;
@@ -273,23 +281,28 @@ namespace erax::frontend {
           return;
         }
 
-        if (!consume_digits(10))
+        if (!consume_digits(10)) {
           return;
+        }
         if (peek() == '.' && is_digit(peek(1))) {
           consume();
-          if (!consume_digits(10))
+          if (!consume_digits(10)) {
             return;
+          }
         }
         if (peek() == 'e' || peek() == 'E') {
           std::size_t j = pos_ + 1;
-          if (j < source_.size() && (source_[j] == '+' || source_[j] == '-'))
+          if (j < source_.size() && (source_[j] == '+' || source_[j] == '-')) {
             ++j;
+          }
           if (j < source_.size() && is_digit(source_[j])) {
             consume();
-            if (peek() == '+' || peek() == '-')
+            if (peek() == '+' || peek() == '-') {
               consume();
-            if (!consume_digits(10))
+            }
+            if (!consume_digits(10)) {
               return;
+            }
             consume_type_suffix();
             tokens_.push_back(make(TokenType::Number));
             return;
@@ -314,20 +327,25 @@ namespace erax::frontend {
       /// consumed anyway, so `64ul` is one literal to reject instead of a literal
       /// followed by a name the parser would have to explain away.
       void consume_type_suffix() {
-        if (at_end() || !is_identifier_start(peek()))
+        if (at_end() || !is_identifier_start(peek())) {
           return;
-        while (!at_end() && is_identifier_char(peek()))
+        }
+        while (!at_end() && is_identifier_char(peek())) {
           consume();
+        }
       }
 
       bool consume_digits(int radix) {
         const auto digit = [radix](char c) {
-          if (radix == 16)
+          if (radix == 16) {
             return is_hex_digit(c);
-          if (radix == 2)
+          }
+          if (radix == 2) {
             return c == '0' || c == '1';
-          if (radix == 8)
+          }
+          if (radix == 8) {
             return c >= '0' && c <= '7';
+          }
           return is_digit(c);
         };
         bool previous = pos_ > 0 && digit(source_[pos_ - 1]);
@@ -341,8 +359,9 @@ namespace erax::frontend {
             previous = false;
             continue;
           }
-          if (!digit(c))
+          if (!digit(c)) {
             break;
+          }
           consume();
           previous = true;
         }
@@ -350,14 +369,16 @@ namespace erax::frontend {
       }
 
       void scan_operator() {
-        while (!at_end() && is_operator_char(peek()))
+        while (!at_end() && is_operator_char(peek())) {
           consume();
+        }
         tokens_.push_back(make(TokenType::Operator));
       }
 
       void scan_identifier() {
-        while (!at_end() && is_identifier_char(peek()))
+        while (!at_end() && is_identifier_char(peek())) {
           consume();
+        }
         tokens_.push_back(make(TokenType::Identifier));
       }
 

@@ -19,8 +19,9 @@ namespace {
   Op from_name(std::string_view name) {
     for (int i = 0; i <= static_cast<int>(Op::Ret); ++i) {
       const auto op = static_cast<Op>(i);
-      if (to_string(op) == name)
+      if (to_string(op) == name) {
         return op;
+      }
     }
     return Op::Ret;
   }

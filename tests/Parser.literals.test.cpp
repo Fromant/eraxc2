@@ -18,12 +18,15 @@ namespace {
 
   /// The width of a type name, for reading a folded bit pattern back as a number.
   std::size_t width_of(std::string_view type) {
-    if (type == "i8" || type == "u8" || type == "char" || type == "bool")
+    if (type == "i8" || type == "u8" || type == "char" || type == "bool") {
       return 8;
-    if (type == "i16" || type == "u16")
+    }
+    if (type == "i16" || type == "u16") {
       return 16;
-    if (type == "i32" || type == "u32")
+    }
+    if (type == "i32" || type == "u32") {
       return 32;
+    }
     return 64;
   }
 
@@ -43,8 +46,9 @@ namespace {
     const std::uint64_t bits = folded_bits(expression, type);
     const std::size_t width = width_of(type);
     const std::uint64_t mask = width == 64 ? ~std::uint64_t {0} : (std::uint64_t {1} << width) - 1;
-    if ((bits & (std::uint64_t {1} << (width - 1))) == 0)
+    if ((bits & (std::uint64_t {1} << (width - 1))) == 0) {
       return static_cast<std::int64_t>(bits);
+    }
     return static_cast<std::int64_t>(bits | ~mask);
   }
 
@@ -273,8 +277,9 @@ TEST_CASE("two exact values are compared as numbers, not as patterns") {
   // The only difference left is which constant the surviving `return` carries.
   const auto ret_value = [](const Program& program) {
     for (const Command& command : commands_of(program, 0)) {
-      if (command.op == Op::Ret && command.args[0].kind == OperandKind::Instant)
+      if (command.op == Op::Ret && command.args[0].kind == OperandKind::Instant) {
         return command.args[0].value;
+      }
     }
     return ~std::uint64_t {0};
   };
@@ -529,8 +534,9 @@ TEST_CASE("an operator on values it cannot fold still emits its command") {
   // The destination is a fresh cell, not the operand's.
   int folded = 0;
   for (const Command& command : commands) {
-    if (command.op != Op::Neg && command.op != Op::Not)
+    if (command.op != Op::Neg && command.op != Op::Not) {
       continue;
+    }
     ++folded;
     CHECK(command.args[0].kind == OperandKind::VReg);
     CHECK(command.args[1].kind == OperandKind::VReg);

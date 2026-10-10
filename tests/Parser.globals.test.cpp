@@ -242,8 +242,9 @@ TEST_CASE("a folded test picks the edge the value says") {
   const Program loop = parse_ok("fn main(): i32 { let i: i32 = 0; while (1 > 2) { i = i + 1; } return i; }");
   CHECK(body_of(loop, 0).size() == 3);
   for (const BasicBlock& block : body_of(loop, 0).blocks) {
-    for (const Command& command : block.commands)
+    for (const Command& command : block.commands) {
       CHECK(command.op != Op::Add);
+    }
   }
   // A folded `do` test does not run the body a second time.
   const Program again = parse_ok("fn main(): i32 { let i: i32 = 0; do { i = i + 1; } while (1 > 2);"
@@ -259,8 +260,9 @@ TEST_CASE("a folded test picks the edge the value says") {
   for (const char* test : {"1 <= 2", "1 > 2", "1 != 1", "1 == 1", "1 >= 2"}) {
     const Program program = parse_ok(std::string {"fn main(): i32 { let x: i32 = 1; if ("} + test +
                                      ") { x = 3; } else { x = 4; } return x; }");
-    for (const BasicBlock& block : body_of(program, 0).blocks)
+    for (const BasicBlock& block : body_of(program, 0).blocks) {
       CHECK(block.edge_count() <= 1);
+    }
   }
   // A folded `if` in a function decides which arm a later read sees.
   const Program intersection = parse_ok("fn f(): i32 { let x: i32; if (1 == 1) { x = 3; } else { x = 4; }"

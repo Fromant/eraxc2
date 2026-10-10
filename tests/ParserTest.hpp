@@ -57,8 +57,9 @@ namespace erax::test {
   /// lexical rule is a parser rule that runs earlier, so both are "the first error".
   inline std::string any_error(std::string_view source) {
     auto tokens = Tokenizer {}.tokenize(source, "test.erx");
-    if (!tokens)
+    if (!tokens) {
       return tokens.error().message;
+    }
     auto program = ProgramParser {*tokens}.parse();
     REQUIRE_FALSE(program.has_value());
     return program.error().message;
@@ -67,8 +68,9 @@ namespace erax::test {
   /// The location of the first error from either stage.
   inline std::string any_error_location(std::string_view source) {
     auto tokens = Tokenizer {}.tokenize(source, "test.erx");
-    if (!tokens)
+    if (!tokens) {
       return tokens.error().location.to_string();
+    }
     auto program = ProgramParser {*tokens}.parse();
     REQUIRE_FALSE(program.has_value());
     return program.error().location.to_string();
@@ -83,16 +85,18 @@ namespace erax::test {
   inline std::vector<Command> commands_of(const Program& program, std::size_t id) {
     std::vector<Command> commands;
     for (const BasicBlock& block : program.functions[id].cfg.blocks) {
-      for (const Command& command : block.commands)
+      for (const Command& command : block.commands) {
         commands.push_back(command);
+      }
     }
     return commands;
   }
 
   inline std::vector<Op> ops_of(const Program& program, std::size_t id) {
     std::vector<Op> ops;
-    for (const Command& command : commands_of(program, id))
+    for (const Command& command : commands_of(program, id)) {
       ops.push_back(command.op);
+    }
     return ops;
   }
 
@@ -109,10 +113,12 @@ namespace erax::test {
   /// fall off the end of the frame.
   inline bool every_block_ends(const Cfg& cfg) {
     for (const BasicBlock& block : cfg.blocks) {
-      if (block.edge_count() > 0)
+      if (block.edge_count() > 0) {
         continue;
-      if (block.commands.empty() || block.commands.back().op != Op::Ret)
+      }
+      if (block.commands.empty() || block.commands.back().op != Op::Ret) {
         return false;
+      }
     }
     return true;
   }
@@ -126,8 +132,9 @@ namespace erax::test {
     const Cfg& cfg = program.functions[id].cfg;
     for (std::size_t index = 0; index < cfg.blocks.size(); ++index) {
       for (const Command& command : cfg.blocks[index].commands) {
-        if (command.op == op)
+        if (command.op == op) {
           return index;
+        }
       }
     }
     return cfg.blocks.size();

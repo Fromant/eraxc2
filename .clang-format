@@ -32,6 +32,7 @@ FixNamespaceComments: false
 IndentCaseLabels: true
 IndentPPDirectives: BeforeHash
 IndentWidth: 2
+InsertBraces: true
 KeepEmptyLinesAtTheStartOfBlocks: true
 MaxEmptyLinesToKeep: 2
 NamespaceIndentation: All

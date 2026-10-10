@@ -71,8 +71,9 @@ private:
         return global != nullptr;
       }
       void mark_assigned() const noexcept {
-        if (local != nullptr)
+        if (local != nullptr) {
           local->assigned = true;
+        }
       }
     };
 

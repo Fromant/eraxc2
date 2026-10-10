@@ -57,8 +57,9 @@ namespace erax::frontend {
     std::string qualified_path(const std::vector<std::string>& parts) {
       std::string qualified;
       for (const std::string& segment : parts) {
-        if (!qualified.empty())
+        if (!qualified.empty()) {
           qualified += '.';
+        }
         qualified += segment;
       }
       return qualified;
@@ -82,14 +83,17 @@ namespace erax::frontend {
              tokens[index + 1].type == TokenType::Identifier) {
         index += 2;
       }
-      if (index >= tokens.size() || tokens[index].type != TokenType::Operator)
+      if (index >= tokens.size() || tokens[index].type != TokenType::Operator) {
         return false;
+      }
       const std::string& text = tokens[index].text;
-      if (text == "=")
+      if (text == "=") {
         return true;
+      }
       for (const CompoundAssign& compound : compound_assigns) {
-        if (text == compound.text)
+        if (text == compound.text) {
           return true;
+        }
       }
       return false;
     }
@@ -101,17 +105,21 @@ namespace erax::frontend {
     bool at_deref_assignment(const TokenCursor& cursor) noexcept {
       const std::vector<Token>& tokens = cursor.tokens();
       std::size_t index = cursor.index();
-      if (index >= tokens.size() || tokens[index].type != TokenType::Operator || tokens[index].text != "*")
+      if (index >= tokens.size() || tokens[index].type != TokenType::Operator || tokens[index].text != "*") {
         return false;
+      }
       index = cursor.past_operand(index + 1);
-      if (index >= tokens.size() || tokens[index].type != TokenType::Operator)
+      if (index >= tokens.size() || tokens[index].type != TokenType::Operator) {
         return false;
+      }
       const std::string& text = tokens[index].text;
-      if (text == "=")
+      if (text == "=") {
         return true;
+      }
       for (const CompoundAssign& compound : compound_assigns) {
-        if (text == compound.text)
+        if (text == compound.text) {
           return true;
+        }
       }
       return false;
     }
@@ -125,16 +133,17 @@ namespace erax::frontend {
         if (text == "ptr") {
           cursor.take();
           auto pointee = expect_signature_type(cursor, type_params);
-          if (!pointee)
+          if (!pointee) {
             return pointee;
+          }
           // A signature states a concrete pointee; a pointer to a type parameter
           // would need the parameter itself to carry a shape, which a template's
           // `TemplateType` cannot express.
           if (pointee->param >= 0) {
-            return std::unexpected(
-                ParseError {"a pointer to type parameter '" + type_params[static_cast<std::size_t>(pointee->param)].name +
-                                "' is not supported",
-                            cursor.location()});
+            return std::unexpected(ParseError {"a pointer to type parameter '" +
+                                                   type_params[static_cast<std::size_t>(pointee->param)].name +
+                                                   "' is not supported",
+                                               cursor.location()});
           }
           return TemplateType {SemType::pointer(pointee->type), -1};
         }
@@ -176,8 +185,9 @@ namespace erax::frontend {
     // body can request further instantiations, hence the check on the running size
     // rather than a snapshot.
     for (std::size_t index = 0; index < context_.instantiations().size(); ++index) {
-      if (context_.instantiations()[index].generated)
+      if (context_.instantiations()[index].generated) {
         continue;
+      }
       const Instantiation inst = context_.instantiations()[index];
       if (auto parsed = instantiate_function(inst); !parsed) {
         return std::unexpected(parsed.error());
@@ -195,8 +205,9 @@ namespace erax::frontend {
   ProgramParser::step ProgramParser::items(bool top) {
     TokenCursor& cursor = context_.cursor;
     while (!cursor.at_end()) {
-      if (!top && cursor.at(TokenType::RBrace))
+      if (!top && cursor.at(TokenType::RBrace)) {
         return {};
+      }
       step item;
       if (cursor.at_keyword(Keyword::Fn)) {
         item = function();
@@ -208,8 +219,9 @@ namespace erax::frontend {
         return std::unexpected(
             ParseError {"expected a global, a function, or a namespace declaration", cursor.location()});
       }
-      if (!item)
+      if (!item) {
         return std::unexpected(item.error());
+      }
     }
     if (!top) {
       return std::unexpected(ParseError {"unterminated namespace body", cursor.location()});
@@ -222,11 +234,13 @@ namespace erax::frontend {
     const SourceLocation start = cursor.location();
     cursor.take();
     auto name = expect_identifier(cursor);
-    if (!name)
+    if (!name) {
       return std::unexpected(name.error());
+    }
     auto open = expect(cursor, TokenType::LBrace);
-    if (!open)
+    if (!open) {
       return std::unexpected(open.error());
+    }
     // The pre-pass already created the namespace; this pass only enters it so its
     // items resolve against the right symbol tables.
     NameSpace* child = context_.find_namespace_in_current(*name);
@@ -247,12 +261,14 @@ namespace erax::frontend {
 
   ProgramParser::step ProgramParser::operator_whitelist() {
     for (const Token& token : context_.cursor.tokens()) {
-      if (token.type != TokenType::Operator)
+      if (token.type != TokenType::Operator) {
         continue;
+      }
       bool known = false;
       for (const std::string_view text : operators) {
-        if (token.text == text)
+        if (token.text == text) {
           known = true;
+        }
       }
       if (!known) {
         return std::unexpected(ParseError {"unknown operator " + quoted(token.text), token.location});
@@ -265,8 +281,9 @@ namespace erax::frontend {
     Signature signature;
     const SourceLocation start = cursor.location();
     auto name = expect_identifier(cursor);
-    if (!name)
+    if (!name) {
       return std::unexpected(name.error());
+    }
     signature.name = *name;
     signature.location = start;
 
@@ -276,8 +293,9 @@ namespace erax::frontend {
       cursor.take();
       while (true) {
         auto param = expect_identifier(cursor);
-        if (!param)
+        if (!param) {
           return std::unexpected(param.error());
+        }
         for (const TypeParam& existing : signature.type_params) {
           if (existing.name == *param) {
             return std::unexpected(ParseError {"type parameter '" + *param + "' is declared twice", cursor.location()});
@@ -293,23 +311,27 @@ namespace erax::frontend {
             }
             const std::string capability = cursor.current().text;
             const std::optional<Capability> known = capability_of(capability);
-            if (!known)
+            if (!known) {
               return std::unexpected(ParseError {"'" + capability + "' is not a capability", cursor.location()});
+            }
             if (std::ranges::find(type_param.bounds, *known) != type_param.bounds.end()) {
               return std::unexpected(ParseError {"capability '" + capability + "' is listed twice", cursor.location()});
             }
             type_param.bounds.push_back(*known);
             cursor.take();
-            if (!cursor.match_op("&"))
+            if (!cursor.match_op("&")) {
               break;
+            }
           }
         }
         signature.type_params.push_back(std::move(type_param));
-        if (!cursor.match(TokenType::Comma))
+        if (!cursor.match(TokenType::Comma)) {
           break;
+        }
       }
-      if (auto close = expect_op(cursor, ">"); !close)
+      if (auto close = expect_op(cursor, ">"); !close) {
         return std::unexpected(close.error());
+      }
     }
 
     if (auto open = expect(cursor, TokenType::LParen); !open) {
@@ -318,18 +340,21 @@ namespace erax::frontend {
     if (!cursor.at(TokenType::RParen)) {
       while (true) {
         auto param = expect_identifier(cursor);
-        if (!param)
+        if (!param) {
           return std::unexpected(param.error());
+        }
         if (auto colon = expect(cursor, TokenType::Colon); !colon) {
           return std::unexpected(colon.error());
         }
         auto type = expect_signature_type(cursor, signature.type_params);
-        if (!type)
+        if (!type) {
           return std::unexpected(type.error());
+        }
         signature.param_names.push_back(*param);
         signature.params.push_back(*type);
-        if (!cursor.match(TokenType::Comma))
+        if (!cursor.match(TokenType::Comma)) {
           break;
+        }
       }
     }
     if (auto close = expect(cursor, TokenType::RParen); !close) {
@@ -337,8 +362,9 @@ namespace erax::frontend {
     }
     if (cursor.match(TokenType::Colon)) {
       auto type = expect_signature_type(cursor, signature.type_params);
-      if (!type)
+      if (!type) {
         return std::unexpected(type.error());
+      }
       signature.return_type = *type;
     }
     return signature;
@@ -351,8 +377,9 @@ namespace erax::frontend {
 
   ProgramParser::step ProgramParser::declarations_in(TokenCursor& cursor, bool top) {
     while (!cursor.at_end()) {
-      if (!top && cursor.at(TokenType::RBrace))
+      if (!top && cursor.at(TokenType::RBrace)) {
         return {};
+      }
       if (cursor.at_keyword(Keyword::Let)) {
         if (auto declared = declare_global(cursor); !declared) {
           return std::unexpected(declared.error());
@@ -381,14 +408,16 @@ namespace erax::frontend {
     const SourceLocation start = cursor.location();
     cursor.take();
     auto name = expect_identifier(cursor);
-    if (!name)
+    if (!name) {
       return std::unexpected(name.error());
+    }
     if (auto open = expect(cursor, TokenType::LBrace); !open) {
       return std::unexpected(open.error());
     }
     auto child = context_.declare_namespace(*name, start);
-    if (!child)
+    if (!child) {
       return std::unexpected(child.error());
+    }
     context_.push_namespace(**child);
     if (auto body = declarations_in(cursor, /*top=*/false); !body) {
       context_.pop_namespace();
@@ -405,14 +434,16 @@ namespace erax::frontend {
     cursor.take();
     const SourceLocation start = cursor.location();
     auto name = expect_identifier(cursor);
-    if (!name)
+    if (!name) {
       return std::unexpected(name.error());
+    }
     if (auto colon = expect(cursor, TokenType::Colon); !colon) {
       return std::unexpected(colon.error());
     }
     auto type = expect_type(cursor);
-    if (!type)
+    if (!type) {
       return std::unexpected(type.error());
+    }
     if (auto equals = expect_op(cursor, "="); !equals) {
       return std::unexpected(equals.error());
     }
@@ -431,8 +462,9 @@ namespace erax::frontend {
   ProgramParser::step ProgramParser::declare_function(TokenCursor& cursor) {
     cursor.take();
     auto parsed = signature(cursor);
-    if (!parsed)
+    if (!parsed) {
       return std::unexpected(parsed.error());
+    }
     const Signature found = *parsed;
 
     // A name belongs to one kind of thing in a namespace: a function may not share
@@ -457,8 +489,9 @@ namespace erax::frontend {
       for (std::size_t index = 0; index < found.type_params.size(); ++index) {
         bool used = false;
         for (const TemplateType& param : found.params) {
-          if (param.param == static_cast<int>(index))
+          if (param.param == static_cast<int>(index)) {
             used = true;
+          }
         }
         if (!used) {
           return std::unexpected(ParseError {
@@ -485,8 +518,9 @@ namespace erax::frontend {
 
     std::vector<SemType> params;
     params.reserve(found.params.size());
-    for (const TemplateType& param : found.params)
+    for (const TemplateType& param : found.params) {
       params.push_back(param.type);
+    }
 
     // A new parameter list under the same name joins the overload set; the same
     // parameters twice are the same declaration written twice.
@@ -532,14 +566,16 @@ namespace erax::frontend {
     TokenCursor& cursor = context_.cursor;
     cursor.take();
     auto name = expect_identifier(cursor);
-    if (!name)
+    if (!name) {
       return std::unexpected(name.error());
+    }
     if (auto colon = expect(cursor, TokenType::Colon); !colon) {
       return std::unexpected(colon.error());
     }
     auto type = expect_type(cursor);
-    if (!type)
+    if (!type) {
       return std::unexpected(type.error());
+    }
     if (auto equals = expect_op(cursor, "="); !equals) {
       return std::unexpected(equals.error());
     }
@@ -548,8 +584,9 @@ namespace erax::frontend {
     // A global's initializer is a constant expression, so it folds here: the value
     // is both what the init CFG writes and what a later initializer reads.
     auto value = expressions_.const_expression(*type);
-    if (!value)
+    if (!value) {
       return std::unexpected(value.error());
+    }
     if (auto semicolon = expect_semicolon(cursor); !semicolon) {
       return std::unexpected(semicolon.error());
     }
@@ -568,8 +605,9 @@ namespace erax::frontend {
     TokenCursor& cursor = context_.cursor;
     cursor.take();
     auto parsed = signature(cursor);
-    if (!parsed)
+    if (!parsed) {
       return std::unexpected(parsed.error());
+    }
     const Signature& found = *parsed;
 
     // A template declares no function of its own here: its body is parsed once per
@@ -601,16 +639,18 @@ namespace erax::frontend {
     }
 
     auto body = block();
-    if (!body)
+    if (!body) {
       return std::unexpected(body.error());
+    }
     if (body->falls_through) {
       if (found.return_type.type != SemType::Void) {
         return std::unexpected(ParseError {
             "control reaches the end of '" + found.name + "', which returns " + type_name(found.return_type.type),
             found.location});
       }
-      if (!context_.builder.terminated())
+      if (!context_.builder.terminated()) {
         context_.builder.emit(Op::Ret, {});
+      }
     }
     context_.pop_scope();
     // Whatever the body could not reach — the code after a `return`, the arm of an
@@ -625,8 +665,9 @@ namespace erax::frontend {
     lowered.cfg = context_.builder.take();
     const std::size_t id = program_.functions.size();
     program_.functions.push_back(std::move(lowered));
-    if (found.name == "main")
+    if (found.name == "main") {
       entrypoint_ = id;
+    }
     if (recorded != nullptr && recorded->id != id) {
       // The pre-pass and this pass walk the items in the same order, so the ids
       // they hand out have to agree.
@@ -655,8 +696,9 @@ namespace erax::frontend {
       params.push_back(lower(param_types.back()));
     }
     const SemType return_type = resolve(tmpl->return_type);
-    for (std::size_t index = 0; index < tmpl->type_params.size(); ++index)
+    for (std::size_t index = 0; index < tmpl->type_params.size(); ++index) {
       substitution.emplace(tmpl->type_params[index].name, inst.type_args[index]);
+    }
 
     // Reposition the cursor at the template's `{` so its body parses as an ordinary
     // function body, with the type parameters resolved through the substitution, and
@@ -686,15 +728,17 @@ namespace erax::frontend {
     context_.clear_type_substitution();
     context_.cursor.seek(saved);
     context_.set_namespace_path(saved_namespace);
-    if (!body)
+    if (!body) {
       return std::unexpected(body.error());
+    }
     if (body->falls_through) {
       if (return_type != SemType::Void) {
         return std::unexpected(ParseError {
             "control reaches the end of '" + qualified + "', which returns " + type_name(return_type), tmpl->location});
       }
-      if (!context_.builder.terminated())
+      if (!context_.builder.terminated()) {
         context_.builder.emit(Op::Ret, {});
+      }
     }
     context_.pop_scope();
     context_.builder.prune();
@@ -719,8 +763,9 @@ namespace erax::frontend {
 
     const SourceLocation start = cursor.location();
     auto name = expect_identifier(cursor);
-    if (!name)
+    if (!name) {
       return std::unexpected(name.error());
+    }
     if (context_.declares(*name)) {
       return std::unexpected(ParseError {"'" + *name + "' is already declared in this scope", start});
     }
@@ -728,8 +773,9 @@ namespace erax::frontend {
       return std::unexpected(colon.error());
     }
     auto type = context_.read_type(cursor);
-    if (!type)
+    if (!type) {
       return std::unexpected(type.error());
+    }
 
     // The name is declared after the initializer is read, so `let x: i32 = x;`
     // reads an outer `x` — or nothing, if there is none — instead of the local
@@ -737,8 +783,9 @@ namespace erax::frontend {
     std::optional<Value> value;
     if (cursor.match_op("=")) {
       auto parsed = expressions_.expression(*type);
-      if (!parsed)
+      if (!parsed) {
         return std::unexpected(parsed.error());
+      }
       if (parsed->type != *type) {
         return std::unexpected(
             ParseError {"expected a value of type " + type_name(*type) + ", not " + type_name(parsed->type), start});
@@ -776,8 +823,9 @@ namespace erax::frontend {
     // local can never be reached this way.
     const std::vector<std::string> path(parts.begin(), parts.end() - 1);
     auto ns = context_.resolve_namespace(path, location);
-    if (!ns)
+    if (!ns) {
       return std::unexpected(ns.error());
+    }
     const std::string& name = parts.back();
     if (const GlobalInfo* global = context_.find_global_in(**ns, name)) {
       return LValue {nullptr, global, global->sem_type, Operand::global(global->type, global->id)};
@@ -796,8 +844,9 @@ namespace erax::frontend {
 
     if (cursor.match_op("=")) {
       auto value = expressions_.expression(target.type);
-      if (!value)
+      if (!value) {
         return std::unexpected(value.error());
+      }
       if (value->type != target.type) {
         return std::unexpected(
             ParseError {"cannot assign " + type_name(value->type) + " to " + type_name(target.type), location});
@@ -807,15 +856,17 @@ namespace erax::frontend {
     }
 
     for (const CompoundAssign& compound : compound_assigns) {
-      if (!cursor.match_op(compound.text))
+      if (!cursor.match_op(compound.text)) {
         continue;
+      }
       if (!is_integer(target.type)) {
         return std::unexpected(
             ParseError {quoted(compound.text) + " is not defined for " + type_name(target.type), location});
       }
       auto value = expressions_.expression(target.type);
-      if (!value)
+      if (!value) {
         return std::unexpected(value.error());
+      }
       if (value->type != target.type) {
         return std::unexpected(
             ParseError {"cannot assign " + type_name(value->type) + " to " + type_name(target.type), location});
@@ -865,13 +916,15 @@ namespace erax::frontend {
     const Keyword keyword = cursor.at(TokenType::Identifier) ? keyword_of(cursor.current().text) : Keyword::None;
 
     // A block is a statement, so a nested one opens a scope of its own.
-    if (cursor.at(TokenType::LBrace))
+    if (cursor.at(TokenType::LBrace)) {
       return block();
+    }
 
     switch (keyword) {
       case Keyword::Let: {
-        if (auto declared = let(); !declared)
+        if (auto declared = let(); !declared) {
           return std::unexpected(declared.error());
+        }
         if (auto semicolon = expect_semicolon(cursor); !semicolon) {
           return std::unexpected(semicolon.error());
         }
@@ -890,8 +943,9 @@ namespace erax::frontend {
     // `name <assign-op>` is an assignment; anything else that starts with a name is
     // an expression.
     if (keyword == Keyword::None && cursor.at(TokenType::Identifier) && at_assignment(cursor)) {
-      if (auto written = assignment(); !written)
+      if (auto written = assignment(); !written) {
         return std::unexpected(written.error());
+      }
       if (auto semicolon = expect_semicolon(cursor); !semicolon) {
         return std::unexpected(semicolon.error());
       }
@@ -902,8 +956,9 @@ namespace erax::frontend {
     // whose value is discarded — is not this, and falls through to the expression
     // statement below.
     if (cursor.at_op("*") && at_deref_assignment(cursor)) {
-      if (auto written = deref_assignment(); !written)
+      if (auto written = deref_assignment(); !written) {
         return std::unexpected(written.error());
+      }
       if (auto semicolon = expect_semicolon(cursor); !semicolon) {
         return std::unexpected(semicolon.error());
       }
@@ -911,16 +966,18 @@ namespace erax::frontend {
     }
 
     auto value = expressions_.expression(std::nullopt);
-    if (!value)
+    if (!value) {
       return std::unexpected(value.error());
+    }
     if (auto semicolon = expect_semicolon(cursor); !semicolon) {
       return std::unexpected(semicolon.error());
     }
     // A statement that ends its block — an expression calling a terminating
     // primitive like `exit` — stops flow here, exactly like `return`
     // (`docs/primitive.md#flow`).
-    if (context_.builder.terminated())
+    if (context_.builder.terminated()) {
       return Flow {false};
+    }
     return Flow {};
   }
 
@@ -929,19 +986,22 @@ namespace erax::frontend {
     const SourceLocation location = cursor.location();
     std::vector<std::string> parts;
     auto name = expect_identifier(cursor);
-    if (!name)
+    if (!name) {
       return std::unexpected(name.error());
+    }
     parts.push_back(*name);
     while (cursor.at(TokenType::Dot)) {
       cursor.take();
       auto segment = expect_identifier(cursor);
-      if (!segment)
+      if (!segment) {
         return std::unexpected(segment.error());
+      }
       parts.push_back(*segment);
     }
     auto target = lvalue(parts, location);
-    if (!target)
+    if (!target) {
       return std::unexpected(target.error());
+    }
     if (auto written = assign(*target); !written) {
       return std::unexpected(written.error());
     }
@@ -953,8 +1013,9 @@ namespace erax::frontend {
     const SourceLocation location = cursor.location();
     cursor.take();  // the `*` that makes this a store rather than a load
     auto pointer = expressions_.expression(std::nullopt);
-    if (!pointer)
+    if (!pointer) {
       return std::unexpected(pointer.error());
+    }
     if (!pointer->type.is_pointer()) {
       return std::unexpected(ParseError {
           "cannot assign through a value of type " + type_name(pointer->type) + ", which is not a pointer", location});
@@ -964,12 +1025,12 @@ namespace erax::frontend {
 
     if (cursor.match_op("=")) {
       auto value = expressions_.expression(pointee);
-      if (!value)
+      if (!value) {
         return std::unexpected(value.error());
+      }
       if (value->type != pointee) {
-        return std::unexpected(
-            ParseError {"cannot assign " + type_name(value->type) + " through a pointer to " + type_name(pointee),
-                        location});
+        return std::unexpected(ParseError {
+            "cannot assign " + type_name(value->type) + " through a pointer to " + type_name(pointee), location});
       }
       context_.builder.emit(Op::Store, {pointer->as_operand(), value->as_operand()});
       return {};
@@ -978,24 +1039,25 @@ namespace erax::frontend {
     // A compound store reads, modifies, and writes back through the same pointer,
     // which needs a cell to hold the value between the two memory operations.
     for (const CompoundAssign& compound : compound_assigns) {
-      if (!cursor.match_op(compound.text))
+      if (!cursor.match_op(compound.text)) {
         continue;
+      }
       if (!is_integer(pointee)) {
         return std::unexpected(
             ParseError {quoted(compound.text) + " is not defined for " + type_name(pointee), location});
       }
       auto value = expressions_.expression(pointee);
-      if (!value)
+      if (!value) {
         return std::unexpected(value.error());
+      }
       if (value->type != pointee) {
-        return std::unexpected(
-            ParseError {"cannot assign " + type_name(value->type) + " through a pointer to " + type_name(pointee),
-                        location});
+        return std::unexpected(ParseError {
+            "cannot assign " + type_name(value->type) + " through a pointer to " + type_name(pointee), location});
       }
       const std::uint64_t cell = context_.builder.alloc(lowered);
       context_.builder.emit(Op::Load, {Operand::vreg(lowered, cell), pointer->as_operand()});
-      context_.builder.emit(compound.op, {Operand::vreg(lowered, cell), Operand::vreg(lowered, cell),
-                                          value->as_operand()});
+      context_.builder.emit(compound.op,
+                            {Operand::vreg(lowered, cell), Operand::vreg(lowered, cell), value->as_operand()});
       context_.builder.emit(Op::Store, {pointer->as_operand(), Operand::vreg(lowered, cell)});
       return {};
     }
@@ -1006,18 +1068,21 @@ namespace erax::frontend {
     TokenCursor& cursor = context_.cursor;
     const SourceLocation location = cursor.location();
     if (cursor.at_keyword(Keyword::Let)) {
-      if (auto declared = let(); !declared)
+      if (auto declared = let(); !declared) {
         return std::unexpected(declared.error());
+      }
       return Flow {};
     }
     if (cursor.at(TokenType::Identifier) && at_assignment(cursor)) {
-      if (auto written = assignment(); !written)
+      if (auto written = assignment(); !written) {
         return std::unexpected(written.error());
+      }
       return Flow {};
     }
     if (cursor.at_op("*") && at_deref_assignment(cursor)) {
-      if (auto written = deref_assignment(); !written)
+      if (auto written = deref_assignment(); !written) {
         return std::unexpected(written.error());
+      }
       return Flow {};
     }
     return std::unexpected(ParseError {"expected a declaration or an assignment in the 'for' init", location});
@@ -1026,8 +1091,9 @@ namespace erax::frontend {
   std::expected<Value, ParseError> ProgramParser::condition() {
     const SourceLocation location = context_.cursor.location();
     auto value = expressions_.expression(SemType::Bool);
-    if (!value)
+    if (!value) {
       return std::unexpected(value.error());
+    }
     if (value->type != SemType::Bool) {
       return std::unexpected(ParseError {"condition must be 'bool', not " + type_name(value->type), location});
     }
@@ -1048,15 +1114,18 @@ namespace erax::frontend {
   std::expected<ProgramParser::Flow, ParseError> ProgramParser::if_statement() {
     TokenCursor& cursor = context_.cursor;
     cursor.take();
-    if (auto open = expect(cursor, TokenType::LParen); !open)
+    if (auto open = expect(cursor, TokenType::LParen); !open) {
       return std::unexpected(open.error());
+    }
     auto test = condition();
-    if (!test)
+    if (!test) {
       return std::unexpected(test.error());
+    }
     // Read before the `)` is consumed, so the scan starts at the block.
     const bool has_else = cursor.else_follows();
-    if (auto close = expect(cursor, TokenType::RParen); !close)
+    if (auto close = expect(cursor, TokenType::RParen); !close) {
       return std::unexpected(close.error());
+    }
 
     const bool known = test->constant.has_value();
     const bool always = known && test->constant->signed_value() != 0;
@@ -1074,10 +1143,12 @@ namespace erax::frontend {
     // the block the builder is on.
     context_.builder.set_current(then_block);
     auto then_flow = block();
-    if (!then_flow)
+    if (!then_flow) {
       return std::unexpected(then_flow.error());
-    if (!context_.builder.terminated())
+    }
+    if (!context_.builder.terminated()) {
       context_.builder.link_next(join_block);
+    }
     const AssignedSnapshot then_assigned = context_.assigned_snapshot();
 
     // The other arm is parsed either way: a test that folds to `true` makes the
@@ -1089,17 +1160,20 @@ namespace erax::frontend {
       context_.builder.set_current(else_block);
       if (cursor.at_keyword(Keyword::If)) {
         auto nested = if_statement();
-        if (!nested)
+        if (!nested) {
           return std::unexpected(nested.error());
+        }
         else_flow = *nested;
       } else {
         auto parsed = block();
-        if (!parsed)
+        if (!parsed) {
           return std::unexpected(parsed.error());
+        }
         else_flow = *parsed;
       }
-      if (!context_.builder.terminated())
+      if (!context_.builder.terminated()) {
         context_.builder.link_next(join_block);
+      }
       else_assigned = context_.assigned_snapshot();
     }
     context_.builder.set_current(join_block);
@@ -1115,28 +1189,33 @@ namespace erax::frontend {
 
     // With no `else`, the arm that was not taken always falls through.
     const bool else_falls = !else_flow || else_flow->falls_through;
-    if (known)
+    if (known) {
       return Flow {always ? then_flow->falls_through : else_falls};
+    }
     return Flow {then_flow->falls_through || else_falls};
   }
 
   std::expected<ProgramParser::Flow, ParseError> ProgramParser::while_statement() {
     TokenCursor& cursor = context_.cursor;
     cursor.take();
-    if (auto open = expect(cursor, TokenType::LParen); !open)
+    if (auto open = expect(cursor, TokenType::LParen); !open) {
       return std::unexpected(open.error());
+    }
     // The test gets a block of its own, which is where a `continue` goes, so that
     // re-entering the loop evaluates the test again and nothing else: the block the
     // loop was written in runs once.
     const std::size_t cond_block = context_.builder.new_block();
-    if (!context_.builder.terminated())
+    if (!context_.builder.terminated()) {
       context_.builder.link_next(cond_block);
+    }
     context_.builder.set_current(cond_block);
     auto test = condition();
-    if (!test)
+    if (!test) {
       return std::unexpected(test.error());
-    if (auto close = expect(cursor, TokenType::RParen); !close)
+    }
+    if (auto close = expect(cursor, TokenType::RParen); !close) {
       return std::unexpected(close.error());
+    }
 
     const bool known = test->constant.has_value();
     const bool always = known && test->constant->signed_value() != 0;
@@ -1150,19 +1229,22 @@ namespace erax::frontend {
     const AssignedSnapshot before = context_.assigned_snapshot();
     context_.push_loop(LoopTargets {body_block, cond_block, exit_block});
     auto body = block();
-    if (!body)
+    if (!body) {
       return std::unexpected(body.error());
+    }
     const bool has_break = context_.loop().has_break;
     context_.pop_loop();
     context_.merge_assigned(before);
-    if (!context_.builder.terminated())
+    if (!context_.builder.terminated()) {
       context_.builder.link_next(cond_block);
+    }
     context_.builder.set_current(exit_block);
 
     // Without a `break` the loop only ends when the test is false, so only a test
     // that folds to `true` can keep the code after it from running.
-    if (known && always)
+    if (known && always) {
       return Flow {has_break};
+    }
     return Flow {true};
   }
 
@@ -1177,8 +1259,9 @@ namespace erax::frontend {
     context_.builder.set_current(body_block);
     context_.push_loop(LoopTargets {body_block, cond_block, exit_block});
     auto body = block();
-    if (!body)
+    if (!body) {
       return std::unexpected(body.error());
+    }
     const bool has_break = context_.loop().has_break;
     const std::vector<AssignedSnapshot> breaks = context_.loop().breaks;
     const bool body_terminated = context_.builder.terminated();
@@ -1187,22 +1270,27 @@ namespace erax::frontend {
     // `break` that skipped the write leaves a path where it is not.
     const AssignedSnapshot after_body = context_.assigned_snapshot();
     context_.set_assigned(after_body);
-    for (const AssignedSnapshot& at_break : breaks)
+    for (const AssignedSnapshot& at_break : breaks) {
       context_.merge_assigned(at_break);
-    if (!body_terminated)
+    }
+    if (!body_terminated) {
       context_.builder.link_next(cond_block);
+    }
 
     context_.builder.set_current(cond_block);
     if (auto while_keyword = expect_keyword(cursor, Keyword::While); !while_keyword) {
       return std::unexpected(while_keyword.error());
     }
-    if (auto open = expect(cursor, TokenType::LParen); !open)
+    if (auto open = expect(cursor, TokenType::LParen); !open) {
       return std::unexpected(open.error());
+    }
     auto test = condition();
-    if (!test)
+    if (!test) {
       return std::unexpected(test.error());
-    if (auto close = expect(cursor, TokenType::RParen); !close)
+    }
+    if (auto close = expect(cursor, TokenType::RParen); !close) {
       return std::unexpected(close.error());
+    }
     if (auto semicolon = expect_semicolon(cursor); !semicolon) {
       return std::unexpected(semicolon.error());
     }
@@ -1213,16 +1301,18 @@ namespace erax::frontend {
 
     // The body always runs once, so the loop only never ends if the test is a
     // folded `true` and nothing breaks out of it.
-    if (known && always)
+    if (known && always) {
       return Flow {has_break};
+    }
     return Flow {true};
   }
 
   std::expected<ProgramParser::Flow, ParseError> ProgramParser::for_statement() {
     TokenCursor& cursor = context_.cursor;
     cursor.take();
-    if (auto open = expect(cursor, TokenType::LParen); !open)
+    if (auto open = expect(cursor, TokenType::LParen); !open) {
       return std::unexpected(open.error());
+    }
     // The init opens a scope of its own, so the loop variable dies with the loop.
     // The state the loop starts from is the one the init leaves: the loop may run
     // zero times, so the body and the step assign nothing that survives it.
@@ -1287,18 +1377,21 @@ namespace erax::frontend {
     context_.builder.set_current(body_block);
     context_.push_loop(LoopTargets {body_block, step_block, exit_block});
     auto body = block();
-    if (!body)
+    if (!body) {
       return std::unexpected(body.error());
+    }
     const bool has_break = context_.loop().has_break;
     const bool body_terminated = context_.builder.terminated();
     context_.pop_loop();
-    if (!body_terminated)
+    if (!body_terminated) {
       context_.builder.link_next(step_block);
+    }
 
     // Whatever the step wrote is what the next test sees.
     context_.builder.set_current(step_block);
-    if (!context_.builder.terminated())
+    if (!context_.builder.terminated()) {
       context_.builder.link_next(cond_block);
+    }
     context_.builder.set_current(exit_block);
     context_.merge_assigned(after_init);
     context_.pop_scope();
@@ -1306,8 +1399,9 @@ namespace erax::frontend {
     // A test that is not there, or that does not fold, may or may not fail, so the
     // code after the loop runs; a folded `true` runs forever without a `break`,
     // and a folded `false` never runs the body at all.
-    if (known)
+    if (known) {
       return Flow {test->constant->signed_value() != 0 ? has_break : true};
+    }
     return Flow {test.has_value() ? true : has_break};
   }
 
@@ -1324,8 +1418,9 @@ namespace erax::frontend {
       if (auto semicolon = expect_semicolon(cursor); !semicolon) {
         return std::unexpected(semicolon.error());
       }
-      if (!context_.builder.terminated())
+      if (!context_.builder.terminated()) {
         context_.builder.emit(Op::Ret, {});
+      }
       return Flow {false};
     }
 
@@ -1334,8 +1429,9 @@ namespace erax::frontend {
           ParseError {"expected a value of type " + type_name(current_return_type_) + " to return", location});
     }
     auto value = expressions_.expression(current_return_type_);
-    if (!value)
+    if (!value) {
       return std::unexpected(value.error());
+    }
     if (value->type != current_return_type_) {
       return std::unexpected(ParseError {
           "expected a value of type " + type_name(current_return_type_) + ", not " + type_name(value->type), location});
@@ -1343,8 +1439,9 @@ namespace erax::frontend {
     if (auto semicolon = expect_semicolon(cursor); !semicolon) {
       return std::unexpected(semicolon.error());
     }
-    if (!context_.builder.terminated())
+    if (!context_.builder.terminated()) {
       context_.builder.emit(Op::Ret, {value->as_operand()});
+    }
     return Flow {false};
   }
 
@@ -1359,8 +1456,9 @@ namespace erax::frontend {
       return std::unexpected(semicolon.error());
     }
     const std::size_t target = keyword == Keyword::Break ? context_.loop().break_block : context_.loop().continue_block;
-    if (!context_.builder.terminated())
+    if (!context_.builder.terminated()) {
       context_.builder.link_next(target);
+    }
     if (keyword == Keyword::Break) {
       context_.loop().has_break = true;
       // What a `break` leaves behind is one of the paths out of the loop, so it

@@ -37,16 +37,18 @@ namespace {
   /// unless it is about the position.
   std::vector<std::string> messages(const Program& program) {
     std::vector<std::string> texts;
-    for (const ValidationError& error : validate(program))
+    for (const ValidationError& error : validate(program)) {
       texts.push_back(error.message);
+    }
     return texts;
   }
 
   /// Where each error is, for a test that is about the location.
   std::vector<std::string> locations(const Program& program) {
     std::vector<std::string> texts;
-    for (const ValidationError& error : validate(program))
+    for (const ValidationError& error : validate(program)) {
       texts.push_back(location_of(error));
+    }
     return texts;
   }
 
