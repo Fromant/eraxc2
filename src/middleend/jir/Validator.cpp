@@ -292,6 +292,24 @@ namespace erax::middleend {
         }
       }
 
+      /// A slot that has to be a pointer to exactly \p pointee: `Load`'s source, a
+      /// `Store`'s pointer, and an `Addr`'s result all agree this way, which is what
+      /// keeps a load and a store from disagreeing about what a cell holds.
+      void need_pointer(const Body& body, At at, const Command& command, std::size_t slot, Type pointee) {
+        const Type& type = command.args[slot].type;
+        if (!type.is_pointer()) {
+          report(body, at,
+                 std::string {to_string(command.op)} + " needs " + slot_text(slot) + " to be a pointer, but it is " +
+                     std::string {to_string(type)});
+          return;
+        }
+        if (*type.pointee != pointee) {
+          report(body, at,
+                 std::string {to_string(command.op)} + " needs " + slot_text(slot) + " to point at " +
+                     std::string {to_string(pointee)} + ", but it points at " + std::string {to_string(*type.pointee)});
+        }
+      }
+
       void need_signedness(const Body& body, At at, const Command& command) {
         const std::optional<bool> wanted = signedness(command.op);
         if (!wanted)
@@ -488,6 +506,33 @@ namespace erax::middleend {
             need_kind(body, at, command, 0, OperandKind::VReg, "the result");
             need_value(body, at, command.args[0], "the result");
             need_value(body, at, command.args[1], "the source");
+            break;
+          }
+          case Op::Load: {
+            // The result reads the pointee's type through a pointer operand.
+            need_kind(body, at, command, 0, OperandKind::VReg, "the result");
+            need_value(body, at, command.args[1], "the source");
+            need_pointer(body, at, command, 1, command.args[0].type);
+            break;
+          }
+          case Op::Store: {
+            // `Store` has no result: args[0] is the pointer, args[1] the value.
+            need_value(body, at, command.args[0], "the pointer");
+            need_value(body, at, command.args[1], "the value");
+            need_pointer(body, at, command, 0, command.args[1].type);
+            break;
+          }
+          case Op::Addr: {
+            // Taking an address yields a pointer to the named cell's type; the
+            // source has to be a cell, which is a vreg or a global.
+            need_kind(body, at, command, 0, OperandKind::VReg, "the result");
+            const Operand& source = command.args[1];
+            if (source.kind != OperandKind::VReg && source.kind != OperandKind::Global) {
+              report(body, at,
+                     "ADDR needs a vreg or a global to take the address of, but " + slot_text(1) + " is " +
+                         std::string {kind_text(source.kind)});
+            }
+            need_pointer(body, at, command, 0, source.type);
             break;
           }
           case Op::Call: check_call(body, at, command); break;

@@ -40,6 +40,10 @@ namespace erax::frontend {
     SemType type = SemType::Void;
     middleend::Operand operand;
     std::optional<ConstInt> constant;
+    /// Whether the operand names a variable or global's own cell: the only thing
+    /// `&` may take the address of. A deref's or a binary operator's result is a
+    /// scratch vreg and is not addressable.
+    bool addressable = false;
 
     /// The operand as it goes into a command: a constant materializes as an
     /// instant, anything else is already an operand.

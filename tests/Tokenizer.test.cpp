@@ -685,3 +685,12 @@ TEST_CASE("a location string names the file only when it has one") {
   named.col = 4;
   CHECK(named.to_string() == "main.era:3:4");
 }
+
+TEST_CASE("a char literal with nothing to open is unterminated") {
+  // The quote sits on a line with no character after it: end of input, or the
+  // newline that ends the row.
+  SourceLocation location;
+  CHECK(lex_error("'", location).find("unterminated character literal") != std::string::npos);
+  CHECK(location.row == 1);
+  CHECK(lex_error("'\n", location).find("unterminated character literal") != std::string::npos);
+}

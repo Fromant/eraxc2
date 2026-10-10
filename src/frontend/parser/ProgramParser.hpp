@@ -78,10 +78,18 @@ private:
 
     step operator_whitelist();
     step declarations();
+    /// The declaration pre-pass over a namespace body: \p top is the program's
+    /// top level, which runs to end of file; a nested body stops at its `}`.
+    step declarations_in(TokenCursor& cursor, bool top);
+    step declare_namespace(TokenCursor& cursor);
     step declare_global(TokenCursor& cursor);
     step declare_function(TokenCursor& cursor);
     step global();
     step function();
+    /// The item pass over a namespace body, mirroring `declarations_in` so the two
+    /// passes hand out ids in the same source order.
+    step items(bool top);
+    step namespace_body();
     /// Parses one deduced instantiation's body into an ordinary function, with its
     /// type parameters standing for \p inst's type arguments. Called after the item
     /// pass, once per instantiation that a call requested.
@@ -93,7 +101,9 @@ private:
 
     step let();
     step assign(const LValue& target);
-    std::expected<LValue, ParseError> lvalue(const std::string& name, SourceLocation location);
+    /// Resolves an lvalue: a local (one name only) or a global, possibly reached
+    /// through a namespace path (`a.b.g`).
+    std::expected<LValue, ParseError> lvalue(const std::vector<std::string>& parts, SourceLocation location);
     /// `target = value`, the one place a cell or a global is written directly.
     void write(const LValue& target, const Value& value);
 
@@ -103,6 +113,8 @@ private:
     std::expected<Flow, ParseError> for_init();
     /// `lvalue <assign-op> value`, without the `;` that ends it as a statement.
     step assignment();
+    /// `* pointer <assign-op> value`, the store-through form, without the `;`.
+    step deref_assignment();
     std::expected<Flow, ParseError> if_statement();
     std::expected<Flow, ParseError> while_statement();
     std::expected<Flow, ParseError> do_statement();

@@ -115,10 +115,10 @@ TEST_CASE("a declaration states a name, a type, and a value") {
   CHECK(parse_error("let g: i32 = 1; fn g() { } fn main(): i32 { return 0; }") != "");
 }
 
-TEST_CASE("a top-level declaration is a global or a function") {
-  CHECK(parse_error("nonsense") == "expected a global or a function declaration");
-  CHECK(parse_error("fn main(): i32 { return 0; } )") == "expected a global or a function declaration");
-  CHECK(parse_error("fn main(): i32 { return 0; } ]") == "expected a global or a function declaration");
+TEST_CASE("a top-level declaration is a global, a function, or a namespace") {
+  CHECK(parse_error("nonsense") == "expected a global, a function, or a namespace declaration");
+  CHECK(parse_error("fn main(): i32 { return 0; } )") == "expected a global, a function, or a namespace declaration");
+  CHECK(parse_error("fn main(): i32 { return 0; } ]") == "expected a global, a function, or a namespace declaration");
   CHECK(parse_error("fn main(): i32 { return 0; } let y: i32 = 1 }") == "expected ';'");
   // A `fn` with no name is not a declaration.
   CHECK(parse_error("fn") == "expected an identifier");

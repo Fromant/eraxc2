@@ -207,7 +207,7 @@ flowchart TD
 ```
 
 - **Decimal integers:** `42`, `0`, leading zeros allowed (`007`), digit separators allowed (`12_34_56`).
-- **Fractions:** a `.` is part of the number only when followed by a digit. `3.14` is one token; `1.` is `Number` + `Dot` (a trailing dot is member access); `.5` is *not* a number — it lexes as `Dot` + `Number`, so write `0.5`.
+- **Fractions:** a `.` is part of the number only when followed by a digit. `3.14` is one token; `1.` is `Number` + `Dot` (a trailing dot is a qualified-name dot); `.5` is *not* a number — it lexes as `Dot` + `Number`, so write `0.5`.
 - **Exponents:** `e`/`E` is part of the number only when a digit follows the optional sign: `1e10`, `1e-10`, `1.5e-3`. `2e` lexes as `Number` + `Identifier`.
 - **Radix literals:** `0x`/`0X` (hex), `0b`/`0B` (binary), `0o`/`0O` (octal), digit separators allowed in all bases (`0xFF_FF`, `0b1_0`).
   - `0x` with no digit is `radix literal requires at least one digit`.
@@ -309,7 +309,7 @@ Note the string token on line 6: the quotes are gone, `\"` and `\n` are kept raw
 ## Design notes and known limits
 
 - **Keywords remain identifiers.** Classification is a parser concern, which keeps this stage free of a keyword table.
-- **Maximal munch, dot stays alone.** Operators merge greedily while `.` never does — `?.`, `...`, and member access stay separate tokens for the parser to compose.
+- **Maximal munch, dot stays alone.** Operators merge greedily while `.` never does — `?.`, `...`, and the `IDENT . IDENT` runs that are namespace/qualified names stay separate tokens for the parser to compose.
 - **Digit separators sit between digits.** A `_` in a number needs a digit on both sides — `1_000` is a number, `1_` / `0x_1` are lexer errors.
 - **Escapes are validated, not resolved.** String/char tokens keep raw inner text; `\x`/`\u` only need at least one hex digit here, the digit count is checked when the parser unescapes.
 - **No template literals yet.** The backtick is still an `unexpected character` error; it will allow raw newlines in strings when it lands.

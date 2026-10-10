@@ -16,6 +16,7 @@ Status: **WIP.** The lexer and the parser exist; the IR is specified and impleme
 - [x] `as` cast — `cast = unary { "as" type }` between binary and unary (`expressions.md#precedence`), any type to any type, always wrapping via `fold::convert` (`types.md#casts`, `JIR.md#conversions`), lowered to `CAST`.
 - [x] Function overloading — name plus parameter types identify a declaration (`statements.md#functions`), calls resolve by exact argument types (`expressions.md#typing-rules`), and std's `print` is one name with a declaration per type (`docs/std.md`).
 - [x] Templates — `fn name<T extends Ordered & Negatable>(…)` with type arguments deduced from the call, capability bounds checked at the call site, and one monomorphized function per distinct instantiation (`docs/core/statements.md#templates`, `docs/core/types.md#capabilities`, `docs/core/expressions.md#typing-rules`).
+- [x] Namespaces — `namespace NAME { … }` blocks (nestable), dot-qualified references (`std.print(x)`), the closed `namespace std` as the auto-imported stdlib, and per-namespace name/clash rules. JIR stays nameless; templates instantiate inside the namespace that declared them (`docs/core/language.md#namespaces`, `docs/core/statements.md#namespaces`).
 
 ## Beyond v1 (future work)
 
@@ -25,7 +26,7 @@ Source-level additions that are out of scope for v1 — listed here so the langu
 - Short-circuit `&&` / `||` — v1 evaluates both operands (see `docs/core/expressions.md`). It needs an op the current table has none of (a conditional-jump or select form), so it is a `.jir` version bump.
 - An `unreachable code` diagnostic — v1 parses dead code, checks it, and drops it.
 - Strings and string literals, floats — and with them string support in the stdlib (`std.print`); v0.1 std lives in `stdlib/std.erx` already (`docs/std.md`). `examples/helloworld.erx` is aspirational on `string`.
-- Machine-level futures — arrays/indices, pointers/references, objects/classes, closures — live in the JIR section below.
+- Machine-level futures — arrays/indices, references, objects/classes, closures — live in the JIR section below. Raw pointers (`ptr T`, `&`, `*`) and the `alloc`/`free` heap are implemented.
 - **`const` / immutability.** v1 has no `const` keyword and no immutable binding: `let` declares a local or global whose initializer may or may not be a constant expression, and it stays assignable (`a = 2;`). There is no way to *say* a name must never change, which is the thing a constant expression is otherwise so careful about. See `docs/core/types.md#constants` for what "constant" currently means.
 - **A `char` suffix.** `char` is a type name and `is_integer(char)` holds, but it is not a literal suffix (`types.md#literals`), so a *constant* `char` expression cannot be written: `let x: char = 255 / 16;` is an `i32` division in a `char` position. `(255 / 16) as char` already spells the value (`types.md#casts`), but only a suffix makes the arithmetic itself read as `char` arithmetic instead of `i32` ending in a cast — adding `char` to the suffix set closes that.
 - **Literal / singleton types.** `let b: i32 = 0;` gives `b` the type `i32`, not the value `0`. A type system that tracked the value — so `b` has type `0` and a later `b = 2` is an error until the use — would catch the divide-by-a-literal-zero and the accidental-overflow class of bug at compile time instead of at the trap, and it is the natural end state of the constants work in `types.md#constants`. It costs a real type-inference term and is far past v1.
@@ -50,11 +51,11 @@ Source-level additions that are out of scope for v1 — listed here so the langu
 ## JIR — later scope
 
 - Floats — they will reuse the operand's `u64` bit pattern; no format change.
-- Strings — `std.string` in the stdlib, a heap-pointer wrapper; **no string ops in JIR, ever**.
-- Pointers/arrays (what strings sit on).
+- Strings — `std.string` in the stdlib, a heap-pointer wrapper; **no string ops in JIR, ever**. It sits on the raw pointers below.
+- Ownership / RAII (drop, moves, `std.unique`), arrays/indices, references — the uses that pointers currently leave to the program: a pointer is a raw cell with no lifetime, so forgetting a `free` leaks and remembering it twice traps. A managed form (free exactly once, automatically) is the future work; raw pointers stay available underneath.
 - Closures, objects/classes.
-- Imports — `std.erx` is auto-imported by the driver today (`docs/std.md`); a real import system (and `std.` dot access) replaces that.
-- New primitives — each is a catalog addition in `docs/primitive.md`, never a language change: memory (`alloc`/`free`), raw byte output (`write_bytes`, what strings will print through), and friends. Time/random stay excluded: the determinism rule in `docs/primitive.md` is what makes a backend comparison mean anything.
+- Imports — `std.erx` is auto-imported by the driver today (`docs/std.md`); a real import system replaces that. Dot access already works: the auto-imported stdlib is the root namespace `std`, reached as `std.…`.
+- New primitives — each is a catalog addition in `docs/primitive.md`, never a language change: memory (`alloc`/`free`) landed; raw byte output (`write_bytes`, what strings will print through), and friends. Time/random stay excluded: the determinism rule in `docs/primitive.md` is what makes a backend comparison mean anything.
 
 ## Backends
 
@@ -65,8 +66,10 @@ The driver contract for both is **flag = backend** (decided): `eraxc file.erx` r
 
 ## Serialization (`TODO.md` owns the format versioning)
 
-`.jir` = magic + `u32` version (v0.1: 1) + deterministic little-endian encoding of `Program` (commands as op + operand list; arity from the op table; a `PRIM` carries the primitive's catalog `u32` id). The op table **and the primitive catalog** are frozen by the format — a new op or primitive is a version bump.
+`.jir` = magic + `u32` version + deterministic little-endian encoding of `Program` (commands as op + operand list; arity from the op table; a `PRIM` carries the primitive's catalog `u32` id). The op table **and the primitive catalog** are frozen by the format — a new op or primitive is a version bump. The pointer phase added three ops (`LOAD`/`STORE`/`ADDR`), the `ptr T` type, and two primitives (`alloc`/`free`); when serialization lands it must carry a version past the one the five-primitive, nineteen-op set was frozen at.
 
 ## Conformance
 
 Programs under `examples/` double as the conformance corpus: same files, every backend. Results are compared as **the bytes the program wrote to stdout (`print` / `print_char`) + final global state + exit code** (the entrypoint's return, or the code `exit`/`abort` gave); a program that uses `read_char` is run with pinned input. Strings, formatting, and `std.print` still arrive later.
+
+**Pointer caveat.** A pointer's *value* is the executor's address encoding (`docs/middleend/JIR.md#runtime-semantics`): identity (`p == q`) is conformance-safe, but a program that prints an address or otherwise lets a specific `&`/`alloc` value out of its program is not — the corpus's pointer programs compare blocks and identity only. Whether raw address values should be made deterministic (or excluded from conformable programs) is open.

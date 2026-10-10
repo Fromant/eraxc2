@@ -166,8 +166,9 @@ int main(int argc, char* argv[]) {
   }
 
   // Auto-import: std is parsed before the file it was given, so its declarations
-  // land in the same flat namespace and every program may call them (docs/std.md).
-  // Its tokens carry the name `std.erx`, so an error inside the library says so.
+  // (in `namespace std`) are part of the program and every program may call them
+  // (`docs/std.md`). Its tokens carry the name `std.erx`, so an error inside the
+  // library says so.
   auto imported = Tokenizer {}.tokenize(erax::std_source, "std.erx");
   if (!imported)
     return report(imported.error());

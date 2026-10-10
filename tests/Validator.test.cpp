@@ -672,3 +672,23 @@ TEST_CASE("check is the same validation as a fallible step") {
   REQUIRE(result.error().size() == 1);
   CHECK(result.error()[0].message == "has a frame of no cells, and a frame is never empty");
 }
+
+TEST_CASE("a load needs a pointer, and one that points at the right thing") {
+  SECTION("a non-pointer source is named as the type it is") {
+    Program program = minimal();
+    body(program, {Command {Op::Load, {Operand::vreg(Type::I32, 0), Operand::instant(Type::I32, 0)}}});
+    CHECK(messages(program) == std::vector<std::string> {"LOAD needs arg 1 to be a pointer, but it is i32"});
+  }
+  SECTION("a pointer to the wrong pointee is named as what it points at") {
+    Program program = minimal();
+    body(program, {Command {Op::Load, {Operand::vreg(Type::I32, 0), Operand::instant(Type::pointer(Type::U8), 0)}}});
+    CHECK(messages(program) == std::vector<std::string> {"LOAD needs arg 1 to point at i32, but it points at u8"});
+  }
+}
+
+TEST_CASE("an address is only of a cell") {
+  Program program = minimal();
+  body(program, {Command {Op::Addr, {Operand::vreg(Type::pointer(Type::I32), 0), Operand::instant(Type::I32, 0)}}});
+  CHECK(messages(program) ==
+        std::vector<std::string> {"ADDR needs a vreg or a global to take the address of, but arg 1 is an instant"});
+}

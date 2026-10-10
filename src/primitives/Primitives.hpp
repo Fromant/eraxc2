@@ -29,16 +29,22 @@ namespace erax::primitives {
     U32,
     I64,
     U64,
+    /// A pointer to a byte (`ptr u8`). The catalog has no element type of its own;
+    /// a pointer is one word wide whatever it points at, and the byte pointer is the
+    /// one the allocator deals in.
+    Ptr,
   };
 
   /// Catalog ids, fixed by `docs/primitive.md#catalog` and frozen by the `.jir`
-  /// format: a primitive is never removed or renumbered.
+  /// format: a primitive is never removed or renumbered, only appended to.
   enum class Prim : std::uint32_t {
     Print = 0,
     PrintChar = 1,
     ReadChar = 2,
     Exit = 3,
     Abort = 4,
+    Alloc = 5,
+    Free = 6,
   };
 
   /// How many parameters a signature can hold. The widest primitive today takes

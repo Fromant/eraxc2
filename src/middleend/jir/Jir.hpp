@@ -3,10 +3,10 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
-#include <type_traits>
 #include <vector>
 
 /// The shared IR of erax (`docs/middleend/JIR.md`): a register-style, stack-framed
@@ -14,56 +14,108 @@
 /// nothing is resolved at load or run time and a `Program` serializes verbatim.
 namespace erax::middleend {
 
-  enum class Type : std::uint8_t {
-    Void,
-    I8,
-    U8,
-    I16,
-    U16,
-    I32,
-    U32,
-    I64,
-    U64,
+  /// A machine type: one of the scalar kinds (`Void` plus the integers), or a
+  /// pointer to another type. `pointee` is non-null exactly when `kind` is `Ptr`,
+  /// and equality is structural, so two separately built `ptr i32`s are the same
+  /// type. A pointer is one cell wide, whatever it points at.
+  struct Type {
+    enum class Kind : std::uint8_t {
+      Void,
+      I8,
+      U8,
+      I16,
+      U16,
+      I32,
+      U32,
+      I64,
+      U64,
+      Ptr,
+    };
+
+    Kind kind = Kind::Void;
+    std::shared_ptr<const Type> pointee;
+
+    /// The scalar types, named where a type is spelled (`Type::I32`). A pointer is
+    /// built with `pointer`, never named directly.
+    static const Type Void;
+    static const Type I8;
+    static const Type U8;
+    static const Type I16;
+    static const Type U16;
+    static const Type I32;
+    static const Type U32;
+    static const Type I64;
+    static const Type U64;
+
+    /// A pointer to \p pointee.
+    static Type pointer(Type pointee) noexcept {
+      return Type {Kind::Ptr, std::make_shared<const Type>(pointee)};
+    }
+
+    bool is_pointer() const noexcept {
+      return kind == Kind::Ptr;
+    }
   };
 
-  /// Width of a cell of this type, in bytes (`Void` is 0).
-  constexpr std::size_t size_of(Type type) noexcept {
-    switch (type) {
-      case Type::Void: return 0;
-      case Type::I8:
-      case Type::U8: return 1;
-      case Type::I16:
-      case Type::U16: return 2;
-      case Type::I32:
-      case Type::U32: return 4;
-      case Type::I64:
-      case Type::U64: return 8;
+  inline const Type Type::Void {Type::Kind::Void, {}};
+  inline const Type Type::I8 {Type::Kind::I8, {}};
+  inline const Type Type::U8 {Type::Kind::U8, {}};
+  inline const Type Type::I16 {Type::Kind::I16, {}};
+  inline const Type Type::U16 {Type::Kind::U16, {}};
+  inline const Type Type::I32 {Type::Kind::I32, {}};
+  inline const Type Type::U32 {Type::Kind::U32, {}};
+  inline const Type Type::I64 {Type::Kind::I64, {}};
+  inline const Type Type::U64 {Type::Kind::U64, {}};
+
+  /// Structural equality, so a type built in one place matches the same type built
+  /// in another: the scalar kinds compare by kind, a pointer also by its pointee.
+  inline bool operator==(const Type& a, const Type& b) noexcept {
+    if (a.kind != b.kind)
+      return false;
+    if (a.kind != Type::Kind::Ptr)
+      return true;
+    return *a.pointee == *b.pointee;
+  }
+
+  /// Width of a cell of this type, in bytes (`Void` is 0, a pointer is one word).
+  inline std::size_t size_of(Type type) noexcept {
+    switch (type.kind) {
+      case Type::Kind::Void: return 0;
+      case Type::Kind::I8:
+      case Type::Kind::U8: return 1;
+      case Type::Kind::I16:
+      case Type::Kind::U16: return 2;
+      case Type::Kind::I32:
+      case Type::Kind::U32: return 4;
+      case Type::Kind::I64:
+      case Type::Kind::U64:
+      case Type::Kind::Ptr: return 8;
     }
     return 0;
   }
 
-  /// `Void` is the only non-integer type; everything else is a two's-complement
-  /// integer whose signedness is this flag.
-  constexpr bool is_integer(Type type) noexcept {
-    return type != Type::Void;
+  /// `Void` and a pointer are the non-integer types; everything else is a
+  /// two's-complement integer whose signedness is this flag.
+  inline bool is_integer(Type type) noexcept {
+    return type.kind != Type::Kind::Void && type.kind != Type::Kind::Ptr;
   }
 
-  constexpr bool is_signed(Type type) noexcept {
-    switch (type) {
-      case Type::I8:
-      case Type::I16:
-      case Type::I32:
-      case Type::I64: return true;
+  inline bool is_signed(Type type) noexcept {
+    switch (type.kind) {
+      case Type::Kind::I8:
+      case Type::Kind::I16:
+      case Type::Kind::I32:
+      case Type::Kind::I64: return true;
       default: return false;
     }
   }
 
   /// Masks a shift count to the operand width, as the machine does.
-  constexpr std::uint64_t shift_mask(Type type) noexcept {
+  inline std::uint64_t shift_mask(Type type) noexcept {
     return size_of(type) * 8 - 1;
   }
 
-  std::string_view to_string(Type type) noexcept;
+  std::string to_string(Type type);
 
   /// The op table: the single set of commands the IR has. It is frozen by the
   /// `.jir` format, so a new op is a format version bump.
@@ -87,6 +139,9 @@ namespace erax::middleend {
     Shr,
     Sar,
     Cast,
+    Load,
+    Store,
+    Addr,
     CmpEq,
     CmpNe,
     CmpLt,
@@ -140,7 +195,10 @@ namespace erax::middleend {
       case Op::Dec:
       case Op::Neg:
       case Op::Not:
-      case Op::Cast: return {2, 2};
+      case Op::Cast:
+      case Op::Load:
+      case Op::Store:
+      case Op::Addr: return {2, 2};
       case Op::Ret: return {0, 1};
       case Op::Call: return {2, Arity::unbounded};
       case Op::Primitive: return {1, Arity::unbounded};
@@ -148,10 +206,11 @@ namespace erax::middleend {
     return {0, 0};
   }
 
-  /// True when `args[0]` is the op's result slot. A `Primitive`'s is the
-  /// `EMPTY` sentinel when the primitive returns void.
+  /// True when `args[0]` is the op's result slot. `Ret` has none, and `Store` has
+  /// none either — it writes through its pointer rather than producing a value. A
+  /// `Primitive`'s result is the `EMPTY` sentinel when the primitive returns void.
   constexpr bool has_result(Op op) noexcept {
-    return op != Op::Ret;
+    return op != Op::Ret && op != Op::Store;
   }
 
   /// True for `CmpEq`..`CmpGe`, the only ops legal as a `Condition`'s `cmp`.
@@ -177,28 +236,28 @@ namespace erax::middleend {
     /// Legal only as the result slot of a `Call`.
     static constexpr std::uint64_t empty_value = std::numeric_limits<std::uint64_t>::max();
 
-    static constexpr Operand instant(Type type, std::uint64_t bits) noexcept {
+    static Operand instant(Type type, std::uint64_t bits) noexcept {
       return {OperandKind::Instant, type, bits};
     }
 
-    static constexpr Operand vreg(Type type, std::uint64_t offset) noexcept {
+    static Operand vreg(Type type, std::uint64_t offset) noexcept {
       return {OperandKind::VReg, type, offset};
     }
 
-    static constexpr Operand global(Type type, std::size_t id) noexcept {
+    static Operand global(Type type, std::size_t id) noexcept {
       return {OperandKind::Global, type, id};
     }
 
     /// A function reference; `type` is the callee's return type.
-    static constexpr Operand function(Type return_type, std::size_t id) noexcept {
+    static Operand function(Type return_type, std::size_t id) noexcept {
       return {OperandKind::Fn, return_type, id};
     }
 
-    static constexpr Operand empty() noexcept {
+    static Operand empty() noexcept {
       return {OperandKind::VReg, Type::Void, empty_value};
     }
 
-    constexpr bool is_empty() const noexcept {
+    bool is_empty() const noexcept {
       return *this == empty();
     }
 
@@ -206,10 +265,8 @@ namespace erax::middleend {
       return static_cast<std::size_t>(value);
     }
 
-    friend constexpr bool operator==(const Operand&, const Operand&) = default;
+    friend bool operator==(const Operand&, const Operand&) = default;
   };
-
-  static_assert(std::is_trivially_copyable_v<Operand>);
 
   std::string to_string(const Operand& operand);
 

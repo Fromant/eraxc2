@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <expected>
+#include <memory>
 #include <span>
 #include <string>
 #include <string_view>
@@ -23,6 +24,7 @@ namespace erax::frontend {
     None,
     Fn,
     Let,
+    Namespace,
     If,
     Else,
     While,
@@ -86,6 +88,9 @@ namespace erax::frontend {
   /// the body is parsed once per deduced instantiation.
   struct TemplateInfo {
     std::string name;
+    /// The namespace path the template was declared in (`{}` for the root), so its
+    /// body is re-entered in the same scope when an instantiation is parsed.
+    std::vector<std::string> ns_path;
     SourceLocation location;
     std::vector<TypeParam> type_params;
     std::vector<std::string> param_names;
@@ -94,12 +99,14 @@ namespace erax::frontend {
     std::size_t body_index = 0;
   };
 
-  /// One template instantiation a call requested, keyed by name and deduced type
-  /// arguments. `id` is the function's index in the program (source functions come
-  /// first, instantiations after); `generated` says whether its body has been parsed.
+  /// One template instantiation a call requested, keyed by qualified name and
+  /// deduced type arguments. `id` is the function's index in the program (source
+  /// functions come first, instantiations after); `generated` says whether its body
+  /// has been parsed. `tmpl` is the template it came from, so the body is parsed in
+  /// the template's own namespace.
   struct Instantiation {
     std::size_t id = 0;
-    std::string name;
+    const TemplateInfo* tmpl = nullptr;
     std::vector<SemType> type_args;
     bool generated = false;
   };
@@ -241,6 +248,18 @@ private:
     std::uint64_t vreg_high_water = 0;
   };
 
+  /// A namespace: a named scope for top-level declarations, nestable
+  /// (`docs/core/language.md#namespaces`). Names are resolved inside-out; a
+  /// namespace's own members shadow an enclosing namespace's. The root namespace
+  /// has an empty `path` and holds the program's top-level names.
+  struct NameSpace {
+    std::vector<std::string> path;
+    std::unordered_map<std::string, GlobalInfo> globals;
+    std::unordered_map<std::string, std::vector<FunctionInfo>> functions;
+    std::unordered_map<std::string, TemplateInfo> templates;
+    std::unordered_map<std::string, std::unique_ptr<NameSpace>> namespaces;
+  };
+
   /// Which of the visible locals are assigned on entry to a loop: after the loop a
   /// local is assigned only if it was assigned both before and at the end of the
   /// body. The entries point into scopes that outlive the loop.
@@ -277,37 +296,89 @@ public:
     const LocalInfo* find_local(const std::string& name) const noexcept;
     /// The same local, writable: an assignment marks it definitely assigned.
     LocalInfo* find_local(const std::string& name) noexcept;
+    /// The global \p name, searching the current namespace outward to the root.
     const GlobalInfo* find_global(const std::string& name) const noexcept;
     /// The same global, writable: the declaration pass leaves the value unset and
-    /// the item pass fills it in once the initializer has folded.
+    /// the item pass fills it in once the initializer has folded. A global is only
+    /// ever declared in the current namespace.
     GlobalInfo& global_of(const std::string& name) noexcept;
     /// Every declaration of \p name — one entry, or several forming an overload
-    /// set — or null when the name has none.
+    /// set — or null when the name has none, searching the current namespace
+    /// outward to the root.
     const std::vector<FunctionInfo>* find_functions(const std::string& name) const noexcept;
     /// The template \p name carries, or null when it carries none (a name carries
-    /// at most one, `docs/core/statements.md#templates`).
+    /// at most one, `docs/core/statements.md#templates`), searching outward.
     const TemplateInfo* find_template(const std::string& name) const noexcept;
     /// The declaration of \p name whose parameters are exactly \p params: how a
     /// duplicate signature is detected and how the two passes agree on an id.
     const FunctionInfo* find_function(const std::string& name, const std::vector<SemType>& params) const noexcept;
-    /// Whether the innermost scope already has this name, which is what makes a
-    /// second `let` of it an error rather than a shadow.
+    /// Whether the innermost lexical scope already has this name, which is what
+    /// makes a second `let` of it an error rather than a shadow.
     bool declares(const std::string& name) const noexcept;
+
+    /// The namespace lookups as the declaration pass needs them: the *current*
+    /// namespace only, so a name in an enclosing namespace is not a clash.
+    bool is_declared_in_current(const std::string& name) const noexcept;
+    NameSpace* find_namespace_in_current(const std::string& name) noexcept;
+    const NameSpace* find_namespace_in_current(const std::string& name) const noexcept;
+    const std::vector<FunctionInfo>* find_functions_in_current(const std::string& name) const noexcept;
+    const TemplateInfo* find_template_in_current(const std::string& name) const noexcept;
+    const GlobalInfo* find_global_in_current(const std::string& name) const noexcept;
+    const FunctionInfo* find_function_in_current(const std::string& name,
+                                                 const std::vector<SemType>& params) const noexcept;
+
+    /// The namespace-directed lookups a qualified name (`a.b.f`) uses: exactly the
+    /// namespace named, never searching its enclosing namespaces.
+    const GlobalInfo* find_global_in(const NameSpace& ns, const std::string& name) const noexcept;
+    const std::vector<FunctionInfo>* find_functions_in(const NameSpace& ns, const std::string& name) const noexcept;
+    const TemplateInfo* find_template_in(const NameSpace& ns, const std::string& name) const noexcept;
+    const FunctionInfo* find_function_in(const NameSpace& ns, const std::string& name,
+                                         const std::vector<SemType>& params) const noexcept;
+    /// A nested namespace of \p ns, or null when it has no such member.
+    const NameSpace* find_namespace(const NameSpace& ns, const std::string& name) const noexcept;
+    /// The namespace \p name reaches, searching the current namespace outward.
+    const NameSpace* find_namespace(const std::string& name) const noexcept;
+
+    /// The innermost namespace of the declaration walk.
+    NameSpace& current_namespace() noexcept {
+      return *namespace_stack_.back();
+    }
+    const NameSpace& current_namespace() const noexcept {
+      return *namespace_stack_.back();
+    }
+    void push_namespace(NameSpace& ns) noexcept {
+      namespace_stack_.push_back(&ns);
+    }
+    void pop_namespace() noexcept {
+      namespace_stack_.pop_back();
+    }
+    /// Resolves \p path (one identifier per segment) from the current namespace:
+    /// the first segment searches outward, each later one is a direct member of the
+    /// namespace before it. Null with a message when a segment names no namespace.
+    std::expected<NameSpace*, ParseError> resolve_namespace(const std::vector<std::string>& path,
+                                                            SourceLocation location) const;
+    /// Sets the active namespace to \p path from the root (for re-parsing a
+    /// template's body), returning the previous path so it can be restored.
+    std::vector<std::string> set_namespace_path(const std::vector<std::string>& path);
+
+    /// Adds a nested namespace to the current namespace, failing if the name is
+    /// already taken there by a global, function, template, or namespace.
+    std::expected<NameSpace*, ParseError> declare_namespace(const std::string& name, SourceLocation location);
 
     /// Adds a global, numbering it in declaration order.
     std::size_t declare_global(const std::string& name, GlobalInfo info);
     /// Adds a function, numbering it in declaration order.
     std::size_t declare_function(const std::string& name, FunctionInfo info);
-    /// Records the one template \p name may carry.
+    /// Records the one template \p name may carry in the current namespace.
     void declare_template(const std::string& name, TemplateInfo info);
     /// Declares a local in the innermost scope, failing if the name is taken.
     std::expected<void, ParseError> declare_local(const std::string& name, LocalInfo info);
 
-    /// The id of the instantiation of \p name for \p type_args, registering it if
+    /// The id of the instantiation of \p tmpl for \p type_args, registering it if
     /// this is its first call. The id is the program function it will become: source
     /// functions keep the ids the declaration pass gave them, and instantiations are
     /// numbered after them in the order they are first requested.
-    std::expected<std::size_t, ParseError> instantiate(const std::string& name, const std::vector<SemType>& type_args,
+    std::expected<std::size_t, ParseError> instantiate(const TemplateInfo* tmpl, const std::vector<SemType>& type_args,
                                                        SourceLocation location);
     /// Every instantiation requested so far; a body may be parsed later, in the
     /// order the vector lists.
@@ -354,12 +425,6 @@ public:
     /// local the body assigns is assigned afterwards however the test goes.
     void set_assigned(const AssignedSnapshot& snapshot) noexcept;
 
-    const std::unordered_map<std::string, GlobalInfo>& globals() const noexcept {
-      return globals_;
-    }
-    const std::unordered_map<std::string, std::vector<FunctionInfo>>& functions() const noexcept {
-      return functions_;
-    }
     std::size_t function_count = 0;
     std::size_t global_count = 0;
 
@@ -387,12 +452,13 @@ public:
     void reset_frame(std::vector<middleend::Type> params);
 
 private:
-    std::unordered_map<std::string, GlobalInfo> globals_;
-    std::unordered_map<std::string, std::vector<FunctionInfo>> functions_;
-    std::unordered_map<std::string, TemplateInfo> templates_;
+    /// The root namespace holds the program's top-level names; `namespace_stack_`
+    /// walks from it into the declaration currently being parsed.
+    NameSpace root_namespace_;
+    std::vector<NameSpace*> namespace_stack_ {&root_namespace_};
     std::vector<Instantiation> instantiations_;
-    /// The instantiation key (name plus its type arguments) to its index in
-    /// `instantiations_`, so a second call with the same types reuses the first.
+    /// The instantiation key (qualified name plus its type arguments) to its index
+    /// in `instantiations_`, so a second call with the same types reuses the first.
     std::unordered_map<std::string, std::size_t> instantiation_ids_;
     /// The active type-parameter substitution, empty outside an instantiation body.
     std::unordered_map<std::string, SemType> type_substitution_;

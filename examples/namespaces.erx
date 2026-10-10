@@ -1,0 +1,23 @@
+// Namespaces (docs/core/language.md#namespaces): names at the top level live in
+// named scopes, reached qualified — `room.toggle()`, `room.kitchen.lamps()`. A
+// bare name inside a namespace resolves there first, then outward; `main` exists
+// only at the root.
+namespace room {
+    let lights: i32 = 3;
+
+    fn toggle(): i32 {
+        lights = lights + 1;
+        return lights;
+    }
+
+    namespace kitchen {
+        // `lights` is room's, reached unqualified through the enclosing namespace.
+        fn lamps(): i32 { return lights + 2; }
+    }
+}
+
+fn main(): i32 {
+    let on: i32 = room.toggle();             // 4
+    on = on + room.kitchen.lamps();          // 4 + (4 + 2)
+    return on;
+}

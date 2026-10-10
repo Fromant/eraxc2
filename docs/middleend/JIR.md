@@ -1,6 +1,6 @@
 # Middleend — JIR
 
-JIR is the single IR of erax: what the parser emits and what every backend executes. It is a register-style, stack-framed IR — a program runs on one machine stack of cells, so a compliant executor is a stack machine by construction (an array of cells plus a frame pointer; nothing else is required).
+JIR is the single IR of erax: what the parser emits and what every backend executes. It is a register-style, stack-framed IR — a program runs on one machine stack of cells, so a compliant executor is a stack machine by construction (an array of cells plus a frame pointer is the whole structure), with the heap `alloc`/`free` hand blocks out of as a second region of the same array.
 
 Roadmap and format versioning live in `TODO.md`; this file is the language contract only.
 
@@ -47,8 +47,10 @@ Every operand is `(kind, type, value)` — self-describing; nothing is resolved 
 | `i16` `u16`    | 2     |
 | `i32` `u32`    | 4     |
 | `i64` `u64`    | 8     |
+| `ptr T`        | 8     |
 
 - `bool` lowers to `i8`; `char` lowers to `u8` — it is a `0–255` byte, so its comparisons and its `/ % << >>` are unsigned.
+- `ptr T` is a pointer to a cell holding `T`; the pointee is part of the type (`ptr i32` ≠ `ptr u8`), and a pointer is one word whatever it points at. It is built with `Type::pointer(T)`; it prints `ptr T`; and a `LOAD` reads through it in `T`'s type.
 - No implicit conversions: where an op requires matching types they must match exactly (the validator enforces this).
 
 ## Frames
@@ -84,6 +86,20 @@ Every operand is `(kind, type, value)` — self-describing; nothing is resolved 
 
 A cast to the source's `bool` never reaches the IR as `CAST`: `bool` *is* `i8` here, so `CAST … i8` could not tell `x as i8` from `x as bool`. The parser lowers a to-`bool` cast to the compare the machine already spells nonzero with — `CMP_NE dst src 0` (the same shape [`!` uses](#comparisons)) — and a from-`bool` value is an ordinary `i8` 0/1 cell, so every other direction is a plain `CAST`.
 
+A `CAST` to or from a pointer follows the same rule: the operand's pattern is kept at the target's width. `src` read as the unsigned word its type reads, so `0 as ptr i32` is the all-zero address (the pointer that names nothing), and `ptr u8 as u64` is the address's bits — the only place an address leaves the pointer's own type.
+
+### Pointers
+
+Three ops move through a pointer. The pointer cell itself is produced by `ADDR` or by `PRIM alloc`; a register/global that holds bit patterns (`0 as ptr i32`, a `ptr` parameter) is an ordinary cell.
+
+| Op      | Shape             | Semantics                                                    |
+| ------- | ----------------- | ------------------------------------------------------------ |
+| `LOAD`  | `LOAD dst src`    | `dst = *src`: `src` is a pointer, the result is `src`'s pointee (the validator checks `dst.type == pointee(src.type)`). A read through an address that names no live cell is a trap. |
+| `STORE` | `STORE ptr val`   | `*ptr = val`: no result slot — `args[0]` is the pointer, `args[1]` the value, and the validator checks `pointee(ptr.type) == val.type`. A write through an address that names no live cell is a trap. |
+| `ADDR`  | `ADDR dst src`    | `dst = &src`: `src` is a **vreg or global** lvalue (never a constant or a scratch cell), `dst` is `ptr` to its type. |
+
+A compound store (`*p += v`) is `LOAD` into a temp, the operator, then `STORE` — the same three-instruction shape a named `x += v` has.
+
 ### Integer arithmetic
 
 Two's-complement, wrapping. Signedness of div/mod and `SAR` comes from the operand type.
@@ -109,6 +125,8 @@ The source's logical operators lower to these bitwise ops on `i8` 0/1 operands, 
 | Op                                                       | Shape          | Semantics         |
 | -------------------------------------------------------- | -------------- | ----------------- |
 | `CMP_EQ` `CMP_NE` `CMP_LT` `CMP_LE` `CMP_GT` `CMP_GE`    | `CMP_EQ dst a b` | `dst = (a op b)` |
+
+Pointers take part in `CMP_EQ`/`CMP_NE` only, and those compare as the unsigned words their addresses are — the one question the IR lets a program ask of a cell. The language never lowers an ordered pointer comparison (ordering a pointer is a type error at the source, `expressions.md#typing-rules`); an IR hand-written with `CMP_LT` on two `ptr` cells is still executed as an unsigned compare, but no source produces one.
 
 Logical negation is `CMP_NE i8 $dst i8 $a i8 0`.
 
@@ -159,6 +177,7 @@ CALL EMPTY &log i32 $3                  ; EMPTY dst — no value comes back
 - `args[0]` is the result slot: the `EMPTY` sentinel iff the primitive returns void, otherwise a vreg of its return type — the same rule as `CALL`. `args[1..]` are the arguments; their count and types must match the primitive's signature. The parser has already resolved lone literals to their parameter types, so the IR carries exact types and no rule about literals survives lowering.
 - `print` is the one variadic primitive: any number of value operands, none of them `void` (arity `0..∞`), `dst` `EMPTY` — every operand is a read.
 - `print` and `print_char` write to stdout; those bytes are part of the observable result ([execution model](#execution-model)). `exit` and `abort` terminate the run: a block ending in either has no outgoing edges, like a `RET` block.
+- `alloc` and `free` move blocks through the heap: `alloc` hands back a pointer to `bytes` worth of zeroed cells (rounded up to whole cells, at least one), `free` returns a live pointer's block to the allocator and traps on one that names nothing. They are the primitive pair [pointers](#runtime-semantics) sit on; their exact contract is `docs/primitive.md`.
 - `PRIM` is the one way a program touches the world; strings and formatted output arrive later (`TODO.md`).
 
 ## Runtime semantics
@@ -168,17 +187,19 @@ Every value is defined in this contract or the program is rejected by the valida
 - **Overflow wraps** (two's complement): `i64max + 1 = i64min`. `CAST` wraps the same way by definition — it always lands *in* the target's type, wide or narrow.
 - **Divide-by-zero = process death**; `iMIN / -1` dies too.
 - **Div/mod truncate toward zero**, signed and unsigned.
-- **Shift counts wrap to the operand width**: `count & (width-1)` — `i8`/`u8` → 3 bits, `i16`/`u16` → 4, `i32`/`u32` → 5, `i64`/`u64` → 6.
-- **Signedness**: signed for `i*`, unsigned for `u*` (comparisons, div/mod, `SAR`).
+- **Shift counts wrap to the operand width**: `count & (width-1)` — `i8`/`u8` → 3 bits, `i16`/`u16` → 4, `i32`/`u32` → 5, `i64`/`u64` -> 6.
+- **Signedness**: signed for `i*`, unsigned for `u*` (comparisons, div/mod, `SAR`); a pointer reads as an unsigned word, so pointer comparisons are the unsigned ones.
+- **Pointers name cells.** A pointer cell is an address the executor encodes from `{cell, region}` — the IR does not fix the encoding, only its behavior: two pointers compare equal iff they name the same cell, deref through the pointer reads/writes that cell in the pointee's type, and a pointer that names nothing is an error on use. In the reference interpreter the address is `region << 62 | index` for one of three regions — the current frame's stack, the globals table, or the heap — with region `0` the null pointer; a backend may encode its cells differently as long as the behavior matches.
+- **A dead pointer is process death.** `LOAD`/`STORE` (and `PRIM free`) through an address that names no live cell — the null pointer, an address in a frame that has returned, a block already freed, an out-of-range heap index — terminates the run the same way a divide does. So does an `alloc` the machine's cell array cannot hold. These are the reference interpreter's `InvalidPointer` and `OutOfMemory` traps.
 - **Bool**: `i8` 0/1; a condition is always a `(cmp, a, b)` pair with C's "nonzero" rule.
-- **Determinism**: ordered IR, single-threaded. The same program has the same observable result (the bytes written to stdout, final global state, the exit code — the entrypoint's return or the one `exit`/`abort` gave) on every backend.
+- **Determinism**: ordered IR, single-threaded. The same program has the same observable result (the bytes written to stdout, final global state, the exit code — the entrypoint's return or the one `exit`/`abort` gave) on every backend. Pointer *identity* is part of that result; a specific cell's address is not — it is the executor's encoding, so a program that turns addresses into integers and prints or further compares them leaves the determinism guarantee (`TODO.md#conformance`).
 
 ## Validator
 
 Runs on every `Program` before any backend sees it. A producer leaves the CFG canonical: it drops the blocks no edge can reach (the parser knows which source constructs cannot run) and never lets a path fall off the end of a function.
 
 1. **CFG**: entry block is 0; every block reachable; every edge's `from`/`to` valid; 0–2 outgoing edges per block; a two-edge block has exactly one conditional edge; no outgoing edges iff the block ends in a `RET` or a terminating `PRIM` (`exit`/`abort`), and that command is the block's last command.
-2. **Commands**: arity and operand roles match the op table; a `PRIM`'s name, result slot, and arguments match its catalog entry (signature, `EMPTY`-iff-void, `print`'s variadic values); operand types are the explicit ones on each operand; ops requiring same-type operands get them — `CAST` is the one op whose two operands differ on purpose; no implicit conversions.
+2. **Commands**: arity and operand roles match the op table; a `PRIM`'s name, result slot, and arguments match its catalog entry (signature, `EMPTY`-iff-void, `print`'s variadic values); operand types are the explicit ones on each operand; ops requiring same-type operands get them — `CAST` is the one op whose two operands differ on purpose; no implicit conversions. The pointer ops carry their own rule: `LOAD`'s result is the source's pointee, `STORE`'s value is its pointer's pointee, and `ADDR`'s source is a vreg or global lvalue whose type is `dst`'s pointee.
 3. **Frames**: a function's frame is never empty and holds its params in `$0..n-1`; every vreg id `< frame_size`.
 4. **Definitions**: every vreg read has a reaching definition from entry (params and globals count as defined at entry); every vreg has one consistent type across all reads and writes.
 5. **Calls**: `args[1]` is a `Fn` operand naming a valid function — the one slot an `Fn` may sit in; `args[2..]` count and types match the callee's params and are all defined; `args[0]` is the `EMPTY` sentinel iff the callee returns void — a sentinel anywhere else is an error, and a non-void `dst` matches the callee's return type.
@@ -201,5 +222,5 @@ The interpreter of `src/interp/` is this contract made executable, and its resul
 - **Arithmetic is the same code that folds constants** (`fold::binary`/`fold::unary`, and `fold::convert` for `CAST`), so a folded answer and a computed one cannot drift apart.
 - **A global initializer is a frame of its own** — the IR gives it no `frame_size`, so the machine gives it the cells its vregs name, and it runs before the entrypoint exists.
 - **The machine validates first.** Every operand is read through an index, so a program the validator rejects never reaches the cell array; it comes back as a list of errors instead.
-- **Limits are the machine's, not the IR's.** A frame's size and how deep recursion may go are not in this contract, so an executor has to say where it stops rather than asking the host for memory it may not have. The reference interpreter counts both the entrypoint's own frame and the initializers', and reports three ways to stop: a stack deeper than the limit, a frame wider than the whole cell array, and a cell array with no room left.
+- **Limits are the machine's, not the IR's.** A frame's size and how deep recursion may go are not in this contract, so an executor has to say where it stops rather than asking the host for memory it may not have. The reference interpreter counts both the entrypoint's own frame and the initializers', and reports two kinds of stop: structure (a stack deeper than the limit, a frame wider than the whole cell array, a cell array with no room left — the heap shares that last limit) and pointers (a `LOAD`/`STORE`/`free` through an address that names no live cell). The pointer half is the direction this contract under-constrains: because a cell's address is the executor's encoding, the executor — not the IR — decides which addresses are live and reports the dead ones the same way it reports a divide.
 - **What a run leaves behind is the observable result** and nothing else: the bytes the output primitives wrote to stdout (in order), final global state (one cell per global, in declaration order), and the exit code — the entrypoint's `i32` return, or the code `exit`/`abort` gave. A trap keeps the call stack it happened on, because the IR is nameless and the stack is the only way to say where a program was.

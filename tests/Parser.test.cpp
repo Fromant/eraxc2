@@ -689,3 +689,31 @@ TEST_CASE("the tokenizer's contract still holds at the parser's edge") {
   // `?.` composes at parse and has nothing to compose with in v1.
   CHECK(parse_error("fn main(): i32 { let x: i32 = 1; return x?.y; }") == "unknown operator '?'");
 }
+
+TEST_CASE("a pointer source type lowers to a pointer IR type and back") {
+  const SemType pointer = SemType::pointer(SemType::I32);
+  CHECK(lower(pointer) == Type::pointer(Type::I32));
+  CHECK(lift(Type::pointer(Type::U8)) == SemType::pointer(SemType::U8));
+  CHECK(to_string(pointer) == "ptr i32");
+  // A pointer flows all the way through a signature.
+  const Program program = parse_ok("fn f(p: ptr i32): ptr i32 { return p; } fn main(): i32 { return 0; }");
+  CHECK(program.functions[0].params == std::vector<Type> {Type::pointer(Type::I32)});
+  CHECK(program.functions[0].return_type == Type::pointer(Type::I32));
+}
+
+TEST_CASE("a constant carries the sign its type says") {
+  // An unsigned type's value is read as a magnitude even when the top bit is set.
+  CHECK(ConstInt::bits_of(200, Type::U8).signed_value() == 200);
+  CHECK(ConstInt::bits_of(200, Type::U8).unsigned_value() == 200);
+  // A signed type with the top bit set reads negative.
+  CHECK(ConstInt::of(-1, Type::I8).signed_value() == -1);
+}
+
+TEST_CASE("constant arithmetic folds through subtraction and negation") {
+  // `1 - 3` is a subtraction whose larger magnitude is on the right, and `-(5)`
+  // is a negation of a parenthesized constant rather than a signed literal.
+  const Program subtracted = parse_ok("fn main(): i32 { let x: i32 = 1 - 3; return x; }");
+  CHECK(body_of(subtracted, 0).blocks[0].commands[0].args[1].value == 0xFFFFFFFEull);
+  const Program negated = parse_ok("fn main(): i32 { let x: i32 = -(5); return x; }");
+  CHECK(body_of(negated, 0).blocks[0].commands[0].args[1].value == 0xFFFFFFFBull);
+}

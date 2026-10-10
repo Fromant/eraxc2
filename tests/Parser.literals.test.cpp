@@ -574,7 +574,7 @@ TEST_CASE("every integer type lowers and is named in the IR") {
   CHECK(size_of(Type::I32) == 4);
   // The parser's own view of a type round-trips through the machine one -- except for
   // the two that are not integers here, since `lift` cannot tell `bool` from `i8`.
-  for (const SemType type :
+  for (const SemType& type :
        {SemType::I8, SemType::U8, SemType::I16, SemType::U16, SemType::I32, SemType::U32, SemType::I64, SemType::U64}) {
     CHECK(lift(lower(type)) == type);
   }
@@ -631,8 +631,9 @@ TEST_CASE("a call checks the type of every argument") {
   CHECK(parse_error("fn main(): i32 { return -; }") == "expected an expression");
   // ... and a `void` call is not an expression either.
   CHECK(parse_error("fn f() { } fn main(): i32 { let x: i32 = f(); return 0; }") != "");
-  // A name is one identifier: a dot is a namespace, and v1 has none.
-  CHECK(parse_error("fn main(): i32 { return a.b(); }") == "'.' is not part of a name in v1");
-  CHECK(parse_error("fn main(): i32 { let a: i32 = 1; return a.b; }") == "'.' is not part of a name in v1");
+  // A dotted name is a namespace-qualified reference; a dot that does not lead
+  // to a namespace is the unknown-namespace error.
+  CHECK(parse_error("fn main(): i32 { return a.b(); }") == "unknown namespace 'a'");
+  CHECK(parse_error("fn main(): i32 { let a: i32 = 1; return a.b; }") == "unknown namespace 'a'");
   CHECK(parse_error("fn a.b(): i32 { return 0; } fn main(): i32 { return 0; }") == "expected '('");
 }

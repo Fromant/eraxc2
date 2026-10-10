@@ -15,6 +15,7 @@ add_executable(erax_tests
     Parser.test.cpp
     Parser.literals.test.cpp
     Parser.globals.test.cpp
+    Parser.namespaces.test.cpp
     Parser.errors.test.cpp
     Interpreter.test.cpp
     Primitives.test.cpp

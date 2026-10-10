@@ -17,6 +17,7 @@ namespace erax::frontend {
     constexpr KeywordName keywords[] = {
         {"fn", Keyword::Fn},
         {"let", Keyword::Let},
+        {"namespace", Keyword::Namespace},
         {"if", Keyword::If},
         {"else", Keyword::Else},
         {"while", Keyword::While},
@@ -200,7 +201,9 @@ namespace erax::frontend {
     // whole operand, so one at the cursor can only be a prefix.
     while (index < tokens_->size() && (*tokens_)[index].type == TokenType::Operator) {
       const std::string_view text = (*tokens_)[index].text;
-      if (text != "-" && text != "!" && text != "~")
+      // `*` and `&` are prefix here (`*p`, `&x`): an infix one always follows a
+      // whole operand, so one where an operand starts can only be a prefix.
+      if (text != "-" && text != "!" && text != "~" && text != "*" && text != "&")
         break;
       ++index;
     }
@@ -210,6 +213,12 @@ namespace erax::frontend {
     if (index < tokens_->size() && (*tokens_)[index].type == TokenType::LParen) {
       index = past_group(index);
     } else if (index < tokens_->size() && (*tokens_)[index].type == TokenType::Identifier) {
+      // A name may be namespace-qualified: each `.` identifier is part of the
+      // same operand (`std.print`), and a call's `( … )` follows the last one.
+      while (index + 2 < tokens_->size() && (*tokens_)[index].type == TokenType::Identifier &&
+             (*tokens_)[index + 1].type == TokenType::Dot && (*tokens_)[index + 2].type == TokenType::Identifier) {
+        index += 2;
+      }
       ++index;
       if (index < tokens_->size() && (*tokens_)[index].type == TokenType::LParen)
         index = past_group(index);
@@ -301,6 +310,16 @@ namespace erax::frontend {
   std::expected<SemType, ParseError> expect_type(TokenCursor& cursor, std::string_view context) {
     const std::string wanted = context.empty() ? "expected a type" : "expected a type " + std::string {context};
     if (cursor.at(TokenType::Identifier)) {
+      // `ptr T` is a type, spelled as a prefix so a nested `ptr ptr i32` needs no
+      // brackets and `ptr i32` never meets the `>>` operator problem. `ptr` is only
+      // special in type position; a variable may still be named `ptr`.
+      if (cursor.current().text == "ptr") {
+        cursor.take();
+        auto pointee = expect_type(cursor, context);
+        if (!pointee)
+          return pointee;
+        return SemType::pointer(*pointee);
+      }
       if (const std::optional<SemType> type = type_of(keyword_of(cursor.current().text)); type) {
         cursor.take();
         return *type;
@@ -331,22 +350,34 @@ namespace erax::frontend {
   }
 
   const GlobalInfo* ParseContext::find_global(const std::string& name) const noexcept {
-    const auto found = globals_.find(name);
-    return found != globals_.end() ? &found->second : nullptr;
+    for (auto ns = namespace_stack_.rbegin(); ns != namespace_stack_.rend(); ++ns) {
+      const auto found = (*ns)->globals.find(name);
+      if (found != (*ns)->globals.end())
+        return &found->second;
+    }
+    return nullptr;
   }
 
   GlobalInfo& ParseContext::global_of(const std::string& name) noexcept {
-    return globals_.at(name);
+    return current_namespace().globals.at(name);
   }
 
   const std::vector<FunctionInfo>* ParseContext::find_functions(const std::string& name) const noexcept {
-    const auto found = functions_.find(name);
-    return found != functions_.end() ? &found->second : nullptr;
+    for (auto ns = namespace_stack_.rbegin(); ns != namespace_stack_.rend(); ++ns) {
+      const auto found = (*ns)->functions.find(name);
+      if (found != (*ns)->functions.end())
+        return &found->second;
+    }
+    return nullptr;
   }
 
   const TemplateInfo* ParseContext::find_template(const std::string& name) const noexcept {
-    const auto found = templates_.find(name);
-    return found != templates_.end() ? &found->second : nullptr;
+    for (auto ns = namespace_stack_.rbegin(); ns != namespace_stack_.rend(); ++ns) {
+      const auto found = (*ns)->templates.find(name);
+      if (found != (*ns)->templates.end())
+        return &found->second;
+    }
+    return nullptr;
   }
 
   const FunctionInfo* ParseContext::find_function(const std::string& name,
@@ -363,6 +394,134 @@ namespace erax::frontend {
     return nullptr;
   }
 
+  const GlobalInfo* ParseContext::find_global_in(const NameSpace& ns, const std::string& name) const noexcept {
+    const auto found = ns.globals.find(name);
+    return found != ns.globals.end() ? &found->second : nullptr;
+  }
+
+  const std::vector<FunctionInfo>* ParseContext::find_functions_in(const NameSpace& ns,
+                                                                   const std::string& name) const noexcept {
+    const auto found = ns.functions.find(name);
+    return found != ns.functions.end() ? &found->second : nullptr;
+  }
+
+  const TemplateInfo* ParseContext::find_template_in(const NameSpace& ns, const std::string& name) const noexcept {
+    const auto found = ns.templates.find(name);
+    return found != ns.templates.end() ? &found->second : nullptr;
+  }
+
+  const FunctionInfo* ParseContext::find_function_in(const NameSpace& ns, const std::string& name,
+                                                     const std::vector<SemType>& params) const noexcept {
+    const std::vector<FunctionInfo>* candidates = find_functions_in(ns, name);
+    if (candidates == nullptr) {
+      return nullptr;
+    }
+    for (const FunctionInfo& candidate : *candidates) {
+      if (candidate.params == params) {
+        return &candidate;
+      }
+    }
+    return nullptr;
+  }
+
+  const NameSpace* ParseContext::find_namespace(const NameSpace& ns, const std::string& name) const noexcept {
+    const auto found = ns.namespaces.find(name);
+    return found != ns.namespaces.end() ? found->second.get() : nullptr;
+  }
+
+  const NameSpace* ParseContext::find_namespace(const std::string& name) const noexcept {
+    for (auto ns = namespace_stack_.rbegin(); ns != namespace_stack_.rend(); ++ns) {
+      if (const NameSpace* found = find_namespace(**ns, name); found != nullptr)
+        return found;
+    }
+    return nullptr;
+  }
+
+  bool ParseContext::is_declared_in_current(const std::string& name) const noexcept {
+    const NameSpace& ns = current_namespace();
+    return ns.globals.contains(name) || ns.functions.contains(name) || ns.templates.contains(name) ||
+        ns.namespaces.contains(name);
+  }
+
+  NameSpace* ParseContext::find_namespace_in_current(const std::string& name) noexcept {
+    const auto found = current_namespace().namespaces.find(name);
+    return found != current_namespace().namespaces.end() ? found->second.get() : nullptr;
+  }
+
+  const NameSpace* ParseContext::find_namespace_in_current(const std::string& name) const noexcept {
+    const auto found = current_namespace().namespaces.find(name);
+    return found != current_namespace().namespaces.end() ? found->second.get() : nullptr;
+  }
+
+  const std::vector<FunctionInfo>* ParseContext::find_functions_in_current(const std::string& name) const noexcept {
+    return find_functions_in(current_namespace(), name);
+  }
+
+  const TemplateInfo* ParseContext::find_template_in_current(const std::string& name) const noexcept {
+    return find_template_in(current_namespace(), name);
+  }
+
+  const GlobalInfo* ParseContext::find_global_in_current(const std::string& name) const noexcept {
+    return find_global_in(current_namespace(), name);
+  }
+
+  const FunctionInfo* ParseContext::find_function_in_current(const std::string& name,
+                                                             const std::vector<SemType>& params) const noexcept {
+    return find_function_in(current_namespace(), name, params);
+  }
+
+  std::expected<NameSpace*, ParseError> ParseContext::resolve_namespace(const std::vector<std::string>& path,
+                                                                        SourceLocation location) const {
+    NameSpace* ns = nullptr;
+    std::string qualified;
+    for (std::size_t index = 0; index < path.size(); ++index) {
+      if (!qualified.empty())
+        qualified += '.';
+      qualified += path[index];
+      if (index == 0) {
+        // The first segment searches outward from the current namespace, so a
+        // sibling namespace of the current one is reachable unqualified.
+        ns = nullptr;
+        for (auto candidate = namespace_stack_.rbegin(); candidate != namespace_stack_.rend(); ++candidate) {
+          const auto found = (*candidate)->namespaces.find(path[0]);
+          if (found != (*candidate)->namespaces.end()) {
+            ns = found->second.get();
+            break;
+          }
+        }
+      } else {
+        const auto found = ns->namespaces.find(path[index]);
+        ns = found != ns->namespaces.end() ? found->second.get() : nullptr;
+      }
+      if (ns == nullptr)
+        return std::unexpected(ParseError {"unknown namespace '" + qualified + "'", location});
+    }
+    return ns;
+  }
+
+  std::vector<std::string> ParseContext::set_namespace_path(const std::vector<std::string>& path) {
+    std::vector<std::string> previous = namespace_stack_.back()->path;
+    namespace_stack_.assign(1, &root_namespace_);
+    for (const std::string& segment : path) {
+      NameSpace* next = find_namespace_in_current(segment);
+      if (next == nullptr)
+        break;
+      namespace_stack_.push_back(next);
+    }
+    return previous;
+  }
+
+  std::expected<NameSpace*, ParseError> ParseContext::declare_namespace(const std::string& name,
+                                                                        SourceLocation location) {
+    if (is_declared_in_current(name)) {
+      return std::unexpected(ParseError {"'" + name + "' is already declared", location});
+    }
+    NameSpace& child = *current_namespace().namespaces.emplace(name, std::make_unique<NameSpace>()).first->second;
+    child.path = current_namespace().path;
+    child.path.push_back(name);
+    return &child;
+  }
+
   bool ParseContext::declares(const std::string& name) const noexcept {
     return !scopes_.empty() && scopes_.back().locals.contains(name);
   }
@@ -370,26 +529,32 @@ namespace erax::frontend {
   std::size_t ParseContext::declare_global(const std::string& name, GlobalInfo info) {
     const std::size_t id = global_count++;
     info.id = id;
-    globals_[name] = info;
+    current_namespace().globals[name] = info;
     return id;
   }
 
   std::size_t ParseContext::declare_function(const std::string& name, FunctionInfo info) {
     const std::size_t id = function_count++;
     info.id = id;
-    functions_[name].push_back(std::move(info));
+    current_namespace().functions[name].push_back(std::move(info));
     return id;
   }
 
   void ParseContext::declare_template(const std::string& name, TemplateInfo info) {
-    templates_[name] = std::move(info);
+    info.ns_path = current_namespace().path;
+    current_namespace().templates[name] = std::move(info);
   }
 
-  std::expected<std::size_t, ParseError> ParseContext::instantiate(const std::string& name,
+  std::expected<std::size_t, ParseError> ParseContext::instantiate(const TemplateInfo* tmpl,
                                                                    const std::vector<SemType>& type_args,
                                                                    SourceLocation location) {
-    std::string key = name;
-    for (const SemType type : type_args) {
+    std::string key;
+    for (const std::string& segment : tmpl->ns_path) {
+      key += segment;
+      key += '.';
+    }
+    key += tmpl->name;
+    for (const SemType& type : type_args) {
       key += ':';
       key += to_string(type);
     }
@@ -397,7 +562,8 @@ namespace erax::frontend {
     if (found != instantiation_ids_.end())
       return instantiations_[found->second].id;
     if (instantiations_.size() >= max_instantiations) {
-      return std::unexpected(ParseError {"template instantiation of '" + name + "' does not terminate", location});
+      return std::unexpected(
+          ParseError {"template instantiation of '" + tmpl->name + "' does not terminate", location});
     }
     // Source functions take ids `0..function_count-1` as the declaration pass gives
     // them out, and every instantiation is appended to the program after all of
@@ -405,7 +571,7 @@ namespace erax::frontend {
     // id a call is written with is the index the function ends up at.
     const std::size_t id = function_count + instantiations_.size();
     instantiation_ids_.emplace(std::move(key), instantiations_.size());
-    instantiations_.push_back(Instantiation {id, name, type_args, false});
+    instantiations_.push_back(Instantiation {id, tmpl, type_args, false});
     return id;
   }
 
@@ -416,8 +582,16 @@ namespace erax::frontend {
   std::expected<SemType, ParseError> ParseContext::read_type(TokenCursor& cursor, std::string_view context) const {
     // While an instantiation's body is parsed, a type parameter names the deduced
     // concrete type; everywhere else the substitution is empty and this is the
-    // ordinary type read.
+    // ordinary type read. A pointer recurses, so `ptr T` in a template body reads
+    // the deduced type for its pointee.
     if (cursor.at(TokenType::Identifier)) {
+      if (cursor.current().text == "ptr") {
+        cursor.take();
+        auto pointee = read_type(cursor, context);
+        if (!pointee)
+          return pointee;
+        return SemType::pointer(*pointee);
+      }
       const auto found = type_substitution_.find(cursor.current().text);
       if (found != type_substitution_.end()) {
         cursor.take();

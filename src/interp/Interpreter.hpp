@@ -41,6 +41,8 @@ namespace erax::interp {
     SignedOverflow,  ///< `iMIN / -1` or `iMIN % -1`: a result with no bit pattern
     StackExhausted,  ///< deeper than `Limits::max_depth`, or wider than `Limits::max_cells`
     FrameTooLarge,  ///< one frame bigger than `Limits::max_cells`
+    OutOfMemory,  ///< an allocation the machine's cell array cannot hold
+    InvalidPointer,  ///< a `LOAD`/`STORE`/`free` through an address that names no live cell
   };
 
   std::string_view to_string(Trap trap) noexcept;

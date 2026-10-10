@@ -9,8 +9,10 @@ The grammar for types is in `language.md`; these are the rules the parser enforc
 | `i8`…`u64` | two's-complement integers, 8/16/32/64 bits |
 | `bool` | exactly `true` / `false` |
 | `char` | a byte: ASCII code point, range 0–255 |
+| `ptr T` | a pointer to a cell holding a `T` — the cell's address (`&x` / `*p` / `*p = v`, `expressions.md#typing-rules`) |
+| `ptr ptr T` | a pointer to a pointer: `ptr T` is a type like any other, so it nests with no special rule |
 
-Mapping to the IR: `bool` lowers to `i8` and `char` to `u8` (a `0–255` byte, so character comparison and character `/ % << >>` are unsigned). The type is preserved in the source; the machine just sees a byte.
+Mapping to the IR: `bool` lowers to `i8` and `char` to `u8` (a `0–255` byte, so character comparison and character `/ % << >>` are unsigned). The type is preserved in the source; the machine just sees a byte — and a pointer lowers to `ptr T`, a single machine word that holds the **address of a cell** (`JIR.md#types`). `ptr T` describes what a read through the pointer yields; the pointer cell itself is always one word, whatever `T` is.
 
 ## Literals
 
@@ -38,11 +40,11 @@ Two operands of a binary operator must have the **exact same type**; an `=` / co
 
 ## Casts {#casts}
 
-`x as T` is the **only** conversion in the language, and it is explicit: every one of the ten types — `i8` … `u64`, `bool`, `char` — casts to every other. Values never change type on their own; if one needs a different type, the source says so.
+`x as T` is the **only** conversion in the language, and it is explicit: every non-`void` type — `i8` … `u64`, `bool`, `char`, and each `ptr T` — casts to every other non-`void` type. Values never change type on their own; if one needs a different type, the source says so.
 
 The rule has one shape:
 
-- The value is **read in the type it already has**, and its two's-complement pattern is **wrapped into the target type** — the low bits, reinterpreted at the target's width. This is the same wrap arithmetic does, so a cast is a bit operation, never a range check.
+- The value is **read in the type it already has**, and its two's-complement pattern is **wrapped into the target type** — the low bits, reinterpreted at the target's width. This is the same wrap arithmetic does, so a cast is a bit operation, never a range check. A pointer is an unsigned word in this rule: `ptr T as u64` is the address's bits, and `u64 as ptr T` rebuilds a pointer from bits — which is also the only way to write the **null pointer**, `0 as ptr T` (any pointer whose bits are all zero).
 - Casting **to `bool`** is the nonzero test: every value but `0` is `true`. Casting **from `bool`** yields its value, `0` or `1`.
 - `char` takes part as its byte: `char` ↔ an integer behaves exactly like the same-width unsigned type (`u8`).
 
@@ -53,9 +55,10 @@ let c: u64 = -1i32 as u64;      // 18446744073709551615
 let d: bool = 42 as bool;       // true — nonzero
 let e: i32 = true as i32;       // 1
 let f: char = 65 as char;       // 'A'
+let n: ptr i32 = 0 as ptr i32;  // the null pointer — no cell
 ```
 
-**A constant cast wraps exactly like a runtime one.** `200 as i8` folds to `-56`, `(-1) as u8` folds to `255`; there is no compile-error form of `as` for range. This is the deliberate carve-out from the rule under [`Constants`](#constants): arithmetic on constants is checked because the source named every operand and a result outgrowing the type is a mistake, while a cast *asks* for a new type and the answer is the wrap.
+**A constant cast wraps exactly like a runtime one.** `200 as i8` folds to `-56`, `(-1) as u8` folds to `255`, `0 as ptr i32` folds to the null pointer; there is no compile-error form of `as` for range. This is the deliberate carve-out from the rule under [`Constants`](#constants): arithmetic on constants is checked because the source named every operand and a result outgrowing the type is a mistake, while a cast *asks* for a new type and the answer is the wrap.
 
 The operand of `as` is parsed **without an expected type** — the target already says everything — so a lone literal there is an `i32` unless it carries a suffix: in `1 as u8` the `1` is an `i32` that then wraps, and `1u8 as u8` is a no-op on an already-`u8` value. A cast whose target is the type it already has is legal and does nothing.
 
@@ -73,7 +76,7 @@ A **capability** is a named set of operators a type supports. Capabilities are a
 | `Negatable` | unary `-` | the signed integer types |
 | `Arithmetic` | `+` `-` `*` `/` `%` | the integer types and `char` |
 
-- A type **structurally** satisfies a capability when the operator rules already accept those operators on it (`expressions.md#typing-rules`) — nothing is declared and there is no `implements`. `u8` satisfies `Ordered` and `Arithmetic` but not `Negatable`; `bool` satisfies none of them (it is not ordered, has no arithmetic, and cannot be negated), even though `==`/`!=` accept any two same-typed values.
+- A type **structurally** satisfies a capability when the operator rules already accept those operators on it (`expressions.md#typing-rules`) — nothing is declared and there is no `implements`. `u8` satisfies `Ordered` and `Arithmetic` but not `Negatable`; `bool` satisfies none of them (it is not ordered, has no arithmetic, and cannot be negated), even though `==`/`!=` accept any two same-typed values. A pointer (`ptr T`) satisfies none of them either: it has no order that means anything in the source (`==`/`!=` still accept two same-typed pointers), it has no arithmetic, and it cannot be negated — so a `ptr` never deduces a template parameter bound to `Ordered`/`Negatable`/`Arithmetic`.
 - `char` is an integer byte, so it takes part in `Ordered` and `Arithmetic` as its unsigned value (`#types`); being unsigned, it is not `Negatable`.
 - Capabilities are independent: `Negatable` does not imply `Arithmetic`, so a template lists every capability its body uses.
 - A cast (`#casts`) works on every type and needs no capability.
@@ -81,9 +84,11 @@ A **capability** is a named set of operators a type supports. Capabilities are a
 
 ## Constants {#constants}
 
-A **constant expression** is one the parser can evaluate while reading it: literals, unary `-` / `!` / `~`, arithmetic, comparisons, and `as` casts. It appears wherever a value is required — a `let` initializer, a global's initializer, an assignment RHS, a call argument. Reading a variable, or calling a function or a primitive, is not constant (`expressions.md#typing-rules`).
+A **constant expression** is one the parser can evaluate while reading it: literals, unary `-` / `!` / `~`, arithmetic, comparisons, and `as` casts. It appears wherever a value is required — a `let` initializer, a global's initializer, an assignment RHS, a call argument. Reading a variable, or calling a function or a primitive, is not constant (`expressions.md#typing-rules`). `&x` is not constant either — reading a variable, it names a cell the parser does not know — so a global initializer cannot take an address. A pointer *comparison* over constants is constant, as any comparison is: `0 as ptr i32 == 0 as ptr i32` folds to `true`.
 
 A global's initializer *must* be a constant expression. A `let` initializer need not be, but whatever part of it is constant is still folded.
+
+A reference to a global is constant by bare or by qualified name alike — `g` and `n.g` are the same kind of read (`expressions.md#names`), both folded where the initializer is, and both limited to globals declared earlier in the file.
 
 ### Why a constant is checked where a runtime value wraps
 

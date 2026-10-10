@@ -539,6 +539,7 @@ TEST_CASE("the shipped examples run") {
   CHECK(example_code("fib.erx") == 55);
   CHECK(example_code("folded_test.erx") == 4);
   CHECK(example_code("globals.erx") == 2);
+  CHECK(example_code("namespaces.erx") == 10);
   CHECK(example_code("print.erx") == 0);
   CHECK(example_code("sum_to_ten.erx") == 45);
   CHECK(example_code("types.erx") == 0);
@@ -723,15 +724,185 @@ TEST_CASE("a global initializer can die before the entrypoint exists") {
   CHECK(trapped.site.depth == 1);
 }
 
+TEST_CASE("address-of names a live cell and deref reads it back") {
+  // A local's address is a stack-region cell that `LOAD` reads by pointing back at
+  // the current frame.
+  CHECK(code_of("fn main(): i32 { let x: i32 = 3; let p: ptr i32 = &x; return *p; }") == 3);
+  // A store through the pointer writes the cell the address names, and a read after
+  // it sees the new value; the original variable and the pointer agree.
+  CHECK(code_of("fn main(): i32 { let x: i32 = 3; let p: ptr i32 = &x; *p = 7; return x; }") == 7);
+  CHECK(code_of("fn main(): i32 { let x: i32 = 3; let p: ptr i32 = &x; *p = *p + 10; return *p; }") == 13);
+  // A compound store is the read-modify-write it reads like.
+  CHECK(code_of("fn main(): i32 { let x: i32 = 3; let p: ptr i32 = &x; *p += 2; return x; }") == 5);
+  CHECK(code_of("fn main(): i32 { let x: i32 = 3; let p: ptr i32 = &x; *p %= 2; return x; }") == 1);
+  // Two pointers to the same cell compare equal and read through each other.
+  CHECK(code_of("fn main(): i32 { let x: i32 = 4; let p: ptr i32 = &x; let q: ptr i32 = &x;"
+                " *p = *q + 1; if (p == q) { return *q; } return 0; }") == 5);
+  // `&` of an already-dereffed cell is the cell again: `*(*q)` where `q` points at
+  // `p` is `x` itself.
+  CHECK(code_of("fn main(): i32 { let x: i32 = 3; let p: ptr i32 = &x; let q: ptr ptr i32 = &p;"
+                " *(*q) = 9; return *p; }") == 9);
+}
+
+TEST_CASE("address-of a global walks the globals table") {
+  // A global's address is the global-region index the program table already names.
+  CHECK(code_of("let g: i32 = 0; fn main(): i32 { let p: ptr i32 = &g; *p = 42; return g; }") == 42);
+  const auto outcome = execute("let g: i32 = 0; fn main(): i32 { let p: ptr i32 = &g; *p = 42; return *p; }");
+  REQUIRE(outcome.has_value());
+  CHECK(outcome->globals == std::vector<Cell> {42});
+}
+
+TEST_CASE("pointer comparisons have an answer") {
+  // Pointers compare by the cell they name, signed or not -- `0 as ptr i32` is the
+  // null pointer, and two of them are equal.
+  CHECK(code_of("fn main(): i32 { let n: ptr i32 = 0 as ptr i32; if (n == 0 as ptr i32) { return 1; }"
+                " return 0; }") == 1);
+  CHECK(code_of("fn main(): i32 { let n: ptr i32 = 0 as ptr i32; if (n != 0 as ptr i32) { return 1; }"
+                " return 0; }") == 0);
+  // A derived pointer is never the null pointer.
+  CHECK(code_of("fn main(): i32 { let x: i32 = 0; if (&x == 0 as ptr i32) { return 1; } return 0; }") == 0);
+}
+
+TEST_CASE("alloc hands out cells the program can use") {
+  // The bytes round up to whole cells, and the machine zeroes what it hands out.
+  CHECK(code_of("fn main(): i32 { let p: ptr u8 = primitive alloc(8); return *p as i32; }") == 0);
+  // What a store writes is what a later load reads, and the block outlives its
+  // pointer's scope: the cells belong to the heap, not to the frame.
+  CHECK(code_of("fn main(): i32 { let p: ptr u8 = primitive alloc(64); *p = 200; let v: u8 = *p;"
+                " primitive free(p); return v as i32; }") == 200);
+  // A freed block is offered again: the next allocation of the same width comes
+  // back with the same address, so a program can reuse its memory.
+  CHECK(code_of("fn main(): i32 { let p: ptr u8 = primitive alloc(8); primitive free(p);"
+                " let q: ptr u8 = primitive alloc(8); if (p == q) { return 1; } return 0; }") == 1);
+}
+
+TEST_CASE("free returns only live heap blocks") {
+  // `free(null)` is a no-op: freeing nothing twice is fine.
+  CHECK(code_of("fn main(): i32 { let p: ptr u8 = 0 as ptr u8; primitive free(p); primitive free(0 as ptr u8);"
+                " return 0; }") == 0);
+  // Freeing the same block twice dies: the second time the pointer names no live
+  // cell, and the trap names it.
+  auto doubled = execute("fn main(): i32 { let p: ptr u8 = primitive alloc(8); primitive free(p);"
+                         " primitive free(p); return 0; }");
+  REQUIRE_FALSE(doubled.has_value());
+  CHECK(std::get<Trapped>(doubled.error()).trap == Trap::InvalidPointer);
+  // A pointer out of a stack or global cell is not a heap block; freeing it is the
+  // same trap.
+  auto stack = execute("fn main(): i32 { let p: ptr u8 = 1 as ptr u8; primitive free(p); return 0; }");
+  REQUIRE_FALSE(stack.has_value());
+  CHECK(std::get<Trapped>(stack.error()).trap == Trap::InvalidPointer);
+  // The machine reports the pointer as the message, so a run tells the reason.
+  const std::string report = erax::interp::to_string(doubled.error());
+  CHECK(report.find("a pointer named no live cell") != std::string::npos);
+}
+
+TEST_CASE("a load or store through a dead pointer is a trap") {
+  // The null pointer names nothing, for read or for write.
+  auto read = execute("fn main(): i32 { let p: ptr i32 = 0 as ptr i32; return *p; }");
+  REQUIRE_FALSE(read.has_value());
+  CHECK(std::get<Trapped>(read.error()).trap == Trap::InvalidPointer);
+  auto write = execute("fn main(): i32 { let p: ptr i32 = 0 as ptr i32; *p = 1; return 0; }");
+  REQUIRE_FALSE(write.has_value());
+  CHECK(std::get<Trapped>(write.error()).trap == Trap::InvalidPointer);
+  // An address that is not a stack, global, or heap cell dies the same way: raw
+  // bits whose top two bits are not an address region.
+  auto raw = execute("fn main(): i32 { let p: ptr i32 = 1 as ptr i32; return *p; }");
+  REQUIRE_FALSE(raw.has_value());
+  CHECK(std::get<Trapped>(raw.error()).trap == Trap::InvalidPointer);
+  // A store that the validator never sees (hand-written IR) with a heap address
+  // past the heap dies instead of reading wild: `0xC00000000000270F` is heap
+  // region, block 9999.
+  Function pointed = entry_returning(Operand::instant(Type::I32, 0));
+  pointed.frame_size = 2;
+  pointed.cfg.blocks[0].commands.insert(
+      pointed.cfg.blocks[0].commands.begin(),
+      Command {Op::Load,
+               {Operand::vreg(Type::I32, 1), Operand::instant(Type::pointer(Type::I32), 0xC00000000000270Full)}});
+  Program again;
+  again.functions.push_back(pointed);
+  const auto wild = erax::interp::run(again);
+  REQUIRE_FALSE(wild.has_value());
+  CHECK(std::get<Trapped>(wild.error()).trap == Trap::InvalidPointer);
+}
+
+TEST_CASE("an allocation the machine cannot hold stops the run") {
+  // The heap is bounded by the same cell limit as everything else: asking for
+  // more than the machine addresses is a trap, and the report names the heap.
+  auto outcome = execute("fn main(): i32 { let p: ptr u8 = primitive alloc(1024); return 0; }", Limits {4096, 4});
+  REQUIRE_FALSE(outcome.has_value());
+  const Trapped& trapped = std::get<Trapped>(outcome.error());
+  CHECK(trapped.trap == Trap::OutOfMemory);
+  CHECK(erax::interp::to_string(trapped.trap) == "the heap outgrew the machine");
+  // A small allocation still fits under the same limit.
+  CHECK(execute("fn main(): i32 { let p: ptr u8 = primitive alloc(8); return 0; }", Limits {4096, 4})->code == 0);
+}
+
 TEST_CASE("every trap has a name") {
   CHECK(erax::interp::to_string(Trap::DivisionByZero) == "division by zero");
   CHECK(erax::interp::to_string(Trap::SignedOverflow) == "signed division overflowed");
   CHECK(erax::interp::to_string(Trap::StackExhausted) == "the stack outgrew the machine");
   CHECK(erax::interp::to_string(Trap::FrameTooLarge) == "a frame is larger than the machine allows");
+  CHECK(erax::interp::to_string(Trap::OutOfMemory) == "the heap outgrew the machine");
+  CHECK(erax::interp::to_string(Trap::InvalidPointer) == "a pointer named no live cell");
 }
 
 TEST_CASE("a failure reads as a message, and an empty rejection says so") {
   CHECK(erax::interp::to_string(erax::interp::Failure {erax::interp::Broken {"nope"}}) == "nope");
   const erax::interp::Failure empty = erax::interp::Rejected {};
   CHECK(erax::interp::to_string(empty) == "0 errors, the first: no reason given");
+}
+
+TEST_CASE("an address past the machine's own arrays traps rather than reads wild") {
+  // The validator cannot know how big the machine's stack and global arrays are,
+  // so a hand-written address that only the executor can judge is its to refuse.
+  Program stack_deep;
+  stack_deep.functions.push_back(entry_returning(Operand::instant(Type::I32, 0)));
+  stack_deep.functions[0].frame_size = 2;
+  stack_deep.functions[0].cfg.blocks[0].commands.insert(
+      stack_deep.functions[0].cfg.blocks[0].commands.begin(),
+      Command {Op::Load,
+               {Operand::vreg(Type::I32, 1), Operand::instant(Type::pointer(Type::I32), 0x40000000000003E7ull)}});
+  auto stack_out = erax::interp::run(stack_deep);
+  REQUIRE_FALSE(stack_out.has_value());
+  CHECK(std::get<Trapped>(stack_out.error()).trap == Trap::InvalidPointer);
+
+  Program global_deep;
+  global_deep.functions.push_back(entry_returning(Operand::instant(Type::I32, 0)));
+  global_deep.functions[0].frame_size = 2;
+  global_deep.functions[0].cfg.blocks[0].commands.insert(
+      global_deep.functions[0].cfg.blocks[0].commands.begin(),
+      Command {Op::Load,
+               {Operand::vreg(Type::I32, 1), Operand::instant(Type::pointer(Type::I32), 0x8000000000000001ull)}});
+  auto global_out = erax::interp::run(global_deep);
+  REQUIRE_FALSE(global_out.has_value());
+  CHECK(std::get<Trapped>(global_out.error()).trap == Trap::InvalidPointer);
+}
+
+TEST_CASE("a global initializer that exits stops the run before the entrypoint") {
+  // The parser never emits a global initializer with a primitive in it, but the
+  // IR allows one, and `run` runs every initializer before the entrypoint. An
+  // `exit` there delivers its code and never reaches `main`.
+  Program program;
+  Global global;
+  global.type = Type::I32;
+  global.init.blocks.resize(1);
+  global.init.blocks[0].commands.push_back(
+      Command {Op::Primitive, {Operand::empty(), Operand::instant(Type::I32, 7)}, 3});
+  program.globals.push_back(std::move(global));
+  program.functions.push_back(entry_returning(Operand::instant(Type::I32, 0)));
+
+  const auto outcome = erax::interp::run(program);
+  REQUIRE(outcome.has_value());
+  CHECK(as_i32(outcome->code) == 7);
+}
+
+TEST_CASE("the allocator carves up a freed block") {
+  // A request smaller than the freed block splits it: the head goes out, the tail
+  // stays on the free list. A later request reuses the tail instead of growing.
+  CHECK(code_of("fn main(): i32 { let p: ptr u8 = primitive alloc(40); primitive free(p);"
+                " let q: ptr u8 = primitive alloc(16); let r: ptr u8 = primitive alloc(24);"
+                " if (r != q) { return 1; } return 0; }") == 1);
+  // A request larger than every free block skips them and grows the heap instead.
+  CHECK(code_of("fn main(): i32 { let p: ptr u8 = primitive alloc(40); primitive free(p);"
+                " let q: ptr u8 = primitive alloc(56); if (q != p) { return 1; } return 0; }") == 1);
 }

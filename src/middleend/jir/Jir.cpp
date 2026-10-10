@@ -52,17 +52,18 @@ namespace erax::middleend {
 
   }  // namespace
 
-  std::string_view to_string(Type type) noexcept {
-    switch (type) {
-      case Type::Void: return "void";
-      case Type::I8: return "i8";
-      case Type::U8: return "u8";
-      case Type::I16: return "i16";
-      case Type::U16: return "u16";
-      case Type::I32: return "i32";
-      case Type::U32: return "u32";
-      case Type::I64: return "i64";
-      case Type::U64: return "u64";
+  std::string to_string(Type type) {
+    switch (type.kind) {
+      case Type::Kind::Void: return "void";
+      case Type::Kind::I8: return "i8";
+      case Type::Kind::U8: return "u8";
+      case Type::Kind::I16: return "i16";
+      case Type::Kind::U16: return "u16";
+      case Type::Kind::I32: return "i32";
+      case Type::Kind::U32: return "u32";
+      case Type::Kind::I64: return "i64";
+      case Type::Kind::U64: return "u64";
+      case Type::Kind::Ptr: return "ptr " + to_string(*type.pointee);
     }
     return "unknown";
   }
@@ -88,6 +89,9 @@ namespace erax::middleend {
       case Op::Shr: return "SHR";
       case Op::Sar: return "SAR";
       case Op::Cast: return "CAST";
+      case Op::Load: return "LOAD";
+      case Op::Store: return "STORE";
+      case Op::Addr: return "ADDR";
       case Op::CmpEq: return "CMP_EQ";
       case Op::CmpNe: return "CMP_NE";
       case Op::CmpLt: return "CMP_LT";

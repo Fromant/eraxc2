@@ -81,8 +81,12 @@ private:
     /// is negative.
     result integer_literal(const Token& token, std::optional<SemType> expected, bool negated);
 
-    /// A call of \p name with the arguments at the cursor.
-    result call(const std::string& name, SourceLocation location);
+    /// A call of the function or template \p name (spelled \p qualified in a
+    /// message) with the arguments at the cursor. \p candidates and \p tmpl are the
+    /// declarations the name resolved to — the current namespace outward, or the
+    /// one namespace a qualified name named.
+    result call(const std::string& qualified, const std::vector<FunctionInfo>* candidates, const TemplateInfo* tmpl,
+                SourceLocation location);
 
     /// Deduces the template's type arguments from the argument types read so far,
     /// or returns the first error the deduction meets.

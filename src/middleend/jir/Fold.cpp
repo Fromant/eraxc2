@@ -115,6 +115,17 @@ namespace erax::middleend::fold {
   }
 
   Result binary(Op op, Type type, std::uint64_t left, std::uint64_t right) noexcept {
+    // A comparison is defined on pointers too (they compare as unsigned words), so
+    // it is answered before the assertion that the operands are an integer type.
+    switch (op) {
+      case Op::CmpEq:
+      case Op::CmpNe:
+      case Op::CmpLt:
+      case Op::CmpLe:
+      case Op::CmpGt:
+      case Op::CmpGe: return compare(op, type, left, right);
+      default: break;
+    }
     assert(is_integer(type));
     switch (op) {
       case Op::Add: return ok(narrow(left + right, type));
@@ -130,12 +141,6 @@ namespace erax::middleend::fold {
       case Op::And: return ok(narrow(left & right, type));
       case Op::Or: return ok(narrow(left | right, type));
       case Op::Xor: return ok(narrow(left ^ right, type));
-      case Op::CmpEq:
-      case Op::CmpNe:
-      case Op::CmpLt:
-      case Op::CmpLe:
-      case Op::CmpGt:
-      case Op::CmpGe: return compare(op, type, left, right);
       default: break;
     }
     return fail(Failure::SignedOverflow);
@@ -154,7 +159,10 @@ namespace erax::middleend::fold {
   }
 
   std::uint64_t convert(Type to, Type from, std::uint64_t bits) noexcept {
-    assert(is_integer(to) && is_integer(from));
+    // Any non-void type converts to any non-void type: an integer and a pointer are
+    // both a cell's worth of bits, so a conversion is a truncation (or a bit-preserving
+    // move). A pointer reads as an unsigned word, so it takes the unsigned path.
+    assert(to != Type::Void && from != Type::Void);
     const std::int64_t value = is_signed(from) ? to_signed(bits, from) : static_cast<std::int64_t>(narrow(bits, from));
     return narrow(static_cast<std::uint64_t>(value), to);
   }

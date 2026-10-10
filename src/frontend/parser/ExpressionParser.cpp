@@ -21,6 +21,17 @@ namespace erax::frontend {
       return ParseError {std::move(message), location};
     }
 
+    /// A dotted name from its segments (`a`, `b`, `c` → `a.b.c`), for a message.
+    std::string qualified_path(const std::vector<std::string>& parts) {
+      std::string qualified;
+      for (const std::string& segment : parts) {
+        if (!qualified.empty())
+          qualified += '.';
+        qualified += segment;
+      }
+      return qualified;
+    }
+
     /// The source type a catalog signature type spells. The two enums list the
     /// same types in the same order but alias nothing: the mapping is stated so
     /// a catalog edit that forgets a type is a compile error here, not a silent
@@ -38,6 +49,9 @@ namespace erax::frontend {
         case primitives::SigType::U32: return SemType::U32;
         case primitives::SigType::I64: return SemType::I64;
         case primitives::SigType::U64: return SemType::U64;
+        // The catalog's one pointer is a byte pointer; a pointer is one word
+        // whatever it points at, but its pointee still names what a load reads.
+        case primitives::SigType::Ptr: return SemType::pointer(SemType::U8);
       }
       return SemType::Void;
     }
@@ -495,6 +509,53 @@ namespace erax::frontend {
 
   ExpressionParser::result ExpressionParser::unary_expression(std::optional<SemType> expected) {
     TokenCursor& cursor = context().cursor;
+
+    // `&x` takes the address of a cell — a local or a global, never a constant or
+    // an intermediate — and yields a pointer to its type.
+    if (cursor.at_op("&")) {
+      const SourceLocation location = cursor.location();
+      cursor.take();
+      const std::optional<SemType> operand_expected =
+          expected && expected->is_pointer() ? std::optional<SemType> {*expected->pointee} : std::nullopt;
+      result operand = unary_expression(operand_expected);
+      if (!operand)
+        return operand;
+      const Value value = *operand;
+      if (value.type == SemType::Void)
+        return std::unexpected(at("cannot take the address of a value of type void", location));
+      if (value.constant)
+        return std::unexpected(at("cannot take the address of a constant", location));
+      if (value.operand.kind != middleend::OperandKind::VReg && value.operand.kind != middleend::OperandKind::Global)
+        return std::unexpected(at("cannot take the address of this expression", location));
+      if (!value.addressable)
+        return std::unexpected(at("cannot take the address of this expression", location));
+      const SemType pointer = SemType::pointer(value.type);
+      const Type lowered = lower(pointer);
+      const std::uint64_t destination = context().builder.alloc(lowered);
+      context().builder.emit(Op::Addr, {Operand::vreg(lowered, destination), value.as_operand()});
+      return Value {pointer, Operand::vreg(lowered, destination), std::nullopt};
+    }
+
+    // `*p` reads the cell a pointer names; the result's type is the pointee's, which
+    // also types the operand as a pointer to it when the position asks for one.
+    if (cursor.at_op("*")) {
+      const SourceLocation location = cursor.location();
+      cursor.take();
+      const std::optional<SemType> operand_expected =
+          expected ? std::optional<SemType> {SemType::pointer(*expected)} : std::nullopt;
+      result operand = unary_expression(operand_expected);
+      if (!operand)
+        return operand;
+      const Value value = *operand;
+      if (!value.type.is_pointer())
+        return std::unexpected(at("'*' needs a pointer, but got " + std::string {to_string(value.type)}, location));
+      const SemType pointee = *value.type.pointee;
+      const Type lowered = lower(pointee);
+      const std::uint64_t destination = context().builder.alloc(lowered);
+      context().builder.emit(Op::Load, {Operand::vreg(lowered, destination), value.as_operand()});
+      return Value {pointee, Operand::vreg(lowered, destination), std::nullopt};
+    }
+
     std::string_view op;
     if (cursor.at_op("-"))
       op = "-";
@@ -550,14 +611,11 @@ namespace erax::frontend {
     return primary(expected);
   }
 
-  ExpressionParser::result ExpressionParser::call(const std::string& name, SourceLocation location) {
-    const std::vector<FunctionInfo>* candidates = context().find_functions(name);
-    const TemplateInfo* tmpl = context().find_template(name);
-    if (candidates == nullptr && tmpl == nullptr) {
-      return std::unexpected(at("call to undeclared function '" + name + "'", location));
-    }
+  ExpressionParser::result ExpressionParser::call(const std::string& qualified,
+                                                  const std::vector<FunctionInfo>* candidates, const TemplateInfo* tmpl,
+                                                  SourceLocation location) {
     if (const_mode_) {
-      return std::unexpected(at("a constant expression may not call '" + name + "'", location));
+      return std::unexpected(at("a constant expression may not call '" + qualified + "'", location));
     }
 
     // One concrete declaration types each argument the way it declares the
@@ -579,7 +637,7 @@ namespace erax::frontend {
         if (!argument)
           return argument;
         if (expected && argument->type != *expected) {
-          return std::unexpected(at("argument " + std::to_string(arguments.size() + 1) + " of '" + name + "' is " +
+          return std::unexpected(at("argument " + std::to_string(arguments.size() + 1) + " of '" + qualified + "' is " +
                                         std::string {to_string(*expected)} + ", not " +
                                         std::string {to_string(argument->type)},
                                     location));
@@ -622,26 +680,28 @@ namespace erax::frontend {
     if (function == nullptr && !deduced) {
       if (candidates != nullptr && candidates->size() > 1) {
         std::string listed;
-        for (const SemType type : types) {
+        for (const SemType& type : types) {
           if (!listed.empty())
             listed += ", ";
           listed.append(to_string(type));
         }
-        return std::unexpected(at("no overload of '" + name + "' matches the arguments (" + listed + ")", location));
+        return std::unexpected(
+            at("no overload of '" + qualified + "' matches the arguments (" + listed + ")", location));
       }
       if (candidates != nullptr) {
         // The single concrete declaration's argument errors were already reported
         // where the arguments were read; what remains is the count.
         function = &(*candidates)[0];
         if (arguments.size() != function->params.size()) {
-          return std::unexpected(at("'" + name + "' takes " + std::to_string(function->params.size()) +
+          return std::unexpected(at("'" + qualified + "' takes " + std::to_string(function->params.size()) +
                                         " arguments, but " + std::to_string(arguments.size()) + " were given",
                                     location));
         }
       }
     }
     if (context().cursor.take().type != TokenType::RParen) {
-      return std::unexpected(at("expected ')' after the arguments of '" + name + "'", context().cursor.location()));
+      return std::unexpected(
+          at("expected ')' after the arguments of '" + qualified + "'", context().cursor.location()));
     }
 
     // A template call names the instantiation it deduced, which the item pass will
@@ -651,7 +711,7 @@ namespace erax::frontend {
     if (deduced) {
       return_type = tmpl->return_type.param >= 0 ? type_args[static_cast<std::size_t>(tmpl->return_type.param)] :
                                                    tmpl->return_type.type;
-      const auto instantiated = context().instantiate(name, type_args, location);
+      const auto instantiated = context().instantiate(tmpl, type_args, location);
       if (!instantiated)
         return std::unexpected(instantiated.error());
       callee = *instantiated;
@@ -848,39 +908,75 @@ namespace erax::frontend {
       return std::unexpected(at("'" + name + "' is a reserved word", location));
     }
 
-    // A dot would be the start of a namespace or a member access, and v1 has
-    // neither: a name is one identifier.
+    // An identifier begins a name. A dotted name is a namespace-qualified reference
+    // (`std.print`): the leading segments are a namespace path and the last is the
+    // name itself. There are no members, so no other dotted name exists.
+    std::vector<std::string> parts;
+    parts.push_back(name);
     cursor.take();
-    if (cursor.at(TokenType::Dot)) {
-      return std::unexpected(at("'.' is not part of a name in v1", location));
+    while (cursor.at(TokenType::Dot)) {
+      cursor.take();
+      auto segment = expect_identifier(cursor);
+      if (!segment)
+        return std::unexpected(segment.error());
+      parts.push_back(*segment);
     }
+    const std::string qualified = qualified_path(parts);
+
+    // A bare name searches the current namespace outward; a qualified name means
+    // exactly the namespace it spells. The `NameSpace` even a bare name resolves to
+    // is fixed once, so the lookups below agree.
+    const NameSpace* ns = nullptr;
+    if (parts.size() > 1) {
+      const std::vector<std::string> path(parts.begin(), parts.end() - 1);
+      auto resolved = context().resolve_namespace(path, location);
+      if (!resolved)
+        return std::unexpected(resolved.error());
+      ns = *resolved;
+    }
+    const std::string& leaf = parts.back();
+    const std::vector<FunctionInfo>* candidates =
+        ns != nullptr ? context().find_functions_in(*ns, leaf) : context().find_functions(leaf);
+    const TemplateInfo* tmpl = ns != nullptr ? context().find_template_in(*ns, leaf) : context().find_template(leaf);
+
     if (cursor.at(TokenType::LParen)) {
-      if (context().find_functions(name) == nullptr && context().find_template(name) == nullptr) {
-        return std::unexpected(at("call to undeclared function '" + name + "'", location));
+      if (candidates == nullptr && tmpl == nullptr) {
+        return std::unexpected(at("call to undeclared function '" + qualified + "'", location));
       }
       cursor.take();
-      return call(name, location);
+      return call(qualified, candidates, tmpl, location);
     }
-    if (context().find_functions(name) != nullptr || context().find_template(name) != nullptr) {
-      return std::unexpected(at("'" + name + "' is a function and can only be called", location));
+    if (candidates != nullptr || tmpl != nullptr) {
+      return std::unexpected(at("'" + qualified + "' is a function and can only be called", location));
     }
 
-    if (const LocalInfo* local = context().find_local(name)) {
-      if (!local->assigned) {
-        return std::unexpected(at("'" + name + "' is read before it is assigned", location));
+    // A local can only be reached by a bare, unqualified name.
+    if (ns == nullptr) {
+      if (const LocalInfo* local = context().find_local(leaf)) {
+        if (!local->assigned) {
+          return std::unexpected(at("'" + leaf + "' is read before it is assigned", location));
+        }
+        return Value {local->sem_type, Operand::vreg(local->type, local->vreg), std::nullopt, true};
       }
-      return Value {local->sem_type, Operand::vreg(local->type, local->vreg), std::nullopt};
     }
-    if (const GlobalInfo* global = context().find_global(name)) {
+    const GlobalInfo* global = ns != nullptr ? context().find_global_in(*ns, leaf) : context().find_global(leaf);
+    if (global != nullptr) {
       if (const_mode_) {
         if (!global->value) {
-          return std::unexpected(at("'" + name + "' is declared after this initializer", location));
+          return std::unexpected(at("'" + qualified + "' is declared after this initializer", location));
         }
-        return Value {global->sem_type, Operand::global(global->type, global->id), global->value};
+        return Value {global->sem_type, Operand::global(global->type, global->id), global->value, true};
       }
-      return Value {global->sem_type, Operand::global(global->type, global->id), std::nullopt};
+      return Value {global->sem_type, Operand::global(global->type, global->id), std::nullopt, true};
     }
-    return std::unexpected(at("undeclared identifier '" + name + "'", location));
+
+    // A name may name a namespace rather than a value: say so, rather than call it
+    // undeclared.
+    const NameSpace* nested = ns != nullptr ? context().find_namespace(*ns, leaf) : context().find_namespace(leaf);
+    if (nested != nullptr) {
+      return std::unexpected(at("'" + qualified + "' is a namespace, not a value", location));
+    }
+    return std::unexpected(at("undeclared identifier '" + qualified + "'", location));
   }
 
 }  // namespace erax::frontend

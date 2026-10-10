@@ -25,14 +25,14 @@ namespace {
 
 }  // namespace
 
-TEST_CASE("the catalog is the five primitives of primitive.md, in id order") {
-  CHECK(names() == std::vector<std::string> {"print", "print_char", "read_char", "exit", "abort"});
+TEST_CASE("the catalog is the primitives of primitive.md, in id order") {
+  CHECK(names() == std::vector<std::string> {"print", "print_char", "read_char", "exit", "abort", "alloc", "free"});
   // The index is the id: a primitive is never renumbered.
   for (std::size_t id = 0; id < catalog().size(); ++id) {
     REQUIRE(by_id(static_cast<std::uint32_t>(id)) != nullptr);
     CHECK(by_id(static_cast<std::uint32_t>(id))->id == static_cast<Prim>(id));
   }
-  CHECK(by_id(5) == nullptr);
+  CHECK(by_id(7) == nullptr);
   CHECK(by_id(0xFFFFFFFFu) == nullptr);
 }
 
@@ -78,6 +78,19 @@ TEST_CASE("a signature types its parameters, its result, and its flow") {
   REQUIRE(abort != nullptr);
   CHECK(abort->param_count == 0);
   CHECK(abort->terminating);
+
+  const Signature* alloc = by_name("alloc");
+  REQUIRE(alloc != nullptr);
+  CHECK(alloc->param_count == 1);
+  CHECK(alloc->params[0] == SigType::U64);
+  CHECK(alloc->return_type == SigType::Ptr);
+  CHECK_FALSE(alloc->terminating);
+
+  const Signature* release = by_name("free");
+  REQUIRE(release != nullptr);
+  CHECK(release->param_count == 1);
+  CHECK(release->params[0] == SigType::Ptr);
+  CHECK(release->return_type == SigType::Void);
 }
 
 TEST_CASE("a signature type lowers the way the source type does") {
@@ -92,6 +105,7 @@ TEST_CASE("a signature type lowers the way the source type does") {
   CHECK(lower(SigType::U32) == Type::U32);
   CHECK(lower(SigType::I64) == Type::I64);
   CHECK(lower(SigType::U64) == Type::U64);
+  CHECK(lower(SigType::Ptr) == Type::pointer(Type::U8));
 }
 
 TEST_CASE("termination is read off the command, by catalog id") {

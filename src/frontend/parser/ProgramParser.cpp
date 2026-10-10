@@ -53,16 +53,64 @@ namespace erax::frontend {
       return std::string {to_string(type)};
     }
 
-    /// Whether the token after the one at the cursor is an assignment operator: what
-    /// tells `name = …` from a statement that merely starts with a name.
+    /// A dotted name from its segments (`a`, `b`, `c` → `a.b.c`).
+    std::string qualified_path(const std::vector<std::string>& parts) {
+      std::string qualified;
+      for (const std::string& segment : parts) {
+        if (!qualified.empty())
+          qualified += '.';
+        qualified += segment;
+      }
+      return qualified;
+    }
+
+    /// A name as a message spells it: the namespace path it lives in, dotted, then
+    /// the name itself (`std.print`).
+    std::string qualified_name(const NameSpace& ns, const std::string& name) {
+      std::vector<std::string> parts = ns.path;
+      parts.push_back(name);
+      return qualified_path(parts);
+    }
+
+    /// Whether the token after the name at the cursor is an assignment operator:
+    /// what tells `name = …` from a statement that merely starts with a name. A
+    /// qualified target (`a.b.g = …`) is stepped over first, segment by segment.
     bool at_assignment(const TokenCursor& cursor) noexcept {
-      const Token& next = cursor.peek();
-      if (next.type != TokenType::Operator)
+      const std::vector<Token>& tokens = cursor.tokens();
+      std::size_t index = cursor.index() + 1;
+      while (index + 1 < tokens.size() && tokens[index].type == TokenType::Dot &&
+             tokens[index + 1].type == TokenType::Identifier) {
+        index += 2;
+      }
+      if (index >= tokens.size() || tokens[index].type != TokenType::Operator)
         return false;
-      if (next.text == "=")
+      const std::string& text = tokens[index].text;
+      if (text == "=")
         return true;
       for (const CompoundAssign& compound : compound_assigns) {
-        if (next.text == compound.text)
+        if (text == compound.text)
+          return true;
+      }
+      return false;
+    }
+
+    /// Whether a `*` at the cursor begins a store through a pointer: it is, when
+    /// the operand it dereferences is followed by an assignment operator. The
+    /// operand is stepped over with `past_operand`, so `*p = …` and `**pp += …`
+    /// are both recognized and a bare `*p;` load is not.
+    bool at_deref_assignment(const TokenCursor& cursor) noexcept {
+      const std::vector<Token>& tokens = cursor.tokens();
+      std::size_t index = cursor.index();
+      if (index >= tokens.size() || tokens[index].type != TokenType::Operator || tokens[index].text != "*")
+        return false;
+      index = cursor.past_operand(index + 1);
+      if (index >= tokens.size() || tokens[index].type != TokenType::Operator)
+        return false;
+      const std::string& text = tokens[index].text;
+      if (text == "=")
+        return true;
+      for (const CompoundAssign& compound : compound_assigns) {
+        if (text == compound.text)
           return true;
       }
       return false;
@@ -74,6 +122,22 @@ namespace erax::frontend {
                                                                   const std::vector<TypeParam>& type_params) {
       if (cursor.at(TokenType::Identifier)) {
         const std::string& text = cursor.current().text;
+        if (text == "ptr") {
+          cursor.take();
+          auto pointee = expect_signature_type(cursor, type_params);
+          if (!pointee)
+            return pointee;
+          // A signature states a concrete pointee; a pointer to a type parameter
+          // would need the parameter itself to carry a shape, which a template's
+          // `TemplateType` cannot express.
+          if (pointee->param >= 0) {
+            return std::unexpected(
+                ParseError {"a pointer to type parameter '" + type_params[static_cast<std::size_t>(pointee->param)].name +
+                                "' is not supported",
+                            cursor.location()});
+          }
+          return TemplateType {SemType::pointer(pointee->type), -1};
+        }
         if (const std::optional<SemType> type = type_of(keyword_of(text)); type) {
           cursor.take();
           return TemplateType {*type, -1};
@@ -103,17 +167,8 @@ namespace erax::frontend {
       return std::unexpected(declared.error());
     }
 
-    while (!context_.cursor.at_end()) {
-      step item;
-      if (context_.cursor.at_keyword(Keyword::Fn)) {
-        item = function();
-      } else if (context_.cursor.at_keyword(Keyword::Let)) {
-        item = global();
-      } else {
-        return std::unexpected(ParseError {"expected a global or a function declaration", context_.cursor.location()});
-      }
-      if (!item)
-        return std::unexpected(item.error());
+    if (auto parsed = items(/*top=*/true); !parsed) {
+      return std::unexpected(parsed.error());
     }
 
     // A call above may have deduced a template's type arguments; each such
@@ -135,6 +190,59 @@ namespace erax::frontend {
     }
     program_.entrypoint = entrypoint_;
     return std::move(program_);
+  }
+
+  ProgramParser::step ProgramParser::items(bool top) {
+    TokenCursor& cursor = context_.cursor;
+    while (!cursor.at_end()) {
+      if (!top && cursor.at(TokenType::RBrace))
+        return {};
+      step item;
+      if (cursor.at_keyword(Keyword::Fn)) {
+        item = function();
+      } else if (cursor.at_keyword(Keyword::Let)) {
+        item = global();
+      } else if (cursor.at_keyword(Keyword::Namespace)) {
+        item = namespace_body();
+      } else {
+        return std::unexpected(
+            ParseError {"expected a global, a function, or a namespace declaration", cursor.location()});
+      }
+      if (!item)
+        return std::unexpected(item.error());
+    }
+    if (!top) {
+      return std::unexpected(ParseError {"unterminated namespace body", cursor.location()});
+    }
+    return {};
+  }
+
+  ProgramParser::step ProgramParser::namespace_body() {
+    TokenCursor& cursor = context_.cursor;
+    const SourceLocation start = cursor.location();
+    cursor.take();
+    auto name = expect_identifier(cursor);
+    if (!name)
+      return std::unexpected(name.error());
+    auto open = expect(cursor, TokenType::LBrace);
+    if (!open)
+      return std::unexpected(open.error());
+    // The pre-pass already created the namespace; this pass only enters it so its
+    // items resolve against the right symbol tables.
+    NameSpace* child = context_.find_namespace_in_current(*name);
+    if (child == nullptr) {
+      return std::unexpected(ParseError {"internal error: no namespace '" + *name + "' to enter", start});
+    }
+    context_.push_namespace(*child);
+    if (auto body = items(/*top=*/false); !body) {
+      context_.pop_namespace();
+      return std::unexpected(body.error());
+    }
+    context_.pop_namespace();
+    if (auto close = expect(cursor, TokenType::RBrace); !close) {
+      return std::unexpected(close.error());
+    }
+    return {};
   }
 
   ProgramParser::step ProgramParser::operator_whitelist() {
@@ -238,7 +346,13 @@ namespace erax::frontend {
 
   ProgramParser::step ProgramParser::declarations() {
     TokenCursor cursor(context_.cursor.tokens());
+    return declarations_in(cursor, /*top=*/true);
+  }
+
+  ProgramParser::step ProgramParser::declarations_in(TokenCursor& cursor, bool top) {
     while (!cursor.at_end()) {
+      if (!top && cursor.at(TokenType::RBrace))
+        return {};
       if (cursor.at_keyword(Keyword::Let)) {
         if (auto declared = declare_global(cursor); !declared) {
           return std::unexpected(declared.error());
@@ -247,11 +361,42 @@ namespace erax::frontend {
         if (auto declared = declare_function(cursor); !declared) {
           return std::unexpected(declared.error());
         }
+      } else if (cursor.at_keyword(Keyword::Namespace)) {
+        if (auto declared = declare_namespace(cursor); !declared) {
+          return std::unexpected(declared.error());
+        }
       } else {
         // Not an item. The main pass is what reports anything wrong with it;
         // this pass only needs to step over it.
         cursor.take();
       }
+    }
+    if (!top) {
+      return std::unexpected(ParseError {"unterminated namespace body", cursor.location()});
+    }
+    return {};
+  }
+
+  ProgramParser::step ProgramParser::declare_namespace(TokenCursor& cursor) {
+    const SourceLocation start = cursor.location();
+    cursor.take();
+    auto name = expect_identifier(cursor);
+    if (!name)
+      return std::unexpected(name.error());
+    if (auto open = expect(cursor, TokenType::LBrace); !open) {
+      return std::unexpected(open.error());
+    }
+    auto child = context_.declare_namespace(*name, start);
+    if (!child)
+      return std::unexpected(child.error());
+    context_.push_namespace(**child);
+    if (auto body = declarations_in(cursor, /*top=*/false); !body) {
+      context_.pop_namespace();
+      return std::unexpected(body.error());
+    }
+    context_.pop_namespace();
+    if (auto close = expect(cursor, TokenType::RBrace); !close) {
+      return std::unexpected(close.error());
     }
     return {};
   }
@@ -271,8 +416,7 @@ namespace erax::frontend {
     if (auto equals = expect_op(cursor, "="); !equals) {
       return std::unexpected(equals.error());
     }
-    if (context_.find_global(*name) || context_.find_functions(*name) != nullptr ||
-        context_.find_template(*name) != nullptr) {
+    if (context_.is_declared_in_current(*name)) {
       return std::unexpected(ParseError {"'" + *name + "' is already declared", start});
     }
     // The id is assigned here, before the value: a function declared above a
@@ -291,7 +435,11 @@ namespace erax::frontend {
       return std::unexpected(parsed.error());
     const Signature found = *parsed;
 
-    if (context_.find_global(found.name)) {
+    // A name belongs to one kind of thing in a namespace: a function may not share
+    // it with a global or a namespace. It may share it with a template, though —
+    // the concrete declaration is preferred over the template at a call.
+    if (context_.find_global_in_current(found.name) != nullptr ||
+        context_.find_namespace_in_current(found.name) != nullptr) {
       return std::unexpected(ParseError {"'" + found.name + "' is already declared", found.location});
     }
 
@@ -301,7 +449,7 @@ namespace erax::frontend {
       if (found.name == "main") {
         return std::unexpected(ParseError {"the entry point must be 'fn main(): i32'", found.location});
       }
-      if (context_.find_template(found.name) != nullptr) {
+      if (context_.find_template_in_current(found.name) != nullptr) {
         return std::unexpected(ParseError {"'" + found.name + "' is already declared", found.location});
       }
       // Deduction works from the parameter types, so a type parameter that never
@@ -342,11 +490,11 @@ namespace erax::frontend {
 
     // A new parameter list under the same name joins the overload set; the same
     // parameters twice are the same declaration written twice.
-    if (context_.find_function(found.name, params) != nullptr) {
+    if (context_.find_function_in_current(found.name, params) != nullptr) {
       return std::unexpected(ParseError {"'" + found.name + "' is already declared", found.location});
     }
     if (found.name == "main") {
-      if (!params.empty() || found.return_type.type != SemType::I32) {
+      if (!context_.current_namespace().path.empty() || !params.empty() || found.return_type.type != SemType::I32) {
         return std::unexpected(ParseError {"the entry point must be 'fn main(): i32'", found.location});
       }
       has_entrypoint_ = true;
@@ -395,7 +543,7 @@ namespace erax::frontend {
     if (auto equals = expect_op(cursor, "="); !equals) {
       return std::unexpected(equals.error());
     }
-    const std::size_t id = context_.find_global(*name)->id;
+    const std::size_t id = context_.find_global_in_current(*name)->id;
 
     // A global's initializer is a constant expression, so it folds here: the value
     // is both what the init CFG writes and what a later initializer reads.
@@ -438,9 +586,9 @@ namespace erax::frontend {
       param_types.push_back(param.type);
       params.push_back(lower(param.type));
     }
-    const FunctionInfo* recorded = context_.find_function(found.name, param_types);
+    const FunctionInfo* recorded = context_.find_function_in_current(found.name, param_types);
 
-    current_function_ = found.name;
+    current_function_ = qualified_name(context_.current_namespace(), found.name);
     current_return_type_ = found.return_type.type;
     context_.reset_frame(params);
     context_.push_scope();
@@ -488,10 +636,9 @@ namespace erax::frontend {
   }
 
   ProgramParser::step ProgramParser::instantiate_function(const Instantiation& inst) {
-    const TemplateInfo* tmpl = context_.find_template(inst.name);
+    const TemplateInfo* tmpl = inst.tmpl;
     if (tmpl == nullptr) {
-      return std::unexpected(
-          ParseError {"internal error: no template '" + inst.name + "' to instantiate", SourceLocation {}});
+      return std::unexpected(ParseError {"internal error: no template to instantiate", SourceLocation {}});
     }
 
     // Substitute the deduced type arguments into the signature.
@@ -512,12 +659,15 @@ namespace erax::frontend {
       substitution.emplace(tmpl->type_params[index].name, inst.type_args[index]);
 
     // Reposition the cursor at the template's `{` so its body parses as an ordinary
-    // function body, with the type parameters resolved through the substitution.
+    // function body, with the type parameters resolved through the substitution, and
+    // make the template's own namespace current so its body's names resolve there.
     const std::size_t saved = context_.cursor.index();
+    const std::vector<std::string> saved_namespace = context_.set_namespace_path(tmpl->ns_path);
     context_.cursor.seek(tmpl->body_index);
     context_.set_type_substitution(std::move(substitution));
+    const std::string qualified = qualified_name(context_.current_namespace(), tmpl->name);
 
-    current_function_ = tmpl->name;
+    current_function_ = qualified;
     current_return_type_ = return_type;
     context_.reset_frame(params);
     context_.push_scope();
@@ -526,19 +676,22 @@ namespace erax::frontend {
               tmpl->param_names[index], LocalInfo {params[index], param_types[index], index, true, tmpl->location});
           !declared) {
         context_.clear_type_substitution();
+        context_.cursor.seek(saved);
+        context_.set_namespace_path(saved_namespace);
         return std::unexpected(declared.error());
       }
     }
 
     auto body = block();
     context_.clear_type_substitution();
+    context_.cursor.seek(saved);
+    context_.set_namespace_path(saved_namespace);
     if (!body)
       return std::unexpected(body.error());
     if (body->falls_through) {
       if (return_type != SemType::Void) {
-        return std::unexpected(
-            ParseError {"control reaches the end of '" + tmpl->name + "', which returns " + type_name(return_type),
-                        tmpl->location});
+        return std::unexpected(ParseError {
+            "control reaches the end of '" + qualified + "', which returns " + type_name(return_type), tmpl->location});
       }
       if (!context_.builder.terminated())
         context_.builder.emit(Op::Ret, {});
@@ -554,10 +707,9 @@ namespace erax::frontend {
     const std::size_t id = program_.functions.size();
     if (id != inst.id) {
       return std::unexpected(
-          ParseError {"internal error: instantiation '" + tmpl->name + "' changed id", tmpl->location});
+          ParseError {"internal error: instantiation '" + qualified + "' changed id", tmpl->location});
     }
     program_.functions.push_back(std::move(lowered));
-    context_.cursor.seek(saved);
     return {};
   }
 
@@ -608,15 +760,29 @@ namespace erax::frontend {
     return {};
   }
 
-  std::expected<ProgramParser::LValue, ParseError> ProgramParser::lvalue(const std::string& name,
+  std::expected<ProgramParser::LValue, ParseError> ProgramParser::lvalue(const std::vector<std::string>& parts,
                                                                          SourceLocation location) {
-    if (LocalInfo* local = context_.find_local(name)) {
-      return LValue {local, nullptr, local->sem_type, Operand::vreg(local->type, local->vreg)};
+    if (parts.size() == 1) {
+      const std::string& name = parts.front();
+      if (LocalInfo* local = context_.find_local(name)) {
+        return LValue {local, nullptr, local->sem_type, Operand::vreg(local->type, local->vreg)};
+      }
+      if (const GlobalInfo* global = context_.find_global(name)) {
+        return LValue {nullptr, global, global->sem_type, Operand::global(global->type, global->id)};
+      }
+      return std::unexpected(ParseError {"undeclared identifier '" + name + "'", location});
     }
-    if (const GlobalInfo* global = context_.find_global(name)) {
+    // Qualified: the last segment names the global, the rest its namespace path. A
+    // local can never be reached this way.
+    const std::vector<std::string> path(parts.begin(), parts.end() - 1);
+    auto ns = context_.resolve_namespace(path, location);
+    if (!ns)
+      return std::unexpected(ns.error());
+    const std::string& name = parts.back();
+    if (const GlobalInfo* global = context_.find_global_in(**ns, name)) {
       return LValue {nullptr, global, global->sem_type, Operand::global(global->type, global->id)};
     }
-    return std::unexpected(ParseError {"undeclared identifier '" + name + "'", location});
+    return std::unexpected(ParseError {"undeclared identifier '" + qualified_path(parts) + "'", location});
   }
 
   void ProgramParser::write(const LValue& target, const Value& value) {
@@ -732,6 +898,18 @@ namespace erax::frontend {
       return Flow {};
     }
 
+    // `*pointer <assign-op> value` stores through a pointer. A bare `*p;` — a load
+    // whose value is discarded — is not this, and falls through to the expression
+    // statement below.
+    if (cursor.at_op("*") && at_deref_assignment(cursor)) {
+      if (auto written = deref_assignment(); !written)
+        return std::unexpected(written.error());
+      if (auto semicolon = expect_semicolon(cursor); !semicolon) {
+        return std::unexpected(semicolon.error());
+      }
+      return Flow {};
+    }
+
     auto value = expressions_.expression(std::nullopt);
     if (!value)
       return std::unexpected(value.error());
@@ -749,16 +927,79 @@ namespace erax::frontend {
   ProgramParser::step ProgramParser::assignment() {
     TokenCursor& cursor = context_.cursor;
     const SourceLocation location = cursor.location();
+    std::vector<std::string> parts;
     auto name = expect_identifier(cursor);
     if (!name)
       return std::unexpected(name.error());
-    auto target = lvalue(*name, location);
+    parts.push_back(*name);
+    while (cursor.at(TokenType::Dot)) {
+      cursor.take();
+      auto segment = expect_identifier(cursor);
+      if (!segment)
+        return std::unexpected(segment.error());
+      parts.push_back(*segment);
+    }
+    auto target = lvalue(parts, location);
     if (!target)
       return std::unexpected(target.error());
     if (auto written = assign(*target); !written) {
       return std::unexpected(written.error());
     }
     return {};
+  }
+
+  ProgramParser::step ProgramParser::deref_assignment() {
+    TokenCursor& cursor = context_.cursor;
+    const SourceLocation location = cursor.location();
+    cursor.take();  // the `*` that makes this a store rather than a load
+    auto pointer = expressions_.expression(std::nullopt);
+    if (!pointer)
+      return std::unexpected(pointer.error());
+    if (!pointer->type.is_pointer()) {
+      return std::unexpected(ParseError {
+          "cannot assign through a value of type " + type_name(pointer->type) + ", which is not a pointer", location});
+    }
+    const SemType pointee = *pointer->type.pointee;
+    const Type lowered = lower(pointee);
+
+    if (cursor.match_op("=")) {
+      auto value = expressions_.expression(pointee);
+      if (!value)
+        return std::unexpected(value.error());
+      if (value->type != pointee) {
+        return std::unexpected(
+            ParseError {"cannot assign " + type_name(value->type) + " through a pointer to " + type_name(pointee),
+                        location});
+      }
+      context_.builder.emit(Op::Store, {pointer->as_operand(), value->as_operand()});
+      return {};
+    }
+
+    // A compound store reads, modifies, and writes back through the same pointer,
+    // which needs a cell to hold the value between the two memory operations.
+    for (const CompoundAssign& compound : compound_assigns) {
+      if (!cursor.match_op(compound.text))
+        continue;
+      if (!is_integer(pointee)) {
+        return std::unexpected(
+            ParseError {quoted(compound.text) + " is not defined for " + type_name(pointee), location});
+      }
+      auto value = expressions_.expression(pointee);
+      if (!value)
+        return std::unexpected(value.error());
+      if (value->type != pointee) {
+        return std::unexpected(
+            ParseError {"cannot assign " + type_name(value->type) + " through a pointer to " + type_name(pointee),
+                        location});
+      }
+      const std::uint64_t cell = context_.builder.alloc(lowered);
+      context_.builder.emit(Op::Load, {Operand::vreg(lowered, cell), pointer->as_operand()});
+      context_.builder.emit(compound.op, {Operand::vreg(lowered, cell), Operand::vreg(lowered, cell),
+                                          value->as_operand()});
+      context_.builder.emit(Op::Store, {pointer->as_operand(), Operand::vreg(lowered, cell)});
+      return {};
+    }
+    return std::unexpected(ParseError {"expected an assignment operator", location});
   }
 
   std::expected<ProgramParser::Flow, ParseError> ProgramParser::for_init() {
@@ -771,6 +1012,11 @@ namespace erax::frontend {
     }
     if (cursor.at(TokenType::Identifier) && at_assignment(cursor)) {
       if (auto written = assignment(); !written)
+        return std::unexpected(written.error());
+      return Flow {};
+    }
+    if (cursor.at_op("*") && at_deref_assignment(cursor)) {
+      if (auto written = deref_assignment(); !written)
         return std::unexpected(written.error());
       return Flow {};
     }
@@ -1027,7 +1273,8 @@ namespace erax::frontend {
     // expression, so the loop variable can move without another name.
     context_.builder.set_current(step_block);
     if (!cursor.at(TokenType::RParen)) {
-      if (auto written = assignment(); !written) {
+      step written = cursor.at_op("*") ? deref_assignment() : assignment();
+      if (!written) {
         context_.pop_scope();
         return std::unexpected(written.error());
       }

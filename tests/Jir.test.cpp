@@ -490,3 +490,52 @@ TEST_CASE("a printer renders a program with globals and a branch") {
   CHECK(printed.find("if CMP_EQ i8 $1, i8 0 then 1") != std::string::npos);
   CHECK(printed.find("-> 2") != std::string::npos);
 }
+
+TEST_CASE("a printer names a primitive by its catalog row, or by its id") {
+  CfgBuilder body;
+  // `free` (id 6) has a catalog row and prints by name; an id past the catalog
+  // prints as the number it is, because a `PRIM` is still well-formed.
+  body.emit(Op::Primitive, {Operand::vreg(Type::U8, 0)}, 6);
+  body.emit(Op::Primitive, {Operand::empty()}, 999);
+  body.emit(Op::Ret, {});
+
+  Program program;
+  Function main;
+  main.return_type = Type::I32;
+  main.frame_size = 1;
+  main.cfg = body.take();
+  program.functions.push_back(main);
+
+  const std::string printed = print(program);
+  CHECK(printed.find("PRIM free") != std::string::npos);
+  CHECK(printed.find("PRIM 999") != std::string::npos);
+}
+
+TEST_CASE("a pointer type prints with its pointee, and a bare global has no initializer") {
+  CHECK(to_string(Type::pointer(Type::I32)) == "ptr i32");
+  CHECK(to_string(Operand::vreg(Type::pointer(Type::U8), 3)) == "ptr u8 $3");
+
+  Program program;
+  Global global;
+  global.type = Type::pointer(Type::U8);
+  program.globals.push_back(global);
+
+  const std::string printed = print(program);
+  CHECK(printed.find("global 0: ptr u8") != std::string::npos);
+  CHECK(printed.find("(no initializer)") != std::string::npos);
+}
+
+TEST_CASE("a builder answers for the cells it has and is silent about the rest") {
+  CfgBuilder builder;
+  const std::uint64_t cell = builder.alloc(Type::I32);
+  CHECK(builder.type_of(cell) == Type::I32);
+  CHECK(builder.type_of(999) == Type::Void);
+  CHECK(builder.frame_size() >= 1);
+}
+
+TEST_CASE("folding has no arithmetic for a move, so it is refused") {
+  const Result moved = fold::binary(Op::Mov, Type::I32, 1, 2);
+  CHECK_FALSE(moved.value.has_value());
+  REQUIRE(moved.failure.has_value());
+  CHECK(*moved.failure == fold::Failure::SignedOverflow);
+}

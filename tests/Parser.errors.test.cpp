@@ -16,10 +16,13 @@ TEST_CASE("a name is a local, a global, or a function") {
   parse_ok("fn main(): i32 { let x: i32 = 1; return x; }");
   // A function name in a call position is a call; a call result is not a name.
   CHECK(parse_error("fn f(): i32 { return 0; } fn main(): i32 { return f()(); }") != "");
-  // A dot is a namespace, and v1 has none: a name is one identifier, so the error
-  // is about the dot, wherever it appears after a name.
-  CHECK(parse_error("fn main(): i32 { return a.b(); }") == "'.' is not part of a name in v1");
-  CHECK(parse_error("fn main(): i32 { let a: i32 = 1; return a.b; }") == "'.' is not part of a name in v1");
+  // A dotted name is a namespace-qualified reference, so a dot that does not lead
+  // to a declared namespace is the unknown-namespace error; one that leads to a
+  // namespace without the member is undeclared.
+  CHECK(parse_error("fn main(): i32 { return a.b(); }") == "unknown namespace 'a'");
+  CHECK(parse_error("fn main(): i32 { let a: i32 = 1; return a.b; }") == "unknown namespace 'a'");
+  CHECK(parse_error("namespace a { } fn main(): i32 { return a.b(); }") == "call to undeclared function 'a.b'");
+  CHECK(parse_error("namespace a { } fn main(): i32 { return a.b.c; }") == "unknown namespace 'a.b'");
   CHECK(parse_error("fn a.b(): i32 { return 0; } fn main(): i32 { return 0; }") == "expected '('");
   // A global's value is a read in a function and a constant in an initializer.
   const Program program = parse_ok("let g: i32 = 1; let h: i32 = g + 1; fn main(): i32 { return h; }");
@@ -193,8 +196,9 @@ TEST_CASE("the cursor names what it wanted to see") {
   // Each expectation says what the token is, by its own name.
   CHECK(parse_error("fn main(): i32 { let x = 1; return 0; }") == "expected ':'");
   CHECK(parse_error("fn main(): i32 { let x: i32 = 1 x = 2; return 0; }") == "expected ';'");
-  CHECK(parse_error("fn main(): i32 { return 0; } ]") == "expected a global or a function declaration");
-  CHECK(parse_error("fn main(): i32 { let x: i32 = 1; return 0; } )") == "expected a global or a function declaration");
+  CHECK(parse_error("fn main(): i32 { return 0; } ]") == "expected a global, a function, or a namespace declaration");
+  CHECK(parse_error("fn main(): i32 { let x: i32 = 1; return 0; } )") ==
+        "expected a global, a function, or a namespace declaration");
   // A keyword expectation names the keyword.
   CHECK(parse_error("fn main(): i32 { let i: i32 = 0; do { i = i - 1; } x; return 0; }") != "");
   CHECK(parse_error("fn main(): i32 { let i: i32 = 0; for (let i: i32 = 0; i < 1; i = i + 1) break; return 0; }") !=
@@ -269,4 +273,125 @@ TEST_CASE("a cast takes a type and a value that has bits") {
   // `as` names a type after itself and nothing else: not a name, not a type.
   CHECK(parse_error("fn main(): i32 { let as: i32 = 1; return 0; }") == "'as' is a reserved word");
   CHECK(parse_error("fn main(): i32 { let x: as = 1; return 0; }") == "expected a type");
+}
+
+TEST_CASE("a pointer names a cell, a deref needs a pointer, and a store writes through") {
+  // A deref whose operand is not a pointer is a type error.
+  CHECK(parse_error("fn main(): i32 { let x: i32 = 1; return *x; }") == "'*' needs a pointer, but got i32");
+  // `&` takes the address of a variable or global's cell: nothing else has one,
+  // so a constant, a deref (a scratch vreg), and an intermediate all die.
+  CHECK(parse_error("fn main(): i32 { let p: ptr i32 = &42; return 0; }") == "cannot take the address of a constant");
+  CHECK(parse_error("fn main(): i32 { let x: i32 = 1; let p: ptr i32 = &(x + 1); return 0; }") ==
+        "cannot take the address of this expression");
+  CHECK(parse_error("fn main(): i32 { let x: i32 = 1; let p: ptr i32 = &(*(&x)); return 0; }") ==
+        "cannot take the address of this expression");
+  // A store's right side and a store target's type must agree; the compound
+  // operators are the integer ones, so a pointer pointee cannot compound.
+  CHECK(parse_error("fn main(): i32 { let x: i32 = 1; let p: ptr i32 = &x; *p = false; return 0; }") != "");
+  CHECK(parse_error("fn main(): i32 { let x: bool = true; let p: ptr bool = &x; *p += 1; return 0; }") != "");
+  // `ptr` is contextual: a type in type position, an ordinary name elsewhere.
+  parse_ok("fn main(): i32 { let ptr: i32 = 1; let p: ptr i32 = &ptr; return *p; }");
+}
+
+TEST_CASE("a signature may name a concrete pointer, but not a pointer to a type parameter") {
+  // A concrete `ptr T` signature type is ordinary; a pointer to the template's own
+  // parameter has no shape a `TemplateType` can carry.
+  parse_ok("fn f(p: ptr i32): i32 { return 0; } fn main(): i32 { return 0; }");
+  CHECK(parse_error("fn g<T>(p: ptr T) { } fn main(): i32 { return 0; }") ==
+        "a pointer to type parameter 'T' is not supported");
+  // `string` is named as itself rather than as a missing type.
+  CHECK(parse_error("fn f(p: string) { } fn main(): i32 { return 0; }") == "string is not supported yet");
+}
+
+TEST_CASE("the constant-only positions say what a constant is") {
+  // A global's type says how it starts, so a call is not one.
+  CHECK(parse_error("fn f(): i32 { return 0; } let g: i32 = f(); fn main(): i32 { return 0; }") ==
+        "a constant expression may not call 'f'");
+  CHECK(parse_error("let g: ptr u8 = primitive alloc(8); fn main(): i32 { return 0; }") ==
+        "a constant expression may not call a primitive");
+  // A deref reads memory, which a constant expression cannot do.
+  CHECK(parse_error("let g: i32 = *(0 as ptr i32); fn main(): i32 { return 0; }") ==
+        "this must be a constant expression");
+}
+
+TEST_CASE("a unary operator names the type it was handed") {
+  // The non-literal negation: the `-` in front of a number is read with the sign.
+  CHECK(parse_error("fn main(): i32 { let y: u8 = 2; let x: u8 = -y; return 0; }") == "'-' is not defined for u8");
+  CHECK(parse_error("fn main(): i32 { let x: i32 = 1; let b: bool = !x; return 0; }") ==
+        "'!' is defined on 'bool', but got i32");
+  CHECK(parse_error("fn main(): i32 { let b: bool = true; let x: i32 = ~b; return 0; }") ==
+        "'~' is not defined for bool");
+  // The most negative value has no negation, and a shift that drops the top bit
+  // has no value either.
+  CHECK(parse_error("fn main(): i32 { let x: i32 = -(-2147483647 - 1); return 0; }") ==
+        "this constant does not fit i32");
+  CHECK(parse_error("fn main(): i32 { let x: i64 = -1i64 << 1i64; return 0; }") == "this constant does not fit i64");
+}
+
+TEST_CASE("a literal suffix that names nothing is quoted back") {
+  CHECK(parse_error("fn main(): i32 { let x: i32 = 64ul; return 0; }") == "'ul' is not a type");
+}
+
+TEST_CASE("a primitive is one identifier") {
+  CHECK(parse_error("fn main(): i32 { let p: ptr u8 = primitive .alloc(8); return 0; }") ==
+        "'.' is not part of a name in v1");
+  CHECK(parse_error("fn main(): i32 { let p: ptr u8 = primitive alloc.now(8); return 0; }") ==
+        "'.' is not part of a name in v1");
+  CHECK(parse_error("fn main(): i32 { return std.; }") == "expected an identifier");
+}
+
+TEST_CASE("a store names a pointer and its pointee's type") {
+  CHECK(parse_error("fn main(): i32 { let x: i32 = 1; *x = 5; return 0; }") ==
+        "cannot assign through a value of type i32, which is not a pointer");
+  CHECK(parse_error("fn main(): i32 { let x: i32 = 1; let p: ptr i32 = &x; let y: i64 = 2; *p = y; return 0; }") ==
+        "cannot assign i64 through a pointer to i32");
+  CHECK(parse_error("fn main(): i32 { let x: i32 = 1; let p: ptr i32 = &x; let y: i64 = 2; *p += y; return 0; }") ==
+        "cannot assign i64 through a pointer to i32");
+  // A store that never says how to store is still a missing semicolon.
+  CHECK(parse_error("fn main(): i32 { let x: i32 = 1; let p: ptr i32 = &x; *p = 1 return 0; }") == "expected ';'");
+}
+
+TEST_CASE("an assignment target is a name that exists") {
+  CHECK(parse_error("namespace a { } fn main(): i32 { a.b = 1; return 0; }") == "undeclared identifier 'a.b'");
+  CHECK(parse_error("fn main(): i32 { z.y = 1; return 0; }") == "unknown namespace 'z'");
+  CHECK(parse_error("fn main(): i32 { let x: i32 = 1; x = ; return 0; }") == "expected an expression");
+  CHECK(parse_error("fn main(): i32 { let x: i32 = 1; x += ; return 0; }") == "expected an expression");
+}
+
+TEST_CASE("a global declaration names its type and its start") {
+  CHECK(parse_error("let = 1; fn main(): i32 { return 0; }") == "expected an identifier");
+  CHECK(parse_error("let x 1; fn main(): i32 { return 0; }") == "expected ':'");
+  CHECK(parse_error("let x: 1; fn main(): i32 { return 0; }") == "expected a type");
+  CHECK(parse_error("let x: i32 1; fn main(): i32 { return 0; }") == "expected '='");
+}
+
+TEST_CASE("a namespace body is named, opened, and closed") {
+  CHECK(parse_error("namespace { } fn main(): i32 { return 0; }") == "expected an identifier");
+  CHECK(parse_error("namespace a fn main(): i32 { return 0; }") == "expected '{'");
+  CHECK(parse_error("namespace a { let g: i32 = 1;") == "unterminated namespace body");
+}
+
+TEST_CASE("a body that never closes is named") {
+  // The declaration pass skips each body to find where the next declaration
+  // starts, so an unclosed body is caught there before the body is ever parsed.
+  CHECK(parse_error("fn main(): i32 {") == "unterminated function body");
+  CHECK(parse_error("fn main(): i32 { return 0; ") == "unterminated function body");
+  CHECK(parse_error("fn f<T>(x: T) {") == "unterminated function body");
+}
+
+TEST_CASE("a loop body and its header are parsed like any block") {
+  CHECK(parse_error("fn main(): i32 { if (true) { let; } return 0; }") == "expected an identifier");
+  CHECK(parse_error("fn main(): i32 { if (false) { } else if (true) { let; } return 0; }") == "expected an identifier");
+  CHECK(parse_error("fn main(): i32 { if (false) { } else { let; } return 0; }") == "expected an identifier");
+  CHECK(parse_error("fn main(): i32 { do { let; } while (false); return 0; }") == "expected an identifier");
+  CHECK(parse_error("fn main(): i32 { do { } while (false) return 0; }") == "expected ';'");
+  CHECK(parse_error("fn main(): i32 { for (1 + 2; ; ) { } return 0; }") ==
+        "expected a declaration or an assignment in the 'for' init");
+  // A `for` init and a `do` test may be the forms the loops allow.
+  parse_ok("fn main(): i32 { let x: i32 = 0; let p: ptr i32 = &x; for (*p = 0; *p < 3; *p += 1) { } return 0; }");
+  parse_ok("fn main(): i32 { do { } while (true); return 0; }");
+}
+
+TEST_CASE("a void function returns with nothing, a value function with a value") {
+  parse_ok("fn f() { return; } fn main(): i32 { f(); return 0; }");
 }

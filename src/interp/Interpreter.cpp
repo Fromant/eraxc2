@@ -1,5 +1,6 @@
 #include "Interpreter.hpp"
 
+#include <map>
 #include <optional>
 #include <utility>
 
@@ -200,6 +201,51 @@ namespace erax::interp {
             write(command.args[0], middleend::fold::convert(command.args[0].type, command.args[1].type, source), frame);
             return !died();
           }
+          case Op::Addr: {
+            // A cell's address is its region and its index, packed into one word; a
+            // vreg is addressed relative to its frame's base in the stack array.
+            const Operand& source = command.args[1];
+            if (source.kind == OperandKind::VReg) {
+              if (source.is_empty() || source.value >= frame.cells) {
+                break_("ADDR names a cell outside its frame");
+                return false;
+              }
+              write(command.args[0], encode(Region::Stack, frame.base + source.value), frame);
+            } else if (source.kind == OperandKind::Global) {
+              if (source.value >= globals_.size()) {
+                break_("ADDR names a global that does not exist");
+                return false;
+              }
+              write(command.args[0], encode(Region::Global, source.value), frame);
+            } else {
+              break_("ADDR names something that is not a cell");
+              return false;
+            }
+            return !died();
+          }
+          case Op::Load: {
+            const Cell address = read(command.args[1], frame);
+            if (died())
+              return false;
+            const Cell* cell = deref(address, site);
+            if (!cell)
+              return false;
+            write(command.args[0], *cell, frame);
+            return !died();
+          }
+          case Op::Store: {
+            const Cell address = read(command.args[0], frame);
+            if (died())
+              return false;
+            const Cell value = read(command.args[1], frame);
+            if (died())
+              return false;
+            Cell* cell = deref(address, site);
+            if (!cell)
+              return false;
+            *cell = value;
+            return true;
+          }
           default: {
             const Cell left = read(command.args[1], frame);
             const Cell right = read(command.args[2], frame);
@@ -293,6 +339,8 @@ namespace erax::interp {
           case Prim::ReadChar: return read_char(command, frame);
           case Prim::Exit: return exit_(command, frame);
           case Prim::Abort: return abort_();
+          case Prim::Alloc: return alloc_(command, frame);
+          case Prim::Free: return free_(command, frame);
         }
         break_("a command names a primitive that does not exist");
         return false;
@@ -352,6 +400,68 @@ namespace erax::interp {
         return true;
       }
 
+      /// `PRIM alloc dst size`: \p size bytes from the heap, rounded up to whole
+      /// cells (at least one). The result is a `ptr u8` into the heap region.
+      bool alloc_(const Command& command, Frame frame) {
+        const Cell bytes = read(command.args[1], frame);
+        if (died())
+          return false;
+        const Cell cells = bytes / 8 + (bytes % 8 != 0 ? 1 : 0);
+        const Cell address = allocate(cells == 0 ? 1 : static_cast<std::size_t>(cells), site_of(frame));
+        if (died())
+          return false;
+        write(command.args[0], address, frame);
+        return !died();
+      }
+
+      /// `PRIM free dst p`: returns \p p's heap block to the free list. `free(null)`
+      /// does nothing; any other pointer that names no live block is a trap.
+      bool free_(const Command& command, Frame frame) {
+        const Cell address = read(command.args[1], frame);
+        if (died())
+          return false;
+        if (address == 0)
+          return true;
+        if (static_cast<Region>(address >> region_bits) != Region::Heap) {
+          trap(Trap::InvalidPointer, site_of(frame));
+          return false;
+        }
+        const auto live = heap_live_.find(static_cast<std::size_t>(address & index_mask_));
+        if (live == heap_live_.end()) {
+          trap(Trap::InvalidPointer, site_of(frame));
+          return false;
+        }
+        heap_free_.push_back({live->first, live->second});
+        heap_live_.erase(live);
+        return true;
+      }
+
+      /// Carves `cells` cells out of the heap: first from the first free block wide
+      /// enough (splitting it), otherwise by growing the heap.
+      Cell allocate(std::size_t cells, const Site& site) {
+        for (std::size_t slot = 0; slot < heap_free_.size(); ++slot) {
+          if (heap_free_[slot].second < cells)
+            continue;
+          const std::size_t start = heap_free_[slot].first;
+          if (heap_free_[slot].second == cells)
+            heap_free_.erase(heap_free_.begin() + static_cast<std::ptrdiff_t>(slot));
+          else {
+            heap_free_[slot].first += cells;
+            heap_free_[slot].second -= cells;
+          }
+          heap_live_.emplace(start, cells);
+          return encode(Region::Heap, start);
+        }
+        if (cells > limits_.max_cells - heap_.size()) {
+          trap(Trap::OutOfMemory, site);
+          return 0;
+        }
+        const std::size_t start = heap_.size();
+        heap_.resize(start + cells, Cell {0});
+        heap_live_.emplace(start, cells);
+        return encode(Region::Heap, start);
+      }
+
       /// A branch test is a comparison whose nonzero result takes the edge.
       bool holds_(const Condition& condition, Frame frame, bool& holds) {
         const Cell left = read(condition.a, frame);
@@ -400,6 +510,45 @@ namespace erax::interp {
           return nullptr;
         }
         return &program_.functions[frame.index].cfg;
+      }
+
+      /// The region a pointer's index belongs to, packed into the top two bits of a
+      /// cell. Zero — no region, zero index — is the null pointer; every nonzero
+      /// address names exactly one cell of exactly one region.
+      enum class Region : Cell {
+        Stack = 1,
+        Global = 2,
+        Heap = 3
+      };
+
+      static constexpr unsigned region_bits = 62;
+      static constexpr Cell index_mask_ = (Cell {1} << region_bits) - 1;
+
+      static Cell encode(Region region, std::size_t index) noexcept {
+        return (static_cast<Cell>(region) << region_bits) | static_cast<Cell>(index);
+      }
+
+      /// The cell an address names, bounds-checked against its region. A null,
+      /// misframed, or out-of-range address is a trap, never a wild read.
+      Cell* deref(Cell address, const Site& site) {
+        const Region region = static_cast<Region>(address >> region_bits);
+        const std::size_t index = static_cast<std::size_t>(address & index_mask_);
+        switch (region) {
+          case Region::Stack:
+            if (index < stack_.size())
+              return &stack_[index];
+            break;
+          case Region::Global:
+            if (index < globals_.size())
+              return &globals_[index];
+            break;
+          case Region::Heap:
+            if (index < heap_.size())
+              return &heap_[index];
+            break;
+        }
+        trap(Trap::InvalidPointer, site);
+        return nullptr;
       }
 
       /// A cell operand is a read of the frame the pointer is in; a global is a read
@@ -480,6 +629,11 @@ namespace erax::interp {
       std::vector<Cell> globals_;
       std::string output_;  ///< the bytes the output primitives wrote, for the `Outcome`
       std::vector<Cell> stack_;
+      std::vector<Cell> heap_;  ///< the cells `alloc` has handed out; grows, reused via `heap_free_`
+      /// Live heap blocks by their first cell, and the blocks `free` returned. A
+      /// block's cell count is what `free` gives back and what a later `alloc` reuses.
+      std::map<std::size_t, std::size_t> heap_live_;
+      std::vector<std::pair<std::size_t, std::size_t>> heap_free_;
       std::vector<Frame> frames_;
       std::optional<Cell> returning_;  ///< the value the outermost `RET` carried
       std::optional<Cell> exiting_;  ///< the code `exit`/`abort` stopped the program with
@@ -495,6 +649,8 @@ namespace erax::interp {
       case Trap::SignedOverflow: return "signed division overflowed";
       case Trap::StackExhausted: return "the stack outgrew the machine";
       case Trap::FrameTooLarge: return "a frame is larger than the machine allows";
+      case Trap::OutOfMemory: return "the heap outgrew the machine";
+      case Trap::InvalidPointer: return "a pointer named no live cell";
     }
     return "";
   }
