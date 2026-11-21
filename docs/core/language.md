@@ -15,8 +15,8 @@ Source-level contract of the erax language: grammar, types, and semantics. The d
 ## Style
 
 - **Post-name type syntax.** Types are written after the name, everywhere: `let t: i32 = 123;`, params `fn foo(x: i32, y: bool)`, return `fn main(): i32 { … }`.
-- **Explicit types only.** Every `let` and every param names its type; nothing is inferred.
-- **Assignment is a statement, not an expression.** `a = b = c` is illegal (an assignment's value is never usable); compound forms like `a += 2` are the idiomatic mutation.
+- **Post-name annotations and local inference.** Parameters and globals name their types. A local may omit its annotation when it has an initializer; the initializer then determines the type.
+- **Assignment is a statement, not an expression.** `a = b = c` is a right-associated assignment chain, but an assignment has no value usable by an expression; compound forms like `a += 2` are the idiomatic mutation.
 - **Required `;`.** Every terminating statement ends in `;`. No automatic semicolon insertion.
 - A source file holds only **global declarations and function declarations** (top level). Everything else lives inside functions.
 
@@ -28,12 +28,13 @@ Terminals in quotes; `[]` optional, `{}` repeated, `|` choice. `INT`/`CHAR` are 
 program        = { global | function | namespace } ;
 namespace      = "namespace" IDENT "{" { global | function | namespace } "}" ;
 
-global         = "let" IDENT ":" type "=" const-expr ";" ;
+global         = binding [ "mut" ] IDENT ":" type "=" const-expr ";" ;
+binding        = "let" | "const" ;
 function       = "fn" IDENT [ type-params ] "(" [ param { "," param } ] ")" [ ":" type ] block ;
 
 type-params    = "<" type-param { "," type-param } ">" ;
 type-param     = IDENT [ "extends" capability { "&" capability } ] ;
-capability     = "Ordered" | "Negatable" | "Arithmetic" ;
+capability     = "Ordered" | "Negatable" | "Arithmetic" | "Clonable" | "Movable" ;
 
 param          = IDENT ":" type ;
 type           = "i8" | "u8" | "i16" | "u16" | "i32" | "u32" | "i64" | "u64"
@@ -46,8 +47,11 @@ statement      = let-stmt | assign-stmt | expr-stmt | return-stmt
                | if-stmt | while-stmt | do-stmt | for-stmt
                | "break" ";" | "continue" ";" ;
 
-let-stmt       = "let" IDENT ":" type [ "=" expr ] ";" ;
-assign-stmt    = lvalue assign-op expr ";" ;
+let-stmt       = local-decl ";" ;
+local-decl     = binding [ "mut" ] IDENT [ ":" type ] [ "=" expr ] ;
+assign-stmt    = assignment ";" ;
+assignment     = lvalue "=" ( assignment | expr ) | lvalue compound-op expr ;
+compound-op    = "+=" | "-=" | "*=" | "/=" | "%=" | "&=" | "|=" | "^=" | "<<=" | ">>=" ;
 expr-stmt      = expr ";" ;
 return-stmt    = "return" [ expr ] ";" ;
 
@@ -55,9 +59,9 @@ if-stmt        = "if" "(" condition ")" block [ "else" ( if-stmt | block ) ] ;
 while-stmt     = "while" "(" condition ")" block ;
 do-stmt        = "do" block "while" "(" condition ")" ";" ;
 for-stmt       = "for" "(" [ for-init ] ";" [ for-cond ] ";" [ for-step ] ")" block ;
-for-init       = "let" IDENT ":" type [ "=" expr ] | lvalue assign-op expr ;
+for-init       = local-decl | assignment ;
 for-cond       = condition ;
-for-step       = expr ;
+for-step       = assignment ;
 
 condition      = expr ;    // must be `bool` — see expressions.md
 
@@ -74,7 +78,7 @@ shift          = additive { ( "<<" | ">>" ) additive } ;
 additive       = multiplicative { ( "+" | "-" ) multiplicative } ;
 multiplicative = cast { ( "*" | "/" | "%" ) cast } ;
 cast           = unary { "as" type } ;
-unary          = ( "*" | "&" | "-" | "!" | "~" ) unary | postfix ;
+unary          = ( "*" | "&" | "-" | "!" | "~" | "move" ) unary | postfix ;
 postfix        = primary | call ;
 call           = qualified-name "(" [ expr { "," expr } ] ")" ;
 primitive-call = "primitive" IDENT "(" [ expr { "," expr } ] ")" ;
@@ -153,7 +157,10 @@ Every keyword is reserved: it cannot be used as an `IDENT` (declaration or refer
 | Keyword | Role |
 | ------- | ---- |
 | `fn` | function declaration |
-| `let` | variable / global declaration |
+| `let` | reassignable variable / global declaration |
+| `const` | fixed variable / global binding |
+| `mut` | permission to mutate an object independently of rebinding |
+| `move` | consume a local value or parameter |
 | `namespace` | named scope for top-level declarations |
 | `if` | conditional block |
 | `else` | alternate branch of `if` |
@@ -172,13 +179,14 @@ Every keyword is reserved: it cannot be used as an `IDENT` (declaration or refer
 
 Type names, `true`, and `false` are reserved because they carry their meaning in type and literal position.
 
-`string`, `std`, `text`, … are ordinary identifiers, not reserved words: they may be used as names. `ptr` is the same kind of contextual name: it is a type in type position (`#grammar`) and an ordinary identifier elsewhere, so a variable may be called `ptr`. Writing `string` in *type* position is a forward-looking error (see `types.md#literals`). `std` is claimed at the root by the auto-imported library (`docs/std.md`), so a program declaring its own top-level `std` is a duplicate-declaration error. The capability names `Ordered`, `Negatable`, `Arithmetic` are ordinary identifiers too — they mean something only after `extends`/`&` in a `type-param`, and a template's type-parameter names are ordinary outside the declaration (`statements.md#templates`). One name carries its meaning without being reserved: `main` is the entry point — a rule on the name, see `statements.md#functions`. It may not be given a declaration of its own, and it does not stop the tokenizer.
+`string`, `std`, `text`, … are ordinary identifiers, not reserved words: they may be used as names. `ptr` is the same kind of contextual name: it is a type in type position (`#grammar`) and an ordinary identifier elsewhere, so a variable may be called `ptr`. Writing `string` in *type* position is a forward-looking error (see `types.md#literals`). `std` is claimed at the root by the auto-imported library (`docs/std.md`), so a program declaring its own top-level `std` is a duplicate-declaration error. The capability names `Ordered`, `Negatable`, `Arithmetic`, `Clonable`, `Movable` are ordinary identifiers too — they mean something only after `extends`/`&` in a `type-param`, and a template's type-parameter names are ordinary outside the declaration (`statements.md#templates`). One name carries its meaning without being reserved: `main` is the entry point — a rule on the name, see `statements.md#functions`. It may not be given a declaration of its own, and it does not stop the tokenizer.
 
 ## Semantics
 
-- **By-value; pointers are values, not references.** Variables hold values, copied on assignment and call; there are no reference bindings and no lvalue-producing binary operators. A **pointer** is one of those values — the address of a cell, named with `&` and followed with `*` (`types.md#types`, `expressions.md#typing-rules`). Pointers are plain data: they copy, they pass by value, they compare equal iff they name the same cell, and no capability holds for them (`types.md#capabilities`).
+- **By-value; pointers are values, not references.** Variables hold values, copied on assignment and call; there are no reference bindings and no lvalue-producing binary operators. A **pointer** is one of those values — the address of a cell, named with `&` and followed with `*` (`types.md#types`, `expressions.md#typing-rules`). Pointers are plain data: they copy, they pass by value, they compare equal iff they name the same cell, and they satisfy `Clonable` and `Movable`, but no arithmetic or ordering capability (`types.md#capabilities`).
 - **Scoping.** A `block` (and a `for`'s init) opens a scope; enclosing scopes are visible, inner names shadow outer ones. A name is in scope from its declaration to the end of its block. Globals are visible everywhere, including inside functions and other global initializers — but a global initializer may reference only globals **declared earlier** in the file. A `namespace` is a scope too, for top-level names only (`#namespaces`).
-- **Definite assignment.** Every read of a variable is preceded, on every execution path, by a write (`let` initializer or an assignment). Parameters and globals always have a value. This is enforced statically; it never produces runtime behavior. Pointer reads and stores do not reach the check but cannot defeat it: `&x` is itself a *read*, so the address of an as-yet-unassigned local is the same `read before it is assigned` error as any other read, and a `*p = v` store writes a cell the checker cannot track, so it never counts as the write that satisfies a name.
+- **Definite assignment.** Every read of a variable is preceded, on every execution path, by a write (`let` initializer or an assignment). Parameters start initialized; `move` consumes their value just as it consumes a local. Globals have constant initializers. This is enforced statically; it never produces runtime behavior. Pointer reads and stores do not reach the check but cannot defeat it: `&x` is itself a *read*, so the address of an as-yet-unassigned local is the same `read before it is assigned` error as any other read, and a `*p = v` store writes a cell the checker cannot track, so it never counts as the write that satisfies a name.
+- **Bindings and moves.** `const` prevents rebinding, not moving. `let` may be initialized again after `move`; `const` may not. A local without an annotation needs an initializer, and every `const` needs one. Initialization state is checked over the CFG, including loop back edges. See `statements.md#bindings-and-moves`.
 - **Runtime arithmetic.** All integer arithmetic wraps (two's complement), exactly as the IR defines. Division/modulo truncate toward zero; `x / 0` (and `imin / -1`) terminate the process — no UB. Shift counts are masked to the operand width (`count & (width-1)`), so no shift is undefined.
 - **Division by zero is a run-time error, not a compile-time one.** Only a *constant* zero divisor can be caught while reading: `a / 0` is rejected, because a constant expression has to have an answer. With a variable, `let b: i32 = 0; a / b;` compiles and traps when it runs — the same way the machine's own divide instruction does. This is a documented, uniform rule, not undefined behaviour; the error surfaces wherever the trap does, and a backend may add a message to it. See `types.md#constants` for why a constant is checked and a runtime value is not.
 - **Pointer misuse is a run-time error, not a compile-time one.** `&x` needs a cell to name, but a pointer can be copied to anywhere and the machine cannot know every read targets its cell: `*p` or `*p = v` through a pointer that names nothing — the null pointer, an address freed or never allocated, a cell in a frame that has returned — terminates the process with the same machinery a divide does (`JIR.md#runtime-semantics`). The parser still rejects what it can see: `&` of a constant or expression is a compile error, and a deref whose operand is not a pointer is a type error (`expressions.md#typing-rules`).
@@ -200,6 +208,7 @@ The language lowers 1:1 to JIR:
 | global | a `@` global, zeroed then set by its init |
 | expression temps | fresh vregs |
 | `&&` `\|\|` `^^` | `AND` `OR` `XOR` on `bool` (both operands always evaluated) |
+| `move x` | `MOV` to a fresh result cell; consumption is a frontend-only check |
 | `&x` | `ADDR` — the address of `x`'s cell (a local, a param, or a global) |
 | `*p` | `LOAD` — the cell `p` points at, in the pointee's type |
 | `*p = v` / `*p += v` | `STORE` (a compound is `LOAD` → the op → `STORE`) |

@@ -1,5 +1,6 @@
 #include "Interpreter.hpp"
 
+#include <algorithm>
 #include <map>
 #include <optional>
 #include <utility>
@@ -486,6 +487,7 @@ namespace erax::interp {
             heap_free_[slot].second -= cells;
           }
           heap_live_.emplace(start, cells);
+          std::fill_n(heap_.begin() + static_cast<std::ptrdiff_t>(start), cells, Cell {0});
           return encode(Region::Heap, start);
         }
         if (cells > limits_.max_cells - heap_.size()) {
@@ -582,8 +584,11 @@ namespace erax::interp {
             }
             break;
           case Region::Heap:
-            if (index < heap_.size()) {
-              return &heap_[index];
+            if (auto block = heap_live_.upper_bound(index); block != heap_live_.begin()) {
+              --block;
+              if (index - block->first < block->second) {
+                return &heap_[index];
+              }
             }
             break;
         }

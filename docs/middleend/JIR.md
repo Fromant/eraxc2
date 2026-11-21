@@ -74,6 +74,12 @@ Every operand is `(kind, type, value)` — self-describing; nothing is resolved 
 
 ### Data movement
 
+Source-level `move local` lowers to a `MOV` into a fresh result cell. Consumption,
+`const` rebinding restrictions, and the `Clonable` / `Movable` bounds are checked
+by the frontend; they do not add opcodes, clear the source cell, or change the
+machine's scalar calling convention. The frontend checks initialization across
+CFG back edges before discarding unreachable blocks.
+
 | Op    | Shape      | Semantics                                                    |
 | ----- | ---------- | ------------------------------------------------------------ |
 | `MOV` | `MOV dst src` | `dst = src` (`src`: instant/vreg/global; `dst`: vreg/global). The only way to read or write a global. |

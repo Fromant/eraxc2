@@ -137,6 +137,7 @@ tests/
   ParserTest.hpp           shared parser-test helpers (parse_ok / parse_error / ops_of)
   Parser.test.cpp          parser headline cases, accepted programs and their JIR
   Parser.literals.test.cpp literals, constant folding, and type ranges
+  Ownership.test.cpp       bindings, moves, assignment chains, and heap lifetime regressions
   Parser.globals.test.cpp  globals, declarations, control flow, and CFG lowering
   Parser.errors.test.cpp   rejection messages and error locations
   Jir.test.cpp             JIR types, builder, and folding

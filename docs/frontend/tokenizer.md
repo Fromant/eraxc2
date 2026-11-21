@@ -93,7 +93,7 @@ Behavioral contract:
 Notes:
 
 - `text` is the **exact source slice**. Quoted literals store their *inner* text with the quotes stripped and the escape sequences left raw (`"a\nb"` → the four characters `a`, `\`, `n`, `b`). Unescaping is the parser's job.
-- Keywords are **not** a token kind: `fn`, `let`, `return`, … lex as plain `Identifier` and are classified by the parser.
+- Keywords are **not** a token kind: `fn`, `let`, `const`, `mut`, `move`, `return`, and the other keywords lex as plain `Identifier` tokens and are classified by the parser (`docs/core/language.md#reserved-words`).
 - `Token::operator==` compares kind and text only, deliberately ignoring position, so the test suite can assert token streams without hardcoding locations.
 - `Token::describe()` renders `identifier 'fn' at prog.erx:4:1` — the same format the CLI uses.
 

@@ -68,16 +68,19 @@ A value of type `void` has no bits to convert — `f() as i32` where `f` returns
 
 ## Capabilities {#capabilities}
 
-A **capability** is a named set of operators a type supports. Capabilities are a closed vocabulary in v1, and they exist to constrain a template's type parameters (`statements.md#templates`):
+A **capability** is a named set of operations a type supports. Capabilities are a closed vocabulary in v1, and they exist to constrain a template's type parameters (`statements.md#templates`):
 
 | Capability | Operators | Types that satisfy it |
 | ---------- | --------- | --------------------- |
 | `Ordered` | `<` `<=` `>` `>=` | the integer types and `char` |
 | `Negatable` | unary `-` | the signed integer types |
 | `Arithmetic` | `+` `-` `*` `/` `%` | the integer types and `char` |
+| `Clonable` | value copying | every non-void scalar and pointer type |
+| `Movable` | explicit `move` | every non-void scalar and pointer type |
 
-- A type **structurally** satisfies a capability when the operator rules already accept those operators on it (`expressions.md#typing-rules`) — nothing is declared and there is no `implements`. `u8` satisfies `Ordered` and `Arithmetic` but not `Negatable`; `bool` satisfies none of them (it is not ordered, has no arithmetic, and cannot be negated), even though `==`/`!=` accept any two same-typed values. A pointer (`ptr T`) satisfies none of them either: it has no order that means anything in the source (`==`/`!=` still accept two same-typed pointers), it has no arithmetic, and it cannot be negated — so a `ptr` never deduces a template parameter bound to `Ordered`/`Negatable`/`Arithmetic`.
+- A type **structurally** satisfies a capability when the operator rules already accept those operators on it (`expressions.md#typing-rules`) — nothing is declared and there is no `implements`. `u8` satisfies `Ordered` and `Arithmetic` but not `Negatable`; `bool` satisfies no arithmetic, ordering, or negation capability (it is not ordered, has no arithmetic, and cannot be negated), even though `==`/`!=` accept any two same-typed values. A pointer (`ptr T`) satisfies `Clonable` and `Movable`, but none of the three operator capabilities: it has no order that means anything in the source (`==`/`!=` still accept two same-typed pointers), it has no arithmetic, and it cannot be negated — so a `ptr` never deduces a template parameter bound to `Ordered`/`Negatable`/`Arithmetic`.
 - `char` is an integer byte, so it takes part in `Ordered` and `Arithmetic` as its unsigned value (`#types`); being unsigned, it is not `Negatable`.
+- `Clonable` and `Movable` are independent capabilities; supporting one does not imply the other. The current scalar and pointer types support both without user declarations. Copying or moving a pointer copies its address, not its pointee.
 - Capabilities are independent: `Negatable` does not imply `Arithmetic`, so a template lists every capability its body uses.
 - A cast (`#casts`) works on every type and needs no capability.
 - The bound is checked at each call, against the deduced type (`expressions.md#typing-rules`) — which is why `abs(12u8)` is rejected for wanting `Negatable` rather than failing somewhere inside the body.

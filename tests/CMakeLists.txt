@@ -20,6 +20,7 @@ add_executable(erax_tests
     Interpreter.test.cpp
     Primitives.test.cpp
     Std.test.cpp
+    Ownership.test.cpp
 )
 target_link_libraries(erax_tests PRIVATE erax Catch2::Catch2WithMain)
 # The interpreter tests run the shipped examples, so they need to find them.

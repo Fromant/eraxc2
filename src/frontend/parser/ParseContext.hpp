@@ -24,6 +24,9 @@ namespace erax::frontend {
     None,
     Fn,
     Let,
+    Const,
+    Mut,
+    Move,
     Namespace,
     If,
     Else,
@@ -55,12 +58,14 @@ namespace erax::frontend {
   /// The type a type keyword names; every other keyword is not a type.
   std::optional<SemType> type_of(Keyword keyword) noexcept;
 
-  /// A capability: a named set of operators a type supports, the closed vocabulary
+  /// A capability: a named set of operations a type supports, the closed vocabulary
   /// a template's type parameters are bounded by (`docs/core/types.md#capabilities`).
   enum class Capability {
     Ordered,
     Negatable,
-    Arithmetic
+    Arithmetic,
+    Clonable,
+    Movable
   };
 
   std::string_view to_string(Capability capability) noexcept;
@@ -76,11 +81,23 @@ namespace erax::frontend {
     std::vector<Capability> bounds;
   };
 
-  /// A type as written in a template signature: a concrete type, or one of the
-  /// template's type parameters (identified by its index in `type_params`).
+  /// A signature type: a concrete leaf, a type parameter, or a pointer whose
+  /// pointee is another signature type. Deduction and substitution share this shape.
   struct TemplateType {
     SemType type = SemType::Void;
     int param = -1;
+    std::shared_ptr<const TemplateType> pointee = {};
+
+    SemType resolve(const std::vector<SemType>& args = {}) const {
+      if (pointee) {
+        return SemType::pointer(pointee->resolve(args));
+      }
+      return param >= 0 ? args[static_cast<std::size_t>(param)] : type;
+    }
+
+    bool contains(std::size_t index) const noexcept {
+      return pointee ? pointee->contains(index) : param == static_cast<int>(index);
+    }
   };
 
   /// A `fn name<T …>(…)` declaration (`docs/core/statements.md#templates`). Its body
@@ -222,6 +239,8 @@ private:
     /// read: an initializer may only name globals declared before it, so the
     /// value is always known by the time one can use it.
     std::optional<ConstInt> value;
+    bool reassignable = true;
+    bool mutable_object = false;
   };
 
   struct FunctionInfo {
@@ -238,6 +257,10 @@ private:
     std::uint64_t vreg = 0;
     bool assigned = true;
     SourceLocation location;
+    bool reassignable = true;
+    bool mutable_object = false;
+    bool moved = false;
+    std::size_t flow_id = 0;
   };
 
   /// A lexical scope. A `for` init opens one of its own, so the loop variable dies
@@ -264,7 +287,12 @@ private:
   /// local is assigned only if it was assigned both before and at the end of the
   /// body. The entries point into scopes that outlive the loop.
   struct AssignedSnapshot {
-    std::vector<std::pair<LocalInfo*, bool>> flags;
+    struct Entry {
+      LocalInfo* local;
+      bool assigned;
+      bool moved;
+    };
+    std::vector<Entry> flags;
   };
 
   /// Where `break` and `continue` go. All three blocks exist before the body is
@@ -296,6 +324,7 @@ public:
     const LocalInfo* find_local(const std::string& name) const noexcept;
     /// The same local, writable: an assignment marks it definitely assigned.
     LocalInfo* find_local(const std::string& name) noexcept;
+    LocalInfo* local_at(std::uint64_t vreg) noexcept;
     /// The global \p name, searching the current namespace outward to the root.
     const GlobalInfo* find_global(const std::string& name) const noexcept;
     /// The same global, writable: the declaration pass leaves the value unset and
@@ -446,10 +475,17 @@ public:
 
     TokenCursor cursor;
     middleend::CfgBuilder builder;
+    /// A for-step is parsed before its predecessors; the CFG check owns its reads.
+    bool deferred_local_reads = false;
 
     /// Clears the per-function state so the next body starts from an empty
     /// frame: a fresh `CfgBuilder`, no scopes, no loops.
     void reset_frame(std::vector<middleend::Type> params);
+    /// Source-level definite initialization, including back edges after moves.
+    void read_local(const LocalInfo& local, SourceLocation location);
+    void initialize_local(const LocalInfo& local);
+    void move_local(const LocalInfo& local);
+    std::expected<void, ParseError> check_local_flow() const;
 
 private:
     /// The root namespace holds the program's top-level names; `namespace_stack_`
@@ -464,6 +500,18 @@ private:
     std::unordered_map<std::string, SemType> type_substitution_;
     std::vector<Scope> scopes_;
     std::vector<LoopTargets> loops_;
+    struct LocalEvent {
+      std::size_t block;
+      std::size_t local;
+      enum class Kind {
+        Read,
+        Initialize,
+        Move
+      } kind;
+      SourceLocation location;
+    };
+    std::vector<LocalEvent> local_events_;
+    std::vector<std::string> local_names_;
   };
 
 }  // namespace erax::frontend

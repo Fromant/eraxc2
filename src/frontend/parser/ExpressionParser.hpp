@@ -17,9 +17,9 @@ namespace erax::frontend {
   ///
   /// \p expected is the contextual type of the position being filled — the
   /// declared type of a `let`, the target type of an assignment, a parameter's
-  /// type in a call. It types an integer literal that has no suffix, and it is
-  /// not passed into the operands of an operator: a result is the operator's own
-  /// type, so `let x: i64 = 1 + 2` is a type error and not an `i64`.
+  /// type in a call. An inferred local supplies no expected type. Arithmetic
+  /// threads a contextual integer type to its first lone operand; comparisons
+  /// and logical operators infer their own operand types.
   class ExpressionParser {
 public:
     explicit ExpressionParser(ParseContext& context) noexcept : context_(&context) {}

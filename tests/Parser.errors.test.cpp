@@ -194,7 +194,7 @@ TEST_CASE("an escape sequence is one of the ones the language names") {
 
 TEST_CASE("the cursor names what it wanted to see") {
   // Each expectation says what the token is, by its own name.
-  CHECK(parse_error("fn main(): i32 { let x = 1; return 0; }") == "expected ':'");
+  CHECK(parse_error("fn main(): i32 { let x; return 0; }") == "expected ':' or '=' after the variable name");
   CHECK(parse_error("fn main(): i32 { let x: i32 = 1 x = 2; return 0; }") == "expected ';'");
   CHECK(parse_error("fn main(): i32 { return 0; } ]") == "expected a global, a function, or a namespace declaration");
   CHECK(parse_error("fn main(): i32 { let x: i32 = 1; return 0; } )") ==
@@ -293,12 +293,9 @@ TEST_CASE("a pointer names a cell, a deref needs a pointer, and a store writes t
   parse_ok("fn main(): i32 { let ptr: i32 = 1; let p: ptr i32 = &ptr; return *p; }");
 }
 
-TEST_CASE("a signature may name a concrete pointer, but not a pointer to a type parameter") {
-  // A concrete `ptr T` signature type is ordinary; a pointer to the template's own
-  // parameter has no shape a `TemplateType` can carry.
+TEST_CASE("a signature may name concrete and dependent pointers") {
   parse_ok("fn f(p: ptr i32): i32 { return 0; } fn main(): i32 { return 0; }");
-  CHECK(parse_error("fn g<T>(p: ptr T) { } fn main(): i32 { return 0; }") ==
-        "a pointer to type parameter 'T' is not supported");
+  parse_ok("fn g<T>(p: ptr T) { } fn main(): i32 { return 0; }");
   // `string` is named as itself rather than as a missing type.
   CHECK(parse_error("fn f(p: string) { } fn main(): i32 { return 0; }") == "string is not supported yet");
 }

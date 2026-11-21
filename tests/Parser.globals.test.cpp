@@ -81,7 +81,7 @@ TEST_CASE("an assignment target is a name of the right type") {
 
 TEST_CASE("a declaration states a name, a type, and a value") {
   // Each part is required, and the error says which one is missing.
-  CHECK(parse_error("fn main(): i32 { let x i32 = 1; return 0; }") == "expected ':'");
+  CHECK(parse_error("fn main(): i32 { let x i32 = 1; return 0; }") == "expected ':' or '=' after the variable name");
   CHECK(parse_error("fn main(): i32 { let x: i32 1; return 0; }") == "expected ';'");
   CHECK(parse_error("fn main(): i32 { let x: i32 = 1 return 0; }") == "expected ';'");
   // A type is a type name and nothing else.

@@ -136,16 +136,10 @@ namespace erax::frontend {
           if (!pointee) {
             return pointee;
           }
-          // A signature states a concrete pointee; a pointer to a type parameter
-          // would need the parameter itself to carry a shape, which a template's
-          // `TemplateType` cannot express.
-          if (pointee->param >= 0) {
-            return std::unexpected(ParseError {"a pointer to type parameter '" +
-                                                   type_params[static_cast<std::size_t>(pointee->param)].name +
-                                                   "' is not supported",
-                                               cursor.location()});
+          if (pointee->param < 0 && !pointee->pointee) {
+            return TemplateType {SemType::pointer(pointee->type), -1};
           }
-          return TemplateType {SemType::pointer(pointee->type), -1};
+          return TemplateType {SemType::Void, -1, std::make_shared<const TemplateType>(*pointee)};
         }
         if (const std::optional<SemType> type = type_of(keyword_of(text)); type) {
           cursor.take();
@@ -211,7 +205,7 @@ namespace erax::frontend {
       step item;
       if (cursor.at_keyword(Keyword::Fn)) {
         item = function();
-      } else if (cursor.at_keyword(Keyword::Let)) {
+      } else if (cursor.at_keyword(Keyword::Let) || cursor.at_keyword(Keyword::Const)) {
         item = global();
       } else if (cursor.at_keyword(Keyword::Namespace)) {
         item = namespace_body();
@@ -380,7 +374,7 @@ namespace erax::frontend {
       if (!top && cursor.at(TokenType::RBrace)) {
         return {};
       }
-      if (cursor.at_keyword(Keyword::Let)) {
+      if (cursor.at_keyword(Keyword::Let) || cursor.at_keyword(Keyword::Const)) {
         if (auto declared = declare_global(cursor); !declared) {
           return std::unexpected(declared.error());
         }
@@ -431,7 +425,11 @@ namespace erax::frontend {
   }
 
   ProgramParser::step ProgramParser::declare_global(TokenCursor& cursor) {
-    cursor.take();
+    const bool reassignable = cursor.take().text == "let";
+    const bool mutable_object = cursor.at_keyword(Keyword::Mut);
+    if (mutable_object) {
+      cursor.take();
+    }
     const SourceLocation start = cursor.location();
     auto name = expect_identifier(cursor);
     if (!name) {
@@ -452,7 +450,7 @@ namespace erax::frontend {
     }
     // The id is assigned here, before the value: a function declared above a
     // global may still read it, since globals are visible everywhere.
-    context_.declare_global(*name, GlobalInfo {lower(*type), *type, 0, std::nullopt});
+    context_.declare_global(*name, GlobalInfo {lower(*type), *type, 0, std::nullopt, reassignable, mutable_object});
     // The initializer itself is left to the main pass, which folds it; it is a
     // constant expression, so it holds no `;` or `}` of its own.
     cursor.skip_to_sync();
@@ -489,7 +487,7 @@ namespace erax::frontend {
       for (std::size_t index = 0; index < found.type_params.size(); ++index) {
         bool used = false;
         for (const TemplateType& param : found.params) {
-          if (param.param == static_cast<int>(index)) {
+          if (param.contains(index)) {
             used = true;
           }
         }
@@ -519,7 +517,7 @@ namespace erax::frontend {
     std::vector<SemType> params;
     params.reserve(found.params.size());
     for (const TemplateType& param : found.params) {
-      params.push_back(param.type);
+      params.push_back(param.resolve());
     }
 
     // A new parameter list under the same name joins the overload set; the same
@@ -565,6 +563,10 @@ namespace erax::frontend {
   ProgramParser::step ProgramParser::global() {
     TokenCursor& cursor = context_.cursor;
     cursor.take();
+    const bool mutable_object = cursor.at_keyword(Keyword::Mut);
+    if (mutable_object) {
+      cursor.take();
+    }
     auto name = expect_identifier(cursor);
     if (!name) {
       return std::unexpected(name.error());
@@ -621,8 +623,8 @@ namespace erax::frontend {
     param_types.reserve(found.params.size());
     params.reserve(found.params.size());
     for (const TemplateType& param : found.params) {
-      param_types.push_back(param.type);
-      params.push_back(lower(param.type));
+      param_types.push_back(param.resolve());
+      params.push_back(lower(param.resolve()));
     }
     const FunctionInfo* recorded = context_.find_function_in_current(found.name, param_types);
 
@@ -656,6 +658,9 @@ namespace erax::frontend {
     // Whatever the body could not reach — the code after a `return`, the arm of an
     // `if` whose test folds the other way — is dropped here, so every block of the
     // CFG that ships is reachable.
+    if (auto checked = context_.check_local_flow(); !checked) {
+      return std::unexpected(checked.error());
+    }
     context_.builder.prune();
 
     middleend::Function lowered;
@@ -689,7 +694,7 @@ namespace erax::frontend {
     param_types.reserve(tmpl->params.size());
     params.reserve(tmpl->params.size());
     const auto resolve = [&inst](const TemplateType& type) {
-      return type.param >= 0 ? inst.type_args[static_cast<std::size_t>(type.param)] : type.type;
+      return type.resolve(inst.type_args);
     };
     for (const TemplateType& param : tmpl->params) {
       param_types.push_back(resolve(param));
@@ -741,6 +746,9 @@ namespace erax::frontend {
       }
     }
     context_.pop_scope();
+    if (auto checked = context_.check_local_flow(); !checked) {
+      return std::unexpected(checked.error());
+    }
     context_.builder.prune();
 
     middleend::Function lowered;
@@ -759,8 +767,11 @@ namespace erax::frontend {
 
   ProgramParser::step ProgramParser::let() {
     TokenCursor& cursor = context_.cursor;
-    cursor.take();
-
+    const bool reassignable = cursor.take().text == "let";
+    const bool mutable_object = cursor.at_keyword(Keyword::Mut);
+    if (mutable_object) {
+      cursor.take();
+    }
     const SourceLocation start = cursor.location();
     auto name = expect_identifier(cursor);
     if (!name) {
@@ -769,38 +780,46 @@ namespace erax::frontend {
     if (context_.declares(*name)) {
       return std::unexpected(ParseError {"'" + *name + "' is already declared in this scope", start});
     }
-    if (auto colon = expect(cursor, TokenType::Colon); !colon) {
-      return std::unexpected(colon.error());
-    }
-    auto type = context_.read_type(cursor);
-    if (!type) {
-      return std::unexpected(type.error());
-    }
-
-    // The name is declared after the initializer is read, so `let x: i32 = x;`
-    // reads an outer `x` — or nothing, if there is none — instead of the local
-    // being declared.
-    std::optional<Value> value;
-    if (cursor.match_op("=")) {
-      auto parsed = expressions_.expression(*type);
+    std::optional<SemType> type;
+    if (cursor.match(TokenType::Colon)) {
+      auto parsed = context_.read_type(cursor);
       if (!parsed) {
         return std::unexpected(parsed.error());
       }
-      if (parsed->type != *type) {
+      type = *parsed;
+    }
+    std::optional<Value> value;
+    if (cursor.match_op("=")) {
+      auto parsed = expressions_.expression(type);
+      if (!parsed) {
+        return std::unexpected(parsed.error());
+      }
+      if (type && parsed->type != *type) {
         return std::unexpected(
             ParseError {"expected a value of type " + type_name(*type) + ", not " + type_name(parsed->type), start});
       }
       value = *parsed;
+      if (!type) {
+        type = parsed->type;
+      }
     }
-
+    if (!type) {
+      return std::unexpected(ParseError {"expected ':' or '=' after the variable name", start});
+    }
+    if (*type == SemType::Void) {
+      return std::unexpected(ParseError {"a variable cannot have type void", start});
+    }
+    if (!reassignable && !value) {
+      return std::unexpected(ParseError {"a const declaration needs an initializer", start});
+    }
     const Type lowered = lower(*type);
     const std::uint64_t cell = context_.builder.alloc(lowered);
-    if (auto declared = context_.declare_local(*name, LocalInfo {lowered, *type, cell, value.has_value(), start});
-        !declared) {
+    LocalInfo info {lowered, *type, cell, value.has_value(), start};
+    info.reassignable = reassignable;
+    info.mutable_object = mutable_object;
+    if (auto declared = context_.declare_local(*name, info); !declared) {
       return std::unexpected(declared.error());
     }
-    // A `let` with no initializer defines nothing yet: the cell is only written by
-    // an assignment, and a read before one is an error.
     if (value) {
       context_.builder.emit(Op::Mov, {Operand::vreg(lowered, cell), value->as_operand()});
     }
@@ -835,21 +854,62 @@ namespace erax::frontend {
 
   void ProgramParser::write(const LValue& target, const Value& value) {
     context_.builder.emit(Op::Mov, {target.target, value.as_operand()});
+    last_assignment_ = Value {target.type, target.target};
     target.mark_assigned();
+    if (target.local) {
+      context_.initialize_local(*target.local);
+    }
+  }
+
+  std::expected<Value, ParseError> ProgramParser::assignment_rhs(SemType expected) {
+    auto& cursor = context_.cursor;
+    if (cursor.at(TokenType::Identifier) && at_assignment(cursor)) {
+      auto scan = cursor;
+      scan.take();
+      while (scan.match(TokenType::Dot)) {
+        scan.take();
+      }
+      if (!scan.at_op("=")) {
+        return std::unexpected(ParseError {"only '=' may be chained", scan.location()});
+      }
+      if (auto assigned = assignment(); !assigned) {
+        return std::unexpected(assigned.error());
+      }
+      return last_assignment_;
+    }
+    if (cursor.at_op("*") && at_deref_assignment(cursor)) {
+      auto scan = cursor;
+      scan.take();
+      scan.seek(scan.past_operand(scan.index()));
+      if (!scan.at_op("=")) {
+        return std::unexpected(ParseError {"only '=' may be chained", scan.location()});
+      }
+      if (auto assigned = deref_assignment(); !assigned) {
+        return std::unexpected(assigned.error());
+      }
+      return last_assignment_;
+    }
+    return expressions_.expression(expected);
   }
 
   ProgramParser::step ProgramParser::assign(const LValue& target) {
     TokenCursor& cursor = context_.cursor;
     const SourceLocation location = cursor.location();
 
+    if ((target.local && !target.local->reassignable) || (target.global && !target.global->reassignable)) {
+      return std::unexpected(ParseError {"cannot assign to a const binding", location});
+    }
     if (cursor.match_op("=")) {
-      auto value = expressions_.expression(target.type);
+      auto value = assignment_rhs(target.type);
       if (!value) {
         return std::unexpected(value.error());
       }
       if (value->type != target.type) {
         return std::unexpected(
             ParseError {"cannot assign " + type_name(value->type) + " to " + type_name(target.type), location});
+      }
+      if (value->moved_from && *value->moved_from == target.target) {
+        return std::unexpected(ParseError {"cannot move a value into itself", location});
       }
       write(target, *value);
       return {};
@@ -859,9 +919,15 @@ namespace erax::frontend {
       if (!cursor.match_op(compound.text)) {
         continue;
       }
+      if (target.local && !target.local->assigned && !context_.deferred_local_reads) {
+        return std::unexpected(ParseError {"compound assignment needs an initialized value", location});
+      }
       if (!is_integer(target.type)) {
         return std::unexpected(
             ParseError {quoted(compound.text) + " is not defined for " + type_name(target.type), location});
+      }
+      if (target.local) {
+        context_.read_local(*target.local, location);
       }
       auto value = expressions_.expression(target.type);
       if (!value) {
@@ -882,6 +948,9 @@ namespace erax::frontend {
         context_.builder.emit(compound.op, {target.target, target.target, value->as_operand()});
       }
       target.mark_assigned();
+      if (target.local) {
+        context_.initialize_local(*target.local);
+      }
       return {};
     }
     return std::unexpected(ParseError {"expected an assignment operator", location});
@@ -921,6 +990,7 @@ namespace erax::frontend {
     }
 
     switch (keyword) {
+      case Keyword::Const:
       case Keyword::Let: {
         if (auto declared = let(); !declared) {
           return std::unexpected(declared.error());
@@ -1024,7 +1094,7 @@ namespace erax::frontend {
     const Type lowered = lower(pointee);
 
     if (cursor.match_op("=")) {
-      auto value = expressions_.expression(pointee);
+      auto value = assignment_rhs(pointee);
       if (!value) {
         return std::unexpected(value.error());
       }
@@ -1033,6 +1103,9 @@ namespace erax::frontend {
             "cannot assign " + type_name(value->type) + " through a pointer to " + type_name(pointee), location});
       }
       context_.builder.emit(Op::Store, {pointer->as_operand(), value->as_operand()});
+      last_assignment_ = *value;
+      last_assignment_.addressable = false;
+      last_assignment_.moved_from.reset();
       return {};
     }
 
@@ -1067,7 +1140,7 @@ namespace erax::frontend {
   std::expected<ProgramParser::Flow, ParseError> ProgramParser::for_init() {
     TokenCursor& cursor = context_.cursor;
     const SourceLocation location = cursor.location();
-    if (cursor.at_keyword(Keyword::Let)) {
+    if (cursor.at_keyword(Keyword::Let) || cursor.at_keyword(Keyword::Const)) {
       if (auto declared = let(); !declared) {
         return std::unexpected(declared.error());
       }
@@ -1156,6 +1229,7 @@ namespace erax::frontend {
     std::optional<Flow> else_flow;
     AssignedSnapshot else_assigned = before;
     if (has_else) {
+      context_.set_assigned(before);
       cursor.take();
       context_.builder.set_current(else_block);
       if (cursor.at_keyword(Keyword::If)) {
@@ -1178,17 +1252,19 @@ namespace erax::frontend {
     }
     context_.builder.set_current(join_block);
 
-    // A folded test has one path, so the arm it takes is the state after the
-    // statement; an unfolded one keeps a local assigned only if both arms did.
+    const bool else_falls = !else_flow || else_flow->falls_through;
     if (known) {
       context_.set_assigned(always ? then_assigned : else_assigned);
+    } else if (!then_flow->falls_through) {
+      context_.set_assigned(else_assigned);
+    } else if (!else_falls) {
+      context_.set_assigned(then_assigned);
     } else {
-      context_.merge_assigned(then_assigned);
+      context_.set_assigned(then_assigned);
       context_.merge_assigned(else_assigned);
     }
 
     // With no `else`, the arm that was not taken always falls through.
-    const bool else_falls = !else_flow || else_flow->falls_through;
     if (known) {
       return Flow {always ? then_flow->falls_through : else_falls};
     }
@@ -1234,7 +1310,11 @@ namespace erax::frontend {
     }
     const bool has_break = context_.loop().has_break;
     context_.pop_loop();
-    context_.merge_assigned(before);
+    if (known && !always) {
+      context_.set_assigned(before);
+    } else {
+      context_.merge_assigned(before);
+    }
     if (!context_.builder.terminated()) {
       context_.builder.link_next(cond_block);
     }
@@ -1361,9 +1441,12 @@ namespace erax::frontend {
     // into the block that ends every iteration — the one the body links to, and
     // the one a `continue` jumps to. It is an assignment, never a bare
     // expression, so the loop variable can move without another name.
+    const AssignedSnapshot before_step = context_.assigned_snapshot();
     context_.builder.set_current(step_block);
     if (!cursor.at(TokenType::RParen)) {
+      context_.deferred_local_reads = true;
       step written = cursor.at_op("*") ? deref_assignment() : assignment();
+      context_.deferred_local_reads = false;
       if (!written) {
         context_.pop_scope();
         return std::unexpected(written.error());
@@ -1374,6 +1457,7 @@ namespace erax::frontend {
       return std::unexpected(close.error());
     }
 
+    context_.set_assigned(before_step);
     context_.builder.set_current(body_block);
     context_.push_loop(LoopTargets {body_block, step_block, exit_block});
     auto body = block();
@@ -1393,7 +1477,11 @@ namespace erax::frontend {
       context_.builder.link_next(cond_block);
     }
     context_.builder.set_current(exit_block);
-    context_.merge_assigned(after_init);
+    if (known && test->constant->signed_value() == 0) {
+      context_.set_assigned(after_init);
+    } else {
+      context_.merge_assigned(after_init);
+    }
     context_.pop_scope();
 
     // A test that is not there, or that does not fold, may or may not fail, so the

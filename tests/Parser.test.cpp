@@ -464,7 +464,7 @@ TEST_CASE("an assignment is a statement, not an expression") {
   parse_ok("fn main(): i32 { let x: i32 = 1; x = x + 1; return x; }");
   parse_ok("fn main(): i32 { let x: i32 = 1; x += 1; return x; }");
   CHECK(parse_error("fn main(): i32 { let x: i32 = 1; let y: i32 = (x = 2); return y; }") != "");
-  CHECK(parse_error("fn main(): i32 { let x: i32 = 1; x = x = 2; return x; }") != "");
+  parse_ok("fn main(): i32 { let x: i32 = 1; x = x = 2; return x; }");
   // An lvalue is a name: a literal or a call result is not one.
   CHECK(parse_error("fn main(): i32 { 1 = 2; return 0; }") != "");
   CHECK(parse_error("fn main(): i32 { f() = 2; return 0; }") == "call to undeclared function 'f'");

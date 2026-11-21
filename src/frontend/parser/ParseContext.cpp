@@ -17,6 +17,9 @@ namespace erax::frontend {
     constexpr KeywordName keywords[] = {
         {"fn", Keyword::Fn},
         {"let", Keyword::Let},
+        {"const", Keyword::Const},
+        {"mut", Keyword::Mut},
+        {"move", Keyword::Move},
         {"namespace", Keyword::Namespace},
         {"if", Keyword::If},
         {"else", Keyword::Else},
@@ -106,11 +109,19 @@ namespace erax::frontend {
       case Capability::Ordered: return "Ordered";
       case Capability::Negatable: return "Negatable";
       case Capability::Arithmetic: return "Arithmetic";
+      case Capability::Clonable: return "Clonable";
+      case Capability::Movable: return "Movable";
     }
     return "<capability>";
   }
 
   std::optional<Capability> capability_of(std::string_view text) noexcept {
+    if (text == "Clonable") {
+      return Capability::Clonable;
+    }
+    if (text == "Movable") {
+      return Capability::Movable;
+    }
     if (text == "Ordered") {
       return Capability::Ordered;
     }
@@ -125,6 +136,8 @@ namespace erax::frontend {
 
   bool satisfies(SemType type, Capability capability) noexcept {
     switch (capability) {
+      case Capability::Clonable:
+      case Capability::Movable: return type != SemType::Void;
       // `Ordered` (`< <= > >=`) and `Arithmetic` (`+ - * / %`) accept the integers
       // and `char`, which is exactly the set `is_integer` names; `bool` is neither.
       case Capability::Ordered:
@@ -206,6 +219,10 @@ namespace erax::frontend {
   }
 
   std::size_t TokenCursor::past_operand(std::size_t index) const noexcept {
+    if (index < tokens_->size() && (*tokens_)[index].type == TokenType::Identifier &&
+        keyword_of((*tokens_)[index].text) == Keyword::Move) {
+      return past_operand(index + 1);
+    }
     // A prefix operator belongs to the operand in front of it, so `-128` is one operand
     // and not a subtraction whose left side is missing. An infix `-` always follows a
     // whole operand, so one at the cursor can only be a prefix.
@@ -632,7 +649,12 @@ namespace erax::frontend {
     if (scope.locals.contains(name)) {
       return std::unexpected(ParseError {"'" + name + "' is already declared in this scope", info.location});
     }
+    info.flow_id = local_names_.size();
+    local_names_.push_back(name);
     scope.locals.emplace(name, info);
+    if (info.assigned) {
+      initialize_local(info);
+    }
     return {};
   }
 
@@ -641,6 +663,17 @@ namespace erax::frontend {
     // Every cell from here on belongs to this scope, and goes back to the frame's
     // free list when it closes.
     scopes_.back().vreg_high_water = builder.next_vreg();
+  }
+
+  LocalInfo* ParseContext::local_at(std::uint64_t vreg) noexcept {
+    for (auto& scope : scopes_) {
+      for (auto& [name, local] : scope.locals) {
+        if (local.vreg == vreg) {
+          return &local;
+        }
+      }
+    }
+    return nullptr;
   }
 
   void ParseContext::pop_scope() {
@@ -659,7 +692,7 @@ namespace erax::frontend {
     const std::size_t depth = scopes < scopes_.size() ? scopes : scopes_.size();
     for (std::size_t index = 0; index < depth; ++index) {
       for (auto& entry : scopes_[index].locals) {
-        snapshot.flags.emplace_back(&entry.second, entry.second.assigned);
+        snapshot.flags.push_back({&entry.second, entry.second.assigned, entry.second.moved});
       }
     }
     return snapshot;
@@ -667,20 +700,118 @@ namespace erax::frontend {
 
   void ParseContext::merge_assigned(const AssignedSnapshot& before) {
     for (const auto& entry : before.flags) {
-      entry.first->assigned = entry.first->assigned && entry.second;
+      entry.local->assigned = entry.local->assigned && entry.assigned;
+      entry.local->moved = entry.local->moved || entry.moved;
     }
   }
 
   void ParseContext::set_assigned(const AssignedSnapshot& snapshot) noexcept {
     for (const auto& entry : snapshot.flags) {
-      entry.first->assigned = entry.second;
+      entry.local->assigned = entry.assigned;
+      entry.local->moved = entry.moved;
     }
+  }
+
+  void ParseContext::read_local(const LocalInfo& local, SourceLocation location) {
+    local_events_.push_back({(builder.terminated() ? builder.open_block() : builder.current()), local.flow_id,
+                             LocalEvent::Kind::Read, location});
+  }
+
+  void ParseContext::initialize_local(const LocalInfo& local) {
+    local_events_.push_back({(builder.terminated() ? builder.open_block() : builder.current()), local.flow_id,
+                             LocalEvent::Kind::Initialize, local.location});
+  }
+
+  void ParseContext::move_local(const LocalInfo& local) {
+    local_events_.push_back({(builder.terminated() ? builder.open_block() : builder.current()), local.flow_id,
+                             LocalEvent::Kind::Move, local.location});
+  }
+
+  std::expected<void, ParseError> ParseContext::check_local_flow() const {
+    const auto& blocks = builder.cfg().blocks;
+    if (blocks.empty()) {
+      return {};
+    }
+    std::vector<bool> reachable(blocks.size(), false);
+    std::vector<std::size_t> pending {0};
+    std::vector<std::vector<std::size_t>> predecessors(blocks.size());
+    while (!pending.empty()) {
+      const auto id = pending.back();
+      pending.pop_back();
+      if (reachable[id]) {
+        continue;
+      }
+      reachable[id] = true;
+      const auto edge = [&](std::size_t target) {
+        predecessors[target].push_back(id);
+        pending.push_back(target);
+      };
+      if (blocks[id].next) {
+        edge(*blocks[id].next);
+      }
+      if (blocks[id].branch) {
+        edge(blocks[id].branch->target);
+      }
+    }
+    std::vector<std::vector<const LocalEvent*>> events(blocks.size());
+    for (const auto& event : local_events_) {
+      events[event.block].push_back(&event);
+    }
+    const std::size_t count = local_names_.size();
+    std::vector<std::vector<bool>> incoming(blocks.size(), std::vector<bool>(count, true));
+    auto outgoing = incoming;
+    bool changed;
+    do {
+      changed = false;
+      for (std::size_t id = 0; id < blocks.size(); ++id) {
+        if (!reachable[id]) {
+          continue;
+        }
+        std::vector<bool> state(count, id != 0);
+        for (const auto parent : predecessors[id]) {
+          for (std::size_t local = 0; local < count; ++local) {
+            state[local] = state[local] && outgoing[parent][local];
+          }
+        }
+        incoming[id] = state;
+        for (const auto* event : events[id]) {
+          if (event->kind != LocalEvent::Kind::Read) {
+            state[event->local] = event->kind == LocalEvent::Kind::Initialize;
+          }
+        }
+        if (state != outgoing[id]) {
+          outgoing[id] = std::move(state);
+          changed = true;
+        }
+      }
+    } while (changed);
+    for (std::size_t id = 0; id < blocks.size(); ++id) {
+      if (!reachable[id]) {
+        continue;
+      }
+      auto state = incoming[id];
+      for (const auto* event : events[id]) {
+        if (event->kind == LocalEvent::Kind::Read) {
+          if (!state[event->local]) {
+            return std::unexpected(
+                ParseError {"'" + local_names_[event->local] + "' may be uninitialized or moved on a control-flow path",
+                            event->location});
+          }
+        } else {
+          state[event->local] = event->kind == LocalEvent::Kind::Initialize;
+        }
+      }
+    }
+    return {};
   }
 
   void ParseContext::reset_frame(std::vector<middleend::Type> params) {
     scopes_.clear();
     loops_.clear();
     builder = middleend::CfgBuilder {std::move(params)};
+    local_events_.clear();
+    local_names_.clear();
+    deferred_local_reads = false;
   }
 
 }  // namespace erax::frontend

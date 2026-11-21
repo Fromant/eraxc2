@@ -73,6 +73,7 @@ private:
       void mark_assigned() const noexcept {
         if (local != nullptr) {
           local->assigned = true;
+          local->moved = false;
         }
       }
     };
@@ -102,6 +103,8 @@ private:
 
     step let();
     step assign(const LValue& target);
+    std::expected<Value, ParseError> assignment_rhs(SemType expected);
+    Value last_assignment_;
     /// Resolves an lvalue: a local (one name only) or a global, possibly reached
     /// through a namespace path (`a.b.g`).
     std::expected<LValue, ParseError> lvalue(const std::vector<std::string>& parts, SourceLocation location);

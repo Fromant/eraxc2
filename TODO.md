@@ -18,19 +18,90 @@ Status: **WIP.** The lexer and the parser exist; the IR is specified and impleme
 - [x] Templates — `fn name<T extends Ordered & Negatable>(…)` with type arguments deduced from the call, capability bounds checked at the call site, and one monomorphized function per distinct instantiation (`docs/core/statements.md#templates`, `docs/core/types.md#capabilities`, `docs/core/expressions.md#typing-rules`).
 - [x] Namespaces — `namespace NAME { … }` blocks (nestable), dot-qualified references (`std.print(x)`), the closed `namespace std` as the auto-imported stdlib, and per-namespace name/clash rules. JIR stays nameless; templates instantiate inside the namespace that declared them (`docs/core/language.md#namespaces`, `docs/core/statements.md#namespaces`).
 
+## Ownership and RAII
+
+Accepted design from the language discussion. This section records the implementation target, not features already available in `docs/core/`. No VM or AoT work is part of this change. The end-to-end target is a `std.vector<std.unique<Resource>>` passed between functions, with correct cleanup on all ordinary exits.
+
+### Implementation status
+
+- [x] Fix heap dereference of freed blocks and zero reused allocations; regression tests cover both.
+- [x] `const` versus `let`, independent `mut` binding metadata, local type inference, and explicit moves of locals/parameters.
+- [x] Source initialization events checked to a fixed point over the CFG, including loop back edges after moves.
+- [x] Right-associated statement-only chains of plain `=`, including raw dereference targets.
+- [x] Recursive template signature types (`ptr T`, `ptr ptr T`) and independent `Clonable` / `Movable` capability bounds for the existing scalar/pointer types.
+- [ ] Named generic structures, layout, fields, factories, methods, and visibility.
+- [ ] Safe `ref` / `ref mut`, reference fields, inferred lifetime dependencies, and invalidation effects across calls.
+- [ ] User-defined copying, automatic structural capabilities, RAII destruction, and temporary ownership.
+- [ ] `std.unique<T>`, `std.vector<T>`, and the target conformance programs.
+- [ ] Ordinary fallible factory results (`Result` needs a concrete representation and syntax); do not implement exceptions.
+
+### Bindings and access
+
+`const` prohibits rebinding; `let` permits it. `mut` grants object mutation independently: `const mut v = ...` fixes the owner but permits changing the vector; `let v = ...` permits replacement but not mutation through that binding. No `readonly` keyword. Access without `mut` does not permit mutation through owned fields or owned pointees, nor extraction of mutable access through reference fields. It does not assert that no other alias can change the object.
+
+`ref object` and `ref mut object` explicitly create safe references. No implicit borrowing in ordinary initialization. Copying a reference preserves its target rather than copying the target. Mutable-reference aliases are permitted; Rust-style exclusive mutable borrowing is not the accepted model. A reference promises a valid resource at use. Ordinary mutation is permitted through other authorized access; destruction, replacement, relocation, and container operations that invalidate a referenced element must be checked against all still-used references. References to a vector object and references to its elements have different invalidation dependencies. Last-use analysis, not merely lexical scope, determines reference use. Reference fields are supported; dependencies survive packaging, copying, moves, returns, and collection storage. No user lifetime parameters in this implementation stage. A returned reference conservatively depends on the reference arguments; refine summaries where feasible. Self-referential object creation is excluded until stable storage and movement are specified.
+
+Raw `ptr` is unsafe, `ref` is safe. There is no `unsafe` keyword or block. Ordinary casts cannot manufacture a safe reference from arbitrary raw bits or a raw pointer. Code using raw pointer operations is responsible for preserving any live safe-reference contract.
+
+### Structures and creation
+
+All fields, methods, and factories are `private` by default; `public` and `private` apply to each. No inheritance, `protected`, or separate `impl` blocks. An explicitly public field can be changed through mutable access; its author is responsible for the exposed invariant. Receivers are written `this`, not `self`, with explicit `ref Type` or `ref mut Type` types.
+
+```
+struct Buffer {
+    data: ptr u8;
+    size: u64;
+
+    public new(size: u64): Buffer {
+        return { data: primitive alloc(size), size: size };
+    }
+
+    public fn length(this: ref Buffer): u64 {
+        return this.size;
+    }
+
+    destructor {
+        primitive free(this.data);
+    }
+}
+```
+
+`Buffer.new(...)` invokes a factory. An object literal `{ field: expression, ... }` inside the type's factory assembles the value directly without recursively invoking that factory. No `init` keyword and no general external `Buffer { ... }` construction. Every field is initialized exactly once; no accessible partially initialized `this`. Only the type's factories can assemble fields. Overload `new` by parameter types; named factories are ordinary receiverless methods that invoke `new`. Do not synthesize an unrestricted factory. Generic type factory calls use `std.vector<i32>.new()`; type parsing must handle nesting without changing maximal-munch operator tokenization.
+
+The factory may return an ordinary result carrying an error. Its failure path destroys already-created locals and temporaries. Fields evaluate in written order. Assembly from prepared fields introduces no independent hidden failure. Construction directly in final storage does not require copying or moving a pre-existing value. Temporaries last through their containing expression; saving a reference to a temporary for later use is rejected.
+
+### Copying, moving, assignment
+
+Ordinary initialization from an existing value and plain assignment copy; there is no implicit move. User `clone` implements the copying protocol; a separate `clone` keyword is unnecessary. A type may support either, both, or neither `Clonable` and `Movable`. Do not require repetitive explicit trait lists on every type. Simple structural copying is generated when fields permit it and there is no user destructor. A destructor disables automatic shallow copying, not automatic movement. `unique<T>` is not clonable; consequently neither is `vector<unique<T>>` without another explicit resource-copying contract.
+
+`move value` transfers a whole value and leaves its source uninitialized, rather than invoking a user-defined move method or requiring an empty state. `const` values can move; they cannot be reinitialized. Movability is checked independently of clonability and reference invalidation. Partial field moves are not supported in this stage.
+
+Assignment prepares the RHS before destroying the previous destination, then installs the new value. Reject a new value that would retain a safe reference to the destroyed destination. `a = a` copies before replacement; `a = move a` is an error. Plain `=` chains associate right to left and remain statement-only. Outward links copy the inner assigned value; a chain requiring a copy of a non-clonable owner must be rejected. Associativity does not replace explicit evaluation/cleanup ordering.
+
+### Destruction
+
+Destruction is universal, not an optional `Droppable` implementation. Optional `destructor { ... }` adds user cleanup. Run its body, then destroy owned fields in reverse declaration order. Locals are destroyed in reverse order of successful initialization on fallthrough, `return`, `break`, and `continue`. Prepare a returned value before local cleanup. By-value parameters belong to the callee unless moved out. Destroy global owners in reverse initialization order after normal `main` completion. Traps, `abort`, and immediate `exit` do not unwind.
+
+The language does not prescribe the order in which a container destroys its elements: that belongs to std or the particular collection. A destructor must not move the entire dying `this` or leak a safe reference to it. Forgetting a user destructor must not disable automatic field destruction. Manually managed raw pointers still require a correct manual resource contract.
+
+### Architecture and remaining layout decisions
+
+Introduce a typed representation of storage places and initialization/copy/move/borrow/destroy operations before expanding parser-side cleanup logic. Lower cleanup to ordinary calls and CFG edges, not a backend-specific RAII mechanism. Extend semantic types with named generic applications and references. Resolve representation, allocation size/stride, addressable fields and elements, and aggregate call/return lowering before implementing vector storage; do not encode the interpreter's region/index layout in pure-erax pointer arithmetic. Concrete memory/layout changes may require JIR and reference-interpreter work but no VM/AoT development.
+
+Safe generic containers must invoke user element destruction/copy operations, so replace the obsolete std rule forbidding every call into user code with protocol-based composition. Specify how library raw-storage operations establish and invalidate safe element references before claiming memory safety. Explicit opt-out syntax for automatically inferred capabilities, non-relocatable storage, and precise reference-field effect summaries remain design work.
+
 ## Beyond v1 (future work)
 
 Source-level additions that are out of scope for v1 — listed here so the language contract (`docs/core/`) stays scope-clean:
 
-- `?:` (ternary), optional chaining (`?.`), spread (`...`), ranges, `::` namespace resolution (dots remain the namespace syntax), `const`/immutability, implicit widening.
+- `?:` (ternary), optional chaining (`?.`), spread (`...`), ranges, `::` namespace resolution (dots remain the namespace syntax), implicit widening.
 - Short-circuit `&&` / `||` — v1 evaluates both operands (see `docs/core/expressions.md`). It needs an op the current table has none of (a conditional-jump or select form), so it is a `.jir` version bump.
 - An `unreachable code` diagnostic — v1 parses dead code, checks it, and drops it.
 - Strings and string literals, floats — and with them string support in the stdlib (`std.print`); v0.1 std lives in `stdlib/std.erx` already (`docs/std.md`). `examples/helloworld.erx` is aspirational on `string`.
 - Machine-level futures — arrays/indices, references, objects/classes, closures — live in the JIR section below. Raw pointers (`ptr T`, `&`, `*`) and the `alloc`/`free` heap are implemented.
-- **`const` / immutability.** v1 has no `const` keyword and no immutable binding: `let` declares a local or global whose initializer may or may not be a constant expression, and it stays assignable (`a = 2;`). There is no way to *say* a name must never change, which is the thing a constant expression is otherwise so careful about. See `docs/core/types.md#constants` for what "constant" currently means.
 - **A `char` suffix.** `char` is a type name and `is_integer(char)` holds, but it is not a literal suffix (`types.md#literals`), so a *constant* `char` expression cannot be written: `let x: char = 255 / 16;` is an `i32` division in a `char` position. `(255 / 16) as char` already spells the value (`types.md#casts`), but only a suffix makes the arithmetic itself read as `char` arithmetic instead of `i32` ending in a cast — adding `char` to the suffix set closes that.
 - **Literal / singleton types.** `let b: i32 = 0;` gives `b` the type `i32`, not the value `0`. A type system that tracked the value — so `b` has type `0` and a later `b = 2` is an error until the use — would catch the divide-by-a-literal-zero and the accidental-overflow class of bug at compile time instead of at the trap, and it is the natural end state of the constants work in `types.md#constants`. It costs a real type-inference term and is far past v1.
-- **More template machinery.** v1 templates (`docs/core/statements.md#templates`) are deliberately minimal: **one template per name**, type arguments **always deduced**, and a **closed** three-capability bound vocabulary (`docs/core/types.md#capabilities`). Each extension has a cost. A second template per name needs a rule for which one a call picks — v1 says the name decides, and a concrete declaration that matches exactly wins. **Explicit instantiation** (`f<u8>(x)`) reopens the ambiguity that kept it out: `a < b > (c)` is an unknown-operator error today (`docs/core/language.md#operator-set`), and making it a call needs either a `::`-style token (banned — dots are the namespace syntax) or a grammar rule the language does not have. A **wider capability vocabulary** veers into a full interface system — `Equatable`, `Bitwise`, ordering beyond `<`, and user-declarable bounds and the types that name them — which is real type-system work well past v1.
+- **More template machinery.** v1 templates (`docs/core/statements.md#templates`) are deliberately minimal: **one template per name**, type arguments **always deduced**, and a **closed** capability bound vocabulary (`docs/core/types.md#capabilities`). Each extension has a cost. A second template per name needs a rule for which one a call picks — v1 says the name decides, and a concrete declaration that matches exactly wins. **Explicit instantiation** (`f<u8>(x)`) reopens the ambiguity that kept it out: `a < b > (c)` is an unknown-operator error today (`docs/core/language.md#operator-set`), and making it a call needs either a `::`-style token (banned — dots are the namespace syntax) or a grammar rule the language does not have. A **wider capability vocabulary** veers into a full interface system — `Equatable`, `Bitwise`, ordering beyond `<`, and user-declarable bounds and the types that name them — which is real type-system work well past v1.
 - **Definition-time template body checking.** v1 type-checks a template's body **once per instantiation**, against the deduced concrete type. A better design checks it **once, against the bound**, so a body that uses an operator the bound does not promise is an error at the declaration, not at the first call. That needs the checker to reason about "some `T` satisfying these capabilities" — a type variable in the type system — which the concrete-per-instantiation pass sidesteps.
 - **Wider integers (`i128`/`i256`) and arbitrary precision.** The question that decides whether it is cheap or not: a *cell* is one 64-bit word in the IR (`JIR.md#types`), so a value wider than a machine word is not one cell, and every assumption below is keyed to a single word. In order of how much it costs:
   1. `Operand::value`, `ConstInt::bits`, and the `EMPTY` sentinel are one `uint64_t` — a value of `2^64` is exactly the case `types.md#constants` classifies as *in no type*.

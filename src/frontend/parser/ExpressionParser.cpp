@@ -543,6 +543,33 @@ namespace erax::frontend {
   ExpressionParser::result ExpressionParser::unary_expression(std::optional<SemType> expected) {
     TokenCursor& cursor = context().cursor;
 
+    if (cursor.at_keyword(Keyword::Move)) {
+      const SourceLocation location = cursor.take().location;
+      if (const_mode_) {
+        return std::unexpected(at("a constant expression may not move a value", location));
+      }
+      auto value = unary_expression(expected);
+      if (!value) {
+        return value;
+      }
+      if (!value->addressable || value->operand.kind != middleend::OperandKind::VReg) {
+        return std::unexpected(at("move needs a local variable or parameter", location));
+      }
+      LocalInfo* source = context().local_at(value->operand.value);
+      if (source == nullptr) {
+        return std::unexpected(at("move needs a local variable or parameter", location));
+      }
+      const Type type = lower(value->type);
+      const auto destination = Operand::vreg(type, context().builder.alloc(type));
+      context().builder.emit(Op::Mov, {destination, value->as_operand()});
+      context().move_local(*source);
+      source->assigned = false;
+      source->moved = true;
+      Value moved {value->type, destination};
+      moved.moved_from = value->operand;
+      return moved;
+    }
+
     // `&x` takes the address of a cell — a local or a global, never a constant or
     // an intermediate — and yields a pointer to its type.
     if (cursor.at_op("&")) {
@@ -757,8 +784,7 @@ namespace erax::frontend {
     SemType return_type;
     std::size_t callee = 0;
     if (deduced) {
-      return_type = tmpl->return_type.param >= 0 ? type_args[static_cast<std::size_t>(tmpl->return_type.param)] :
-                                                   tmpl->return_type.type;
+      return_type = tmpl->return_type.resolve(type_args);
       const auto instantiated = context().instantiate(tmpl, type_args, location);
       if (!instantiated) {
         return std::unexpected(instantiated.error());
@@ -797,22 +823,34 @@ namespace erax::frontend {
     }
     type_args.assign(tmpl->type_params.size(), SemType::Void);
     std::vector<bool> bound(tmpl->type_params.size(), false);
-    for (std::size_t index = 0; index < types.size(); ++index) {
-      const TemplateType& param = tmpl->params[index];
-      if (param.param >= 0) {
-        const std::size_t slot = static_cast<std::size_t>(param.param);
-        if (bound[slot] && type_args[slot] != types[index]) {
-          return ParseError {"cannot deduce '" + tmpl->type_params[slot].name + "' of '" + tmpl->name +
-                                 "': the arguments give " + std::string {to_string(type_args[slot])} + " and " +
-                                 std::string {to_string(types[index])},
+    const auto match = [&](const auto& self, const TemplateType& pattern, const SemType& actual,
+                           std::size_t index) -> std::optional<ParseError> {
+      if (pattern.pointee) {
+        if (!actual.is_pointer()) {
+          return ParseError {"argument " + std::to_string(index + 1) + " of '" + tmpl->name + "' needs a pointer",
                              location};
         }
-        type_args[slot] = types[index];
+        return self(self, *pattern.pointee, *actual.pointee, index);
+      }
+      if (pattern.param >= 0) {
+        const std::size_t slot = static_cast<std::size_t>(pattern.param);
+        if (bound[slot] && type_args[slot] != actual) {
+          return ParseError {"cannot deduce '" + tmpl->type_params[slot].name + "' of '" + tmpl->name +
+                                 "': the arguments give " + to_string(type_args[slot]) + " and " + to_string(actual),
+                             location};
+        }
+        type_args[slot] = actual;
         bound[slot] = true;
-      } else if (types[index] != param.type) {
+      } else if (actual != pattern.type) {
         return ParseError {"argument " + std::to_string(index + 1) + " of '" + tmpl->name + "' is " +
-                               std::string {to_string(param.type)} + ", not " + std::string {to_string(types[index])},
+                               to_string(pattern.type) + ", not " + to_string(actual),
                            location};
+      }
+      return std::nullopt;
+    };
+    for (std::size_t index = 0; index < types.size(); ++index) {
+      if (auto error = match(match, tmpl->params[index], types[index], index)) {
+        return error;
       }
     }
     for (std::size_t slot = 0; slot < tmpl->type_params.size(); ++slot) {
@@ -1012,9 +1050,12 @@ namespace erax::frontend {
     // A local can only be reached by a bare, unqualified name.
     if (ns == nullptr) {
       if (const LocalInfo* local = context().find_local(leaf)) {
-        if (!local->assigned) {
-          return std::unexpected(at("'" + leaf + "' is read before it is assigned", location));
+        if (!local->assigned && !context().deferred_local_reads) {
+          return std::unexpected(
+              at("'" + leaf + (local->moved ? "' is used after it was moved" : "' is read before it is assigned"),
+                 location));
         }
+        context().read_local(*local, location);
         return Value {local->sem_type, Operand::vreg(local->type, local->vreg), std::nullopt, true};
       }
     }

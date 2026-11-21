@@ -4,15 +4,36 @@ The statement grammar is in `language.md#grammar`; this file gives each statemen
 
 ## Statements
 
-- **`let`.** Declares a variable in the current scope; the name must not already exist in that scope (shadowing an outer scope is allowed). Without an initializer, the variable must receive a **guaranteed assignment before any read** (definite assignment — a compile-time check over all paths; see `language.md#semantics`). An initializer that reads the variable itself (`let x: i32 = x;`) is an error.
-- **Assignment.** `lvalue op expr`; `lvalue` is a variable or global declared in an enclosing (or the same) scope — or a **cell read through a pointer**, `*p` (`lvalue = "*" expr | qualified-name` in the grammar). `a += 1` reads `a`, writes it, and is equivalent to `a = a + 1` (so `a` must already be definite-assigned). A **deref assignment** is the same shape on the pointed-to cell: `*p = v` writes the pointee (`v` typed against it — a lone literal takes the pointee's type), and `*p += 2` is the read-modify-write, `LOAD`, the operator, `STORE` back through the pointer (`expressions.md#typing-rules`). A compound store needs an integer pointee, like every compound form. Assignments are statements, not expressions — `a = b = c` and `x = (a += 2)` are parse errors, and so is `*p = 1` in an expression position. The definite-assignment check does not track pointers, and it does not need to: `&x` is a *read*, so it demands `x` definite-assigned already, and a pointer store never counts as the write that satisfies a name — `let x: i32; let p: ptr i32 = &x;` is rejected at the `&`.
+- **`let` / `const`.** Declare a variable in the current scope; the name must not already exist in that scope (shadowing an outer scope is allowed). Without an initializer, the variable must receive a **guaranteed assignment before any read** (definite assignment — a compile-time check over all paths; see `language.md#semantics`). An initializer that reads the variable itself (`let x: i32 = x;`) is an error.
+- **Assignment.** `lvalue op expr`; `lvalue` is a variable or global declared in an enclosing (or the same) scope — or a **cell read through a pointer**, `*p` (`lvalue = "*" expr | qualified-name` in the grammar). `a += 1` reads `a`, writes it, and is equivalent to `a = a + 1` (so `a` must already be definite-assigned). A **deref assignment** is the same shape on the pointed-to cell: `*p = v` writes the pointee (`v` typed against it — a lone literal takes the pointee's type), and `*p += 2` is the read-modify-write, `LOAD`, the operator, `STORE` back through the pointer (`expressions.md#typing-rules`). A compound store needs an integer pointee, like every compound form. Assignments are statements, not expressions. Plain `=` chains associate right to left: `a = b = c` assigns `c` to `b`, then copies the assigned value to `a`. A compound assignment cannot be a link of a chain. `x = (a += 2)` is a parse error, and so is `*p = 1` in an expression position. The definite-assignment check does not track pointers, and it does not need to: `&x` is a *read*, so it demands `x` definite-assigned already, and a pointer store never counts as the write that satisfies a name — `let x: i32; let p: ptr i32 = &x;` is rejected at the `&`.
 - **Expression statements.** Any expression may be a statement; its value is discarded (`x;`, `5;`, `foo();`). Assignment forms are the idiomatic way to get a mutation.
 - **`primitive`.** A `primitive` call is an ordinary expression statement like any other (`primitive print_char('a');`), with its typing in `expressions.md#typing-rules` and its contracts in `docs/primitive.md`. Two of them, `exit` and `abort`, **end the flow of their block exactly like `return`**: nothing after them runs, and in a non-void function a path that ends in one satisfies the reaching-return check without a `return`.
 - **`return`.** In a non-void function, `return expr` on every path (reaching-return check) with `expr` of exactly the return type. In a void function, `return;` or falling off the end. `return expr` in a void function is an error.
 - **`if` / `else`.** The condition (`condition` in the grammar) must be `bool`. `else` binds to the nearest `if`; `else if` is spelling for a nested `if`.
-- **`while` / `do` / `for`.** Conditions (`condition` in the grammar) are `bool`. `for` is C-shaped: `for (init; cond; step)` — *init* is a `let` (scoped to the loop; `= expr` is optional, as with any `let`) or an assignment (a named one or a deref store, `*p = v;`), *cond* is `bool`, *step* is any expression or an assignment, including a deref store/compound (`for (i = 0; i < n; *p = *p + i)` is allowed). All three clauses are optional (a bare `for(;;)` is an infinite loop).
+- **`while` / `do` / `for`.** Conditions (`condition` in the grammar) are `bool`. `for` is C-shaped: `for (init; cond; step)` — *init* is a `let` or `const` declaration (scoped to the loop; `= expr` is optional, as with any `let`) or an assignment (a named one or a deref store, `*p = v;`), *cond* is `bool`, *step* is an assignment, including a deref store/compound (`for (i = 0; i < n; *p = *p + i)` is allowed). All three clauses are optional (a bare `for(;;)` is an infinite loop).
 - **`break` / `continue`.** Legal only inside a loop body (dynamically nested in `while`/`do`/`for`); `break` in a non-loop is an error. In the example, `break` inside an `if` inside a `for` is fine.
 - **Unreachable code is dropped, not rejected.** A statement that cannot execute — one after a `return` or after a terminating `primitive exit`/`abort`, or one in a loop whose body never falls through — is still parsed and fully checked, but it produces no code: the IR drops the blocks no edge can reach (see `docs/middleend/JIR.md`).
+
+## Bindings and moves
+
+A declaration chooses rebinding independently of object mutation:
+
+```
+const n = 7;
+const mut fixed = 7;
+let value = 7;
+let mut mutable_value = 7;
+```
+
+`const` requires an initializer and prohibits any subsequent assignment to the binding, including compound assignment. `let` can be assigned and can omit its initializer when its type is written. `mut` records permission to mutate the bound object; it does not permit rebinding a `const`. Scalar assignment and scalar compound assignment replace the binding's value and follow the `let`/`const` rule. Raw pointer operations do not gain safety or pointee immutability from a binding modifier.
+
+A local's annotation is optional when it has an initializer. Without an annotation, an unsuffixed literal is `i32`; all other initializers keep their expression type. `void` cannot be a variable's type. A local name becomes visible after its initializer, so the initializer may read a shadowed outer variable.
+
+`move value` consumes an initialized local variable or parameter, materializes its bits in a fresh cell, and leaves its source uninitialized. It neither empties nor mutates the source value. Reading the source again is a compile-time error until a `let` is assigned a new value. Moving a `const` is legal but assigning a new value to that binding is not. A global, literal, computed temporary, or dereference is not an operand of `move`. `value = move value` is rejected. Moving a raw pointer transfers only its bits: it does not make that pointer a resource owner.
+
+Each branch is checked from its own incoming state. Only paths reaching the join contribute to the outgoing state. A folded condition chooses its path. Loop back edges must not read a value consumed on an earlier iteration without reinitializing it. The CFG initialization analysis also checks condition, step, and `continue` paths.
+
+A plain assignment chain has no expression value. Its rightmost destination supplies the contextual type for the RHS, and each outward link must have that same type. The compiler finishes the inner assignment before storing the outer copy. Dereference targets and namespace-qualified globals are allowed in a chain.
 
 ## Functions
 
@@ -38,6 +59,7 @@ fn abs<T extends Ordered & Negatable>(val: T): T {
 ```
 
 - A type parameter may carry a **bound**: one or more capabilities joined by `&` (`types.md#capabilities`). The bound is what the template promises about `T`; a type that does not satisfy it cannot instantiate the template, and the call is rejected (`expressions.md#typing-rules`).
+- Parameter and return types may nest a type variable under pointers: `ptr T`, `ptr ptr T`. Deduction recursively matches the pointer shape and binds its leaf; substitution reconstructs the complete parameter and return type.
 - **Every type parameter must appear in a parameter type.** A parameter list that never names `T` gives deduction nothing to work from, so `fn make<T>(): T` is an error at the declaration — `type parameter 'T' of 'make' is not in the parameters`.
 - **A name carries at most one template** (v1), and may carry concrete declarations beside it. On a call, a concrete declaration that matches the argument types exactly is chosen first; the template is the fallback (`expressions.md#typing-rules`). This is what lets `print<T>` sit beside an ordinary `print(char)`.
 - **A template is monomorphized.** There are no templates in the IR: each distinct set of type arguments **instantiates** an ordinary function (same name, concrete parameter and return types), and calls lower to a `CALL` to it (`language.md#machine-level-contract`). An instantiation is reused for every call that deduces the same type arguments, so a template that calls itself with the same types is ordinary recursion.
@@ -46,14 +68,14 @@ fn abs<T extends Ordered & Negatable>(val: T): T {
 
 ## Globals
 
-A `global` is a top-level `let` with a required, explicitly written initializer:
+A `global` is a top-level `let` or `const` with a required type annotation and constant initializer:
 
 ```
 let counter: i64 = 0;
 let multiplier: i32 = 2 + 3;
 ```
 
-There is **no implicit zero**: every global must be given its starting value in the source. Backends still zero the storage before running init code (that is an implementation detail of JIR); the language contract is that a global's value is the one its initializer wrote, in declaration order, before `main` runs. Globals are writable at runtime (`counter = counter + 1;`).
+There is **no implicit zero**: every global must be given its starting value in the source. Backends still zero the storage before running init code (that is an implementation detail of JIR); the language contract is that a global's value is the one its initializer wrote, in declaration order, before `main` runs. `let` globals are writable at runtime (`counter = counter + 1;`); `const` globals cannot be rebound.
 
 ## Namespaces
 
