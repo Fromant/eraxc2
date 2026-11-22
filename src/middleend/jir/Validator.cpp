@@ -532,6 +532,17 @@ namespace erax::middleend {
             need_pointer(body, at, command, 1, command.args[0].type);
             break;
           }
+          case Op::Offset: {
+            need_kind(body, at, command, 0, OperandKind::VReg, "the result");
+            need_value(body, at, command.args[1], "the pointer");
+            need_value(body, at, command.args[2], "the cell index");
+            if (!command.args[1].type.is_pointer()) {
+              report(body, at, "OFFSET needs a pointer source");
+            }
+            need_same_type(body, at, command, 0, 1);
+            need_type(body, at, command, 2, Type::U64);
+            break;
+          }
           case Op::Store: {
             // `Store` has no result: args[0] is the pointer, args[1] the value.
             need_value(body, at, command.args[0], "the pointer");

@@ -2,6 +2,7 @@
 
 These small programs show what erax looks like today (v1). They only use features the parser/JIR implement, so they lower cleanly with `--jir` and run by default (no flag).
 
+- `raii.erx` -- `vector<unique<Resource>>`: owned elements survive buffer relocation and return-by-move, then destroy exactly once.
 - `entry.erx` -- The entrypoint returns an exit code (`i32`). No globals.
 - `globals.erx` -- A global initialized by a constant `0`; `1` and `2` are added/multiplied in the function.
 - `sum_to_ten.erx` -- A `for` loop: the test is a real branch, so the JIR gets `CMP_LT` and four blocks.

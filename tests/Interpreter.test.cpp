@@ -908,3 +908,54 @@ TEST_CASE("the allocator carves up a freed block") {
   CHECK(code_of("fn main(): i32 { let p: ptr u8 = primitive alloc(40); primitive free(p);"
                 " let q: ptr u8 = primitive alloc(56); if (q != p) { return 1; } return 0; }") == 1);
 }
+TEST_CASE("offset indexes cells inside one live heap allocation") {
+  CHECK(code_of("fn main(): i32 { let p = primitive alloc(24); let q = primitive offset(p, 2); "
+                "*q = 42; let r = primitive offset(p, 1); *r = 7; "
+                "return (*q as i32) + (*r as i32); }") == 49);
+  CHECK(code_of("fn main(): i32 { let p = primitive alloc(8); "
+                "if (p == primitive offset(p, 0)) { return 1; } return 0; }") == 1);
+  for (const auto distance : {"1", "18446744073709551615u64"}) {
+    auto outcome = execute(std::string("fn main(): i32 { let p = primitive alloc(8); let q = primitive alloc(8); ") +
+                           "primitive offset(p, " + distance + "); return 0; }");
+    REQUIRE_FALSE(outcome.has_value());
+    CHECK(std::get<Trapped>(outcome.error()).trap == Trap::InvalidPointer);
+  }
+  auto freed =
+      execute("fn main(): i32 { let p = primitive alloc(8); primitive free(p); primitive offset(p, 0); return 0; }");
+  REQUIRE_FALSE(freed.has_value());
+  CHECK(std::get<Trapped>(freed.error()).trap == Trap::InvalidPointer);
+  auto null = execute("fn main(): i32 { primitive offset(0 as ptr u8, 0); return 0; }");
+  REQUIRE_FALSE(null.has_value());
+  CHECK(std::get<Trapped>(null.error()).trap == Trap::InvalidPointer);
+  auto adjacent_global = execute("let a: u8 = 1; let b: u8 = 2; fn main(): i32 { primitive offset(&a, 1); return 0; }");
+  REQUIRE_FALSE(adjacent_global.has_value());
+  CHECK(std::get<Trapped>(adjacent_global.error()).trap == Trap::InvalidPointer);
+}
+
+TEST_CASE("the offset instruction uses the same checked address operation as the primitive") {
+  Program program = lower(
+      "fn main(): i32 { let p = primitive alloc(16); let q = primitive offset(p, 1); *q = 42; return *q as i32; }");
+  bool replaced = false;
+  for (auto& block : program.functions[0].cfg.blocks) {
+    for (auto& command : block.commands) {
+      if (command.op == Op::Primitive && command.prim == 7) {
+        command.op = Op::Offset;
+        command.prim = 0;
+        replaced = true;
+      }
+    }
+  }
+  REQUIRE(replaced);
+  const auto outcome = erax::interp::run(program);
+  REQUIRE(outcome.has_value());
+  CHECK(outcome->code == 42);
+}
+
+TEST_CASE("earlier primitive and binary operands are read before later side effects") {
+  const auto printed = execute("let g: i32 = 1; fn change(): i32 { g = 2; return 0; } "
+                               "fn main(): i32 { primitive print(g, change()); return 0; }");
+  REQUIRE(printed.has_value());
+  CHECK(printed->output == "1 0\n");
+  CHECK(code_of("let g: i32 = 1; fn change(): i32 { g = 2; return 0; } "
+                "fn main(): i32 { return g + change(); }") == 1);
+}

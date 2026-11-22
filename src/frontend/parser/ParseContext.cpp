@@ -1,8 +1,11 @@
 #include "ParseContext.hpp"
 
 #include <algorithm>
+#include <limits>
 #include <span>
 #include <utility>
+
+#include "primitives/Primitives.hpp"
 
 namespace erax::frontend {
 
@@ -20,6 +23,11 @@ namespace erax::frontend {
         {"const", Keyword::Const},
         {"mut", Keyword::Mut},
         {"move", Keyword::Move},
+        {"ref", Keyword::Ref},
+        {"struct", Keyword::Struct},
+        {"public", Keyword::Public},
+        {"private", Keyword::Private},
+        {"destructor", Keyword::Destructor},
         {"namespace", Keyword::Namespace},
         {"if", Keyword::If},
         {"else", Keyword::Else},
@@ -135,34 +143,80 @@ namespace erax::frontend {
   }
 
   bool satisfies(SemType type, Capability capability) noexcept {
-    switch (capability) {
-      case Capability::Clonable:
-      case Capability::Movable: return type != SemType::Void;
-      // `Ordered` (`< <= > >=`) and `Arithmetic` (`+ - * / %`) accept the integers
-      // and `char`, which is exactly the set `is_integer` names; `bool` is neither.
-      case Capability::Ordered:
-      case Capability::Arithmetic: return is_integer(type);
-      // Unary `-` needs a negative side, which only a signed integer has.
-      case Capability::Negatable: return is_integer(type) && is_signed(type);
-    }
-    return false;
+    std::vector<const RecordInfo*> visiting;
+    const auto supports = [&](const auto& self, const SemType& candidate) -> bool {
+      if (candidate == SemType::Void) {
+        return false;
+      }
+      if (capability == Capability::Clonable || capability == Capability::Movable) {
+        if (!candidate.is_record()) {
+          return true;
+        }
+        const auto* record = candidate.record;
+        if (!record) {
+          return false;
+        }
+        if (std::ranges::find(visiting, record) != visiting.end()) {
+          return true;
+        }
+        visiting.push_back(record);
+        bool result = true;
+        if (capability == Capability::Clonable && record->methods.contains("clone")) {
+          // A custom copy need not copy every type argument. Its body, including
+          // any actual field copies, is checked when copying is requested.
+        } else if (capability == Capability::Clonable && (!record->auto_clone || record->destructor)) {
+          result = false;
+        } else {
+          for (const auto& field : record->fields) {
+            result = result && self(self, field.type);
+          }
+        }
+        visiting.pop_back();
+        return result;
+      }
+      if (capability == Capability::Negatable) {
+        return is_integer(candidate) && is_signed(candidate);
+      }
+      return is_integer(candidate);
+    };
+    return supports(supports, type);
   }
 
   const Token& TokenCursor::peek(std::size_t ahead) const noexcept {
+    if (ahead == 0) {
+      return current();
+    }
     const std::size_t last = tokens_->size() - 1;
-    const std::size_t index = index_ + ahead;
+    const std::size_t index = index_ + ahead - (residual_ ? 1 : 0);
     return (*tokens_)[index < last ? index : last];
   }
 
   const Token& TokenCursor::take() noexcept {
-    // The token that was consumed, not the one after it: reading a name or a
-    // closing bracket is what the caller asked for.
+    if (residual_) {
+      last_split_ = *residual_;
+      residual_.reset();
+      return last_split_;
+    }
     const Token& consumed = (*tokens_)[index_];
     const std::size_t last = tokens_->size() - 1;
     if (index_ < last) {
       ++index_;
     }
     return consumed;
+  }
+
+  bool TokenCursor::take_type_close() {
+    if (current().type != TokenType::Operator || current().text.empty() || current().text.front() != '>') {
+      return false;
+    }
+    Token token = take();
+    if (token.text.size() > 1) {
+      token.text.erase(0, 1);
+      ++token.location.col;
+      ++token.location.offset;
+      residual_ = std::move(token);
+    }
+    return true;
   }
 
   bool TokenCursor::match(TokenType type) {
@@ -611,7 +665,7 @@ namespace erax::frontend {
     // them out, and every instantiation is appended to the program after all of
     // them. The two are numbered in the same order they are first requested, so the
     // id a call is written with is the index the function ends up at.
-    const std::size_t id = function_count + instantiations_.size();
+    const std::size_t id = function_count++;
     instantiation_ids_.emplace(std::move(key), instantiations_.size());
     instantiations_.push_back(Instantiation {id, tmpl, type_args, false});
     return id;
@@ -621,24 +675,153 @@ namespace erax::frontend {
     type_substitution_ = std::move(substitution);
   }
 
+  std::expected<RecordInfo*, ParseError> ParseContext::declare_record(const std::string& qualified,
+                                                                      SourceLocation location) {
+    if (record_names_.contains(qualified)) {
+      return std::unexpected(ParseError {"'" + qualified + "' is already declared", location});
+    }
+    auto record = std::make_unique<RecordInfo>();
+    record->name = qualified;
+    record->location = location;
+    const auto argument_start = qualified.find('<');
+    const auto base = qualified.substr(0, argument_start);
+    const auto last = base.rfind('.');
+    if (last != std::string::npos) {
+      std::size_t begin = 0;
+      while (begin < last) {
+        const auto dot = base.find('.', begin);
+        record->ns_path.push_back(base.substr(begin, dot - begin));
+        if (dot == last) {
+          break;
+        }
+        begin = dot + 1;
+      }
+    }
+    auto* result = record.get();
+    records_.push_back(std::move(record));
+    record_names_.emplace(qualified, result);
+    return result;
+  }
+
+  RecordInfo* ParseContext::find_record(const std::string& name) const noexcept {
+    for (std::size_t depth = current_namespace().path.size() + 1; depth > 0; --depth) {
+      std::string key;
+      for (std::size_t index = 0; index + 1 < depth; ++index) {
+        key += current_namespace().path[index] + '.';
+      }
+      key += name;
+      if (auto found = record_names_.find(key); found != record_names_.end()) {
+        return found->second;
+      }
+    }
+    return nullptr;
+  }
+
+  std::expected<std::vector<SemType>, ParseError> ParseContext::read_type_arguments(TokenCursor& cursor) const {
+    if (auto open = expect_op(cursor, "<"); !open) {
+      return std::unexpected(open.error());
+    }
+    std::vector<SemType> arguments;
+    do {
+      auto argument = read_type(cursor);
+      if (!argument) {
+        return std::unexpected(argument.error());
+      }
+      arguments.push_back(*argument);
+    } while (cursor.match(TokenType::Comma));
+    if (!cursor.take_type_close()) {
+      return std::unexpected(ParseError {"expected '>' after type arguments", cursor.location()});
+    }
+    return arguments;
+  }
+
+  std::expected<SemType, ParseError> ParseContext::resolve_type(const TemplateType& type,
+                                                                const std::vector<SemType>& args,
+                                                                SourceLocation location) const {
+    if (type.pointee) {
+      auto pointee = resolve_type(*type.pointee, args, location);
+      if (!pointee) {
+        return pointee;
+      }
+      return type.reference ? SemType::reference(*pointee, type.mutable_reference) : SemType::pointer(*pointee);
+    }
+    if (type.param >= 0) {
+      return args[static_cast<std::size_t>(type.param)];
+    }
+    if (type.record_template) {
+      std::vector<SemType> arguments;
+      for (const auto& pattern : type.arguments) {
+        auto argument = resolve_type(pattern, args, location);
+        if (!argument) {
+          return argument;
+        }
+        arguments.push_back(*argument);
+      }
+      if (!record_instantiator) {
+        return std::unexpected(ParseError {"record instantiation is unavailable", location});
+      }
+      auto record = record_instantiator(type.record_template, std::move(arguments), location);
+      if (!record) {
+        return std::unexpected(record.error());
+      }
+      return SemType::record_type(*record);
+    }
+    return type.type;
+  }
+
   std::expected<SemType, ParseError> ParseContext::read_type(TokenCursor& cursor, std::string_view context) const {
-    // While an instantiation's body is parsed, a type parameter names the deduced
-    // concrete type; everywhere else the substitution is empty and this is the
-    // ordinary type read. A pointer recurses, so `ptr T` in a template body reads
-    // the deduced type for its pointee.
     if (cursor.at(TokenType::Identifier)) {
-      if (cursor.current().text == "ptr") {
+      const std::string name = cursor.current().text;
+      if (name == "ptr" || name == "ref") {
         cursor.take();
+        const bool mut = name == "ref" && cursor.at_keyword(Keyword::Mut);
+        if (mut) {
+          cursor.take();
+        }
         auto pointee = read_type(cursor, context);
         if (!pointee) {
           return pointee;
         }
-        return SemType::pointer(*pointee);
+        return name == "ref" ? SemType::reference(*pointee, mut) : SemType::pointer(*pointee);
       }
-      const auto found = type_substitution_.find(cursor.current().text);
-      if (found != type_substitution_.end()) {
+      if (const auto found = type_substitution_.find(name);
+          found != type_substitution_.end() && !cursor.peek().text.starts_with("<")) {
         cursor.take();
         return found->second;
+      }
+      auto scan = cursor;
+      std::string qualified = scan.take().text;
+      RecordInfo* record = find_record(qualified);
+      auto end = scan;
+      while (scan.at(TokenType::Dot) && scan.peek().type == TokenType::Identifier) {
+        scan.take();
+        qualified += '.' + scan.take().text;
+        if (auto* found = find_record(qualified)) {
+          record = found;
+          end = scan;
+        }
+      }
+      if (record) {
+        cursor = end;
+        if (cursor.at_op("<")) {
+          auto arguments = read_type_arguments(cursor);
+          if (!arguments) {
+            return std::unexpected(arguments.error());
+          }
+          if (!record_instantiator) {
+            return std::unexpected(ParseError {"record instantiation is unavailable", cursor.location()});
+          }
+          auto instance = record_instantiator(record, std::move(*arguments), cursor.location());
+          if (!instance) {
+            return std::unexpected(instance.error());
+          }
+          return SemType::record_type(*instance);
+        }
+        if (!record->type_params.empty()) {
+          return std::unexpected(
+              ParseError {"generic type '" + record->name + "' needs type arguments", cursor.location()});
+        }
+        return SemType::record_type(record);
       }
     }
     return expect_type(cursor, context);
@@ -651,11 +834,60 @@ namespace erax::frontend {
     }
     info.flow_id = local_names_.size();
     local_names_.push_back(name);
+    origin_generations_.push_back(0);
+    interior_generations_.push_back(0);
+    origin_alive_.push_back(true);
+    if (info.parameter && type_has_references(info.sem_type) && info.origins.empty()) {
+      info.origins.push_back(make_origin(info.flow_id, true, false));
+    }
+    if (info.sem_type.is_record()) {
+      info.live_flag = middleend::Operand::vreg(middleend::Type::I8, builder.alloc(middleend::Type::I8));
+      builder.emit(middleend::Op::Mov, {*info.live_flag, middleend::Operand::instant(middleend::Type::I8, 0)});
+      if (!info.assigned) {
+        builder.emit(middleend::Op::Mov,
+                     {middleend::Operand::vreg(info.type, info.vreg), middleend::Operand::instant(info.type, 0)});
+      }
+    }
+    scope.declaration_order.push_back(name);
     scope.locals.emplace(name, info);
     if (info.assigned) {
       initialize_local(info);
     }
     return {};
+  }
+
+  FunctionInfo* ParseContext::function_by_id(std::size_t id) noexcept {
+    const auto find = [&](const auto& self, NameSpace& ns) -> FunctionInfo* {
+      for (auto& [name, overloads] : ns.functions) {
+        for (auto& function : overloads) {
+          if (function.id == id) {
+            return &function;
+          }
+        }
+      }
+      for (auto& [name, child] : ns.namespaces) {
+        if (auto* function = self(self, *child)) {
+          return function;
+        }
+      }
+      return nullptr;
+    };
+    if (auto* function = find(find, root_namespace_)) {
+      return function;
+    }
+    for (auto& record : records_) {
+      for (auto& [name, overloads] : record->methods) {
+        for (auto& method : overloads) {
+          if (method.function.id == id) {
+            return &method.function;
+          }
+        }
+      }
+      if (record->destructor && record->destructor->function.id == id) {
+        return &record->destructor->function;
+      }
+    }
+    return nullptr;
   }
 
   void ParseContext::push_scope() {
@@ -679,6 +911,10 @@ namespace erax::frontend {
   void ParseContext::pop_scope() {
     // Nothing in a closed scope is live afterwards, so its cells are reusable.
     // The frame keeps its high-water mark: its size is a compile-time constant.
+    for (const auto& [name, local] : scopes_.back().locals) {
+      record_invalidation(local.flow_id, false);
+      origin_alive_[local.flow_id] = false;
+    }
     builder.recycle(scopes_.back().vreg_high_water);
     scopes_.pop_back();
   }
@@ -692,7 +928,9 @@ namespace erax::frontend {
     const std::size_t depth = scopes < scopes_.size() ? scopes : scopes_.size();
     for (std::size_t index = 0; index < depth; ++index) {
       for (auto& entry : scopes_[index].locals) {
-        snapshot.flags.push_back({&entry.second, entry.second.assigned, entry.second.moved});
+        snapshot.flags.push_back({&entry.second, entry.second.assigned, entry.second.moved, entry.second.origins,
+                                  origin_generations_[entry.second.flow_id],
+                                  interior_generations_[entry.second.flow_id]});
       }
     }
     return snapshot;
@@ -702,6 +940,14 @@ namespace erax::frontend {
     for (const auto& entry : before.flags) {
       entry.local->assigned = entry.local->assigned && entry.assigned;
       entry.local->moved = entry.local->moved || entry.moved;
+      for (const auto& origin : entry.origins) {
+        if (std::ranges::find(entry.local->origins, origin) == entry.local->origins.end()) {
+          entry.local->origins.push_back(origin);
+        }
+      }
+      origin_generations_[entry.local->flow_id] = std::max(origin_generations_[entry.local->flow_id], entry.generation);
+      interior_generations_[entry.local->flow_id] =
+          std::max(interior_generations_[entry.local->flow_id], entry.interior_generation);
     }
   }
 
@@ -709,6 +955,9 @@ namespace erax::frontend {
     for (const auto& entry : snapshot.flags) {
       entry.local->assigned = entry.assigned;
       entry.local->moved = entry.moved;
+      entry.local->origins = entry.origins;
+      origin_generations_[entry.local->flow_id] = entry.generation;
+      interior_generations_[entry.local->flow_id] = entry.interior_generation;
     }
   }
 
@@ -718,16 +967,29 @@ namespace erax::frontend {
   }
 
   void ParseContext::initialize_local(const LocalInfo& local) {
+    if (local.live_flag) {
+      builder.emit(middleend::Op::Mov, {*local.live_flag, middleend::Operand::instant(middleend::Type::I8, 1)});
+    }
     local_events_.push_back({(builder.terminated() ? builder.open_block() : builder.current()), local.flow_id,
                              LocalEvent::Kind::Initialize, local.location});
   }
 
-  void ParseContext::move_local(const LocalInfo& local) {
+  void ParseContext::move_local(LocalInfo& local) {
+    if (local.live_flag) {
+      builder.emit(middleend::Op::Mov, {*local.live_flag, middleend::Operand::instant(middleend::Type::I8, 0)});
+    }
+    record_invalidation(local.flow_id, false);
+    ++origin_generations_[local.flow_id];
+    ++interior_generations_[local.flow_id];
+    local.origins.clear();
     local_events_.push_back({(builder.terminated() ? builder.open_block() : builder.current()), local.flow_id,
                              LocalEvent::Kind::Move, local.location});
   }
 
   std::expected<void, ParseError> ParseContext::check_local_flow() const {
+    if (cleanup_error_) {
+      return std::unexpected(*cleanup_error_);
+    }
     const auto& blocks = builder.cfg().blocks;
     if (blocks.empty()) {
       return {};
@@ -802,6 +1064,60 @@ namespace erax::frontend {
         }
       }
     }
+    if (!loans_.empty()) {
+      std::vector<std::vector<const LoanEvent*>> reference_events(blocks.size());
+      for (const auto& event : loan_events_) {
+        reference_events[event.block].push_back(&event);
+      }
+      std::vector<std::vector<bool>> loan_in(blocks.size(), std::vector<bool>(loans_.size(), true));
+      auto loan_out = loan_in;
+      const auto apply = [&](const LoanEvent& event, std::vector<bool>& state) {
+        if (event.kind == LoanEvent::Kind::Borrow) {
+          state[event.subject] = true;
+        } else if (event.kind == LoanEvent::Kind::Invalidate || event.kind == LoanEvent::Kind::InvalidateInterior) {
+          for (std::size_t loan = 0; loan < loans_.size(); ++loan) {
+            if (loans_[loan].root == event.subject && loans_[loan].external == event.external &&
+                (event.kind == LoanEvent::Kind::Invalidate || loans_[loan].interior)) {
+              state[loan] = false;
+            }
+          }
+        }
+      };
+      do {
+        changed = false;
+        for (std::size_t id = 0; id < blocks.size(); ++id) {
+          if (!reachable[id]) {
+            continue;
+          }
+          std::vector<bool> state(loans_.size(), id != 0);
+          for (const auto parent : predecessors[id]) {
+            for (std::size_t loan = 0; loan < loans_.size(); ++loan) {
+              state[loan] = state[loan] && loan_out[parent][loan];
+            }
+          }
+          loan_in[id] = state;
+          for (const auto* event : reference_events[id]) {
+            apply(*event, state);
+          }
+          if (state != loan_out[id]) {
+            loan_out[id] = std::move(state);
+            changed = true;
+          }
+        }
+      } while (changed);
+      for (std::size_t id = 0; id < blocks.size(); ++id) {
+        if (!reachable[id]) {
+          continue;
+        }
+        auto state = loan_in[id];
+        for (const auto* event : reference_events[id]) {
+          if (event->kind == LoanEvent::Kind::Read && !state[event->subject]) {
+            return std::unexpected(ParseError {"reference may be invalidated on a control-flow path", event->location});
+          }
+          apply(*event, state);
+        }
+      }
+    }
     return {};
   }
 
@@ -812,6 +1128,13 @@ namespace erax::frontend {
     local_events_.clear();
     local_names_.clear();
     deferred_local_reads = false;
+    temporaries_.clear();
+    loans_.clear();
+    loan_events_.clear();
+    origin_generations_.clear();
+    interior_generations_.clear();
+    origin_alive_.clear();
+    cleanup_error_.reset();
   }
 
 }  // namespace erax::frontend

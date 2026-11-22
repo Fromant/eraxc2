@@ -8,7 +8,7 @@ namespace erax::primitives {
 
     /// The catalog itself, in id order: the index of a row *is* its id, which is
     /// what `by_id` and the `.jir` format rely on.
-    constexpr std::array<Signature, 7> table {{
+    constexpr std::array<Signature, 8> table {{
         {Prim::Print, "print", {}, 0, SigType::Void, true, false},
         {Prim::PrintChar, "print_char", {SigType::Char}, 1, SigType::Void, false, false},
         {Prim::ReadChar, "read_char", {}, 0, SigType::I32, false, false},
@@ -16,6 +16,7 @@ namespace erax::primitives {
         {Prim::Abort, "abort", {}, 0, SigType::Void, false, true},
         {Prim::Alloc, "alloc", {SigType::U64}, 1, SigType::Ptr, false, false},
         {Prim::Free, "free", {SigType::Ptr}, 1, SigType::Void, false, false},
+        {Prim::Offset, "offset", {SigType::Ptr, SigType::U64}, 2, SigType::Ptr, false, false},
     }};
 
     template<std::size_t... Index>
@@ -23,7 +24,7 @@ namespace erax::primitives {
       return ((table[Index].id == static_cast<Prim>(Index)) && ...);
     }
 
-    static_assert(table.size() == static_cast<std::size_t>(Prim::Free) + 1,
+    static_assert(table.size() == static_cast<std::size_t>(Prim::Offset) + 1,
                   "every catalog id has exactly one row, and no row has an id of its own");
     static_assert(rows_match_ids(std::make_index_sequence<table.size()> {}));
 

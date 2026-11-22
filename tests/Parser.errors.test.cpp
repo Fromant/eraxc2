@@ -20,7 +20,7 @@ TEST_CASE("a name is a local, a global, or a function") {
   // to a declared namespace is the unknown-namespace error; one that leads to a
   // namespace without the member is undeclared.
   CHECK(parse_error("fn main(): i32 { return a.b(); }") == "unknown namespace 'a'");
-  CHECK(parse_error("fn main(): i32 { let a: i32 = 1; return a.b; }") == "unknown namespace 'a'");
+  CHECK(parse_error("fn main(): i32 { let a: i32 = 1; return a.b; }") == "member access needs a structure, not i32");
   CHECK(parse_error("namespace a { } fn main(): i32 { return a.b(); }") == "call to undeclared function 'a.b'");
   CHECK(parse_error("namespace a { } fn main(): i32 { return a.b.c; }") == "unknown namespace 'a.b'");
   CHECK(parse_error("fn a.b(): i32 { return 0; } fn main(): i32 { return 0; }") == "expected '('");
@@ -106,7 +106,7 @@ TEST_CASE("a call names a function that exists, or says which one it wanted") {
   // ... and it fires whether or not there are arguments to get wrong first.
   CHECK(parse_error("fn main(): i32 { return nope(1, 2, 3); }") == "call to undeclared function 'nope'");
   // A name that is a local is not a function, so the same message says it is not one.
-  CHECK(parse_error("fn main(): i32 { let f: i32 = 0; return f(); }") == "call to undeclared function 'f'");
+  CHECK(parse_error("fn main(): i32 { let f: i32 = 0; return f(); }") == "value 'f' is not callable");
   // A function that is declared is callable, so this is about the signature instead.
   CHECK(parse_error("fn f(): i32 { return 0; } fn main(): i32 { return f(1); }") != "call to undeclared function 'f'");
   // An overload set with no candidate for these arguments says which ones it saw,

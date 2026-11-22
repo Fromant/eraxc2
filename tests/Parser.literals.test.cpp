@@ -640,6 +640,6 @@ TEST_CASE("a call checks the type of every argument") {
   // A dotted name is a namespace-qualified reference; a dot that does not lead
   // to a namespace is the unknown-namespace error.
   CHECK(parse_error("fn main(): i32 { return a.b(); }") == "unknown namespace 'a'");
-  CHECK(parse_error("fn main(): i32 { let a: i32 = 1; return a.b; }") == "unknown namespace 'a'");
+  CHECK(parse_error("fn main(): i32 { let a: i32 = 1; return a.b; }") == "member access needs a structure, not i32");
   CHECK(parse_error("fn a.b(): i32 { return 0; } fn main(): i32 { return 0; }") == "expected '('");
 }

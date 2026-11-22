@@ -50,6 +50,11 @@ Every operand is `(kind, type, value)` — self-describing; nothing is resolved 
 | `ptr T`        | 8     |
 
 - `bool` lowers to `i8`; `char` lowers to `u8` — it is a `0–255` byte, so its comparisons and its `/ % << >>` are unsigned.
+- Source records lower to an owned `ptr u64` handle to a block of field cells;
+  every field uses one storage cell, including nested record handles. Safe
+  references lower to pointers to the target's lowered cell type. Nominal record
+  identity, reference permissions, initialization and lifetime constraints are
+  checked before lowering; JIR adds no record or reference type kind.
 - `ptr T` is a pointer to a cell holding `T`; the pointee is part of the type (`ptr i32` ≠ `ptr u8`), and a pointer is one word whatever it points at. It is built with `Type::pointer(T)`; it prints `ptr T`; and a `LOAD` reads through it in `T`'s type.
 - No implicit conversions: where an op requires matching types they must match exactly (the validator enforces this).
 
@@ -80,6 +85,15 @@ by the frontend; they do not add opcodes, clear the source cell, or change the
 machine's scalar calling convention. The frontend checks initialization across
 CFG back edges before discarding unreachable blocks.
 
+Factories, methods, clone implementations and destructors are ordinary functions.
+The frontend lowers automatic destruction to calls guarded by initialization
+flags and CFG edges. A record drop wrapper invokes the user destructor, destroys
+owned fields in reverse declaration order, then releases the field block. A
+generated entrypoint wrapper runs ordinary `main`, preserves its result, destroys
+global owners in reverse initialization order, and clears their cells. Immediate
+termination and traps bypass these ordinary control-flow paths. Record global
+initializers may contain calls and have the usual inferred initializer frame.
+
 | Op    | Shape      | Semantics                                                    |
 | ----- | ---------- | ------------------------------------------------------------ |
 | `MOV` | `MOV dst src` | `dst = src` (`src`: instant/vreg/global; `dst`: vreg/global). The only way to read or write a global. |
@@ -96,15 +110,18 @@ A `CAST` to or from a pointer follows the same rule: the operand's pattern is ke
 
 ### Pointers
 
-Three ops move through a pointer. The pointer cell itself is produced by `ADDR` or by `PRIM alloc`; a register/global that holds bit patterns (`0 as ptr i32`, a `ptr` parameter) is an ordinary cell.
+Four ops operate on pointers. The pointer cell itself is produced by `ADDR` or by `PRIM alloc`; a register/global that holds bit patterns (`0 as ptr i32`, a `ptr` parameter) is an ordinary cell.
 
 | Op      | Shape             | Semantics                                                    |
 | ------- | ----------------- | ------------------------------------------------------------ |
 | `LOAD`  | `LOAD dst src`    | `dst = *src`: `src` is a pointer, the result is `src`'s pointee (the validator checks `dst.type == pointee(src.type)`). A read through an address that names no live cell is a trap. |
 | `STORE` | `STORE ptr val`   | `*ptr = val`: no result slot — `args[0]` is the pointer, `args[1]` the value, and the validator checks `pointee(ptr.type) == val.type`. A write through an address that names no live cell is a trap. |
 | `ADDR`  | `ADDR dst src`    | `dst = &src`: `src` is a **vreg or global** lvalue (never a constant or a scratch cell), `dst` is `ptr` to its type. |
+| `OFFSET` | `OFFSET dst ptr index` | Advance by `index: u64` storage cells inside the same live allocation; the result preserves the pointer type. |
 
 A compound store (`*p += v`) is `LOAD` into a temp, the operator, then `STORE` — the same three-instruction shape a named `x += v` has.
+
+`OFFSET dst ptr index` advances a pointer by an unsigned `u64` cell count. `dst` is a vreg of exactly `ptr`'s pointer type. The value width (`size_of`) does not determine the storage stride: every storage slot is one 64-bit cell. The source and result must be live cells in the same allocation, so the operation cannot cross a heap block, source stack frame, or single-cell global. Null, dead, one-past, and overflowing offsets trap. Zero offset preserves a live pointer. The primitive `offset` shares this operation with a `ptr u8` signature (`docs/primitive.md#offset`). Pointer arithmetic therefore needs no knowledge of an executor's address encoding.
 
 ### Integer arithmetic
 

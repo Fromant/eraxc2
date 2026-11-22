@@ -48,6 +48,10 @@ private:
     result cast_expression(std::optional<SemType> expected);
     result unary_expression(std::optional<SemType> expected);
     result primary(std::optional<SemType> expected, bool negated = false);
+    result postfix(Value value);
+    result object_literal(std::optional<SemType> expected);
+    result record_call(RecordInfo& record, const std::string& name, SourceLocation location,
+                       std::optional<Value> receiver = std::nullopt);
 
     /// One level of a left-associative binary operator loop: parse an operand,
     /// then fold in every following operator of that level.
@@ -86,12 +90,13 @@ private:
     /// declarations the name resolved to — the current namespace outward, or the
     /// one namespace a qualified name named.
     result call(const std::string& qualified, const std::vector<FunctionInfo>* candidates, const TemplateInfo* tmpl,
-                SourceLocation location);
+                SourceLocation location, std::vector<Value> arguments = {}, bool implicit_receiver = false);
+    std::size_t last_callee_ = 0;
 
     /// Deduces the template's type arguments from the argument types read so far,
     /// or returns the first error the deduction meets.
     std::optional<ParseError> deduce(const TemplateInfo* tmpl, const std::vector<SemType>& types,
-                                     SourceLocation location, std::vector<SemType>& type_args) const;
+                                     SourceLocation location, std::vector<SemType>& type_args);
 
     /// A `primitive name(…)` call: \p name is looked up in the closed catalog
     /// (`docs/primitive.md#catalog`), the arguments are checked against its

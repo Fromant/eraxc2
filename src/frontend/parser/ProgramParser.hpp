@@ -4,6 +4,8 @@
 #include <expected>
 #include <optional>
 #include <string>
+#include <unordered_set>
+#include <utility>
 #include <vector>
 
 #include "ExpressionParser.hpp"
@@ -66,6 +68,9 @@ private:
       const GlobalInfo* global = nullptr;
       SemType type = SemType::Void;
       middleend::Operand target;
+      std::optional<middleend::Operand> indirect = std::nullopt;
+      bool mutable_object = false;
+      std::optional<Value> place = std::nullopt;
 
       bool is_global() const noexcept {
         return global != nullptr;
@@ -80,12 +85,39 @@ private:
 
     step operator_whitelist();
     step declarations();
+    step discover_records(TokenCursor& cursor, std::vector<std::string> path, bool nested = false);
+    step declare_record(TokenCursor& cursor);
+    step record_members(RecordInfo& record, TokenCursor& cursor);
+    std::expected<RecordInfo*, ParseError> instantiate_record(RecordInfo* record, std::vector<SemType> args,
+                                                              SourceLocation location);
+    step lower_record_methods();
+    step lower_method(RecordInfo& record, MethodInfo& method, bool destructor = false);
+    step generate_drop(RecordInfo& record);
+    step generate_clone(RecordInfo& record);
+    std::unordered_set<std::size_t> generated_members_;
+    std::unordered_map<std::string, RecordInfo*> record_instances_;
+    std::unordered_set<RecordInfo*> materializing_records_;
+    step validate_record_ownership();
+    bool declarations_complete_ = false;
+    std::vector<std::pair<std::size_t, RecordInfo*>> owned_globals_;
+    void generate_entrypoint_cleanup();
     /// The declaration pre-pass over a namespace body: \p top is the program's
     /// top level, which runs to end of file; a nested body stops at its `}`.
     step declarations_in(TokenCursor& cursor, bool top);
     step declare_namespace(TokenCursor& cursor);
     step declare_global(TokenCursor& cursor);
     step declare_function(TokenCursor& cursor);
+    struct EffectSource {
+      std::size_t id = 0;
+      TemplateInfo* tmpl = nullptr;
+      std::vector<std::string> ns_path;
+      std::vector<std::string> names;
+      std::vector<SemType> params;
+      std::size_t body = 0;
+      bool generic_mutable = false;
+    };
+    std::vector<EffectSource> effect_sources_;
+    void infer_function_effects();
     step global();
     step function();
     /// The item pass over a namespace body, mirroring `declarations_in` so the two
@@ -97,19 +129,17 @@ private:
     /// pass, once per instantiation that a call requested.
     step instantiate_function(const Instantiation& inst);
 
-    static std::expected<Signature, ParseError> signature(TokenCursor& cursor);
+    std::expected<Signature, ParseError> signature(TokenCursor& cursor);
     /// Skips a `{ … }` body, brace for brace.
     static step skip_body(TokenCursor& cursor);
 
     step let();
     step assign(const LValue& target);
-    std::expected<Value, ParseError> assignment_rhs(SemType expected);
-    Value last_assignment_;
     /// Resolves an lvalue: a local (one name only) or a global, possibly reached
     /// through a namespace path (`a.b.g`).
     std::expected<LValue, ParseError> lvalue(const std::vector<std::string>& parts, SourceLocation location);
     /// `target = value`, the one place a cell or a global is written directly.
-    void write(const LValue& target, const Value& value);
+    step write(const LValue& target, const Value& value);
 
     std::expected<Flow, ParseError> block();
     std::expected<Flow, ParseError> statement();

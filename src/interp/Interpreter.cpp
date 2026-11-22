@@ -251,6 +251,19 @@ namespace erax::interp {
             write(command.args[0], *cell, frame);
             return !died();
           }
+          case Op::Offset: {
+            const Cell address = read(command.args[1], frame);
+            const Cell index = read(command.args[2], frame);
+            if (died()) {
+              return false;
+            }
+            const Cell result = offset_address(address, index, site);
+            if (died()) {
+              return false;
+            }
+            write(command.args[0], result, frame);
+            return !died();
+          }
           case Op::Store: {
             const Cell address = read(command.args[0], frame);
             if (died()) {
@@ -369,6 +382,7 @@ namespace erax::interp {
           case Prim::Abort: return abort_();
           case Prim::Alloc: return alloc_(command, frame);
           case Prim::Free: return free_(command, frame);
+          case Prim::Offset: return offset_(command, frame);
         }
         break_("a command names a primitive that does not exist");
         return false;
@@ -472,6 +486,20 @@ namespace erax::interp {
         return true;
       }
 
+      bool offset_(const Command& command, Frame frame) {
+        const Cell address = read(command.args[1], frame);
+        const Cell index = read(command.args[2], frame);
+        if (died()) {
+          return false;
+        }
+        const Cell result = offset_address(address, index, site_of(frame));
+        if (died()) {
+          return false;
+        }
+        write(command.args[0], result, frame);
+        return !died();
+      }
+
       /// Carves `cells` cells out of the heap: first from the first free block wide
       /// enough (splitting it), otherwise by growing the heap.
       Cell allocate(std::size_t cells, const Site& site) {
@@ -565,6 +593,42 @@ namespace erax::interp {
 
       static Cell encode(Region region, std::size_t index) noexcept {
         return (static_cast<Cell>(region) << region_bits) | static_cast<Cell>(index);
+      }
+
+      /// Pointer arithmetic counts machine cells and never crosses the source's
+      /// allocation. No backend address encoding is exposed to source code.
+      Cell offset_address(Cell address, Cell distance, const Site& site) {
+        const Region region = static_cast<Region>(address >> region_bits);
+        const auto index = static_cast<std::size_t>(address & index_mask_);
+        std::size_t remaining = 0;
+        switch (region) {
+          case Region::Stack:
+            for (const auto& frame : frames_) {
+              if (index >= frame.base && index - frame.base < frame.cells) {
+                remaining = frame.cells - (index - frame.base);
+                break;
+              }
+            }
+            break;
+          case Region::Global:
+            if (index < globals_.size()) {
+              remaining = 1;
+            }
+            break;
+          case Region::Heap:
+            if (auto block = heap_live_.upper_bound(index); block != heap_live_.begin()) {
+              --block;
+              if (index - block->first < block->second) {
+                remaining = block->second - (index - block->first);
+              }
+            }
+            break;
+        }
+        if (distance >= remaining || distance > index_mask_ - index) {
+          trap(Trap::InvalidPointer, site);
+          return 0;
+        }
+        return encode(region, index + static_cast<std::size_t>(distance));
       }
 
       /// The cell an address names, bounds-checked against its region. A null,

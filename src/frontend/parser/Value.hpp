@@ -1,12 +1,24 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <optional>
+#include <vector>
 
 #include "SemType.hpp"
 #include "middleend/jir/Jir.hpp"
 
 namespace erax::frontend {
+
+  struct ReferenceOrigin {
+    std::size_t local = 0;
+    std::size_t generation = 0;
+    bool external = false;
+    bool interior = false;
+    std::size_t loan = std::numeric_limits<std::size_t>::max();
+    friend bool operator==(const ReferenceOrigin&, const ReferenceOrigin&) = default;
+  };
 
   /// A compile-time constant, carried alongside the operand that holds it so a
   /// global initializer and an `if` can be folded without a second walk.
@@ -46,6 +58,16 @@ namespace erax::frontend {
     bool addressable = false;
     /// The source cell consumed by `move`, for assignment's self-move check.
     std::optional<middleend::Operand> moved_from = std::nullopt;
+    /// A field or dereference's actual storage address; operand holds its read value.
+    std::optional<middleend::Operand> place_address = std::nullopt;
+    bool object_mutable = false;
+    bool raw_storage = false;
+    bool global_storage = false;
+    std::vector<ReferenceOrigin> origins = {};
+    std::vector<ReferenceOrigin> place_origins = {};
+    /// A temporary ownership flag, cleared when its value is transferred.
+    std::optional<middleend::Operand> live_flag = std::nullopt;
+    std::optional<std::size_t> local_id = std::nullopt;
 
     /// The operand as it goes into a command: a constant materializes as an
     /// instant, anything else is already an operand.

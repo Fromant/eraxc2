@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <expected>
+#include <functional>
 #include <memory>
 #include <span>
 #include <string>
@@ -27,6 +28,11 @@ namespace erax::frontend {
     Const,
     Mut,
     Move,
+    Ref,
+    Struct,
+    Public,
+    Private,
+    Destructor,
     Namespace,
     If,
     Else,
@@ -87,16 +93,29 @@ namespace erax::frontend {
     SemType type = SemType::Void;
     int param = -1;
     std::shared_ptr<const TemplateType> pointee = {};
+    bool reference = false;
+    bool mutable_reference = false;
+    RecordInfo* record_template = nullptr;
+    std::vector<TemplateType> arguments = {};
 
     SemType resolve(const std::vector<SemType>& args = {}) const {
       if (pointee) {
-        return SemType::pointer(pointee->resolve(args));
+        return reference ? SemType::reference(pointee->resolve(args), mutable_reference) :
+                           SemType::pointer(pointee->resolve(args));
       }
       return param >= 0 ? args[static_cast<std::size_t>(param)] : type;
     }
 
     bool contains(std::size_t index) const noexcept {
-      return pointee ? pointee->contains(index) : param == static_cast<int>(index);
+      if (pointee) {
+        return pointee->contains(index);
+      }
+      for (const auto& argument : arguments) {
+        if (argument.contains(index)) {
+          return true;
+        }
+      }
+      return param == static_cast<int>(index);
     }
   };
 
@@ -114,6 +133,7 @@ namespace erax::frontend {
     std::vector<TemplateType> params;
     TemplateType return_type;
     std::size_t body_index = 0;
+    bool invalidates_references = false;
   };
 
   /// One template instantiation a call requested, keyed by qualified name and
@@ -146,7 +166,7 @@ public:
     }
 
     const Token& current() const noexcept {
-      return (*tokens_)[index_];
+      return residual_ ? *residual_ : (*tokens_)[index_];
     }
     const Token& peek(std::size_t ahead = 1) const noexcept;
     /// Consumes the current token and returns it, never stepping past
@@ -160,6 +180,7 @@ public:
     /// `{` that opens it.
     void seek(std::size_t index) noexcept {
       index_ = index;
+      residual_.reset();
     }
     bool at_end() const noexcept {
       return current().type == TokenType::EndOfFile;
@@ -177,6 +198,7 @@ public:
     /// Consumes the token if it is there; reports nothing if it is not.
     bool match(TokenType type);
     bool match_op(std::string_view text);
+    bool take_type_close();
 
     /// Skips to just past the next `;` at this nesting level, or past the `}`
     /// that closes it, so a recovery scan lands on the next statement or item.
@@ -214,6 +236,8 @@ public:
 private:
     const std::vector<Token>* tokens_;
     std::size_t index_ = 0;
+    std::optional<Token> residual_;
+    Token last_split_;
   };
 
   // The parse steps, each of which either consumes what it expects and moves on or
@@ -247,6 +271,42 @@ private:
     std::vector<SemType> params;
     SemType return_type = SemType::Void;
     std::size_t id = 0;
+    bool invalidates_references = false;
+  };
+
+  struct FieldInfo {
+    std::string name;
+    SemType type = SemType::Void;
+    bool is_public = false;
+  };
+
+  struct MethodInfo {
+    FunctionInfo function;
+    std::vector<std::string> param_names;
+    std::size_t body_index = 0;
+    bool factory = false;
+    bool is_public = false;
+    SourceLocation location;
+    bool generated = false;
+    bool invalidates_references = false;
+  };
+
+  struct RecordInfo {
+    std::string name;
+    std::vector<std::string> ns_path;
+    SourceLocation location;
+    std::vector<FieldInfo> fields;
+    std::unordered_map<std::string, std::vector<MethodInfo>> methods;
+    std::optional<MethodInfo> destructor;
+    std::optional<std::size_t> drop_id;
+    std::optional<std::size_t> clone_id;
+    std::vector<TypeParam> type_params;
+    std::size_t body_index = 0;
+    std::vector<SemType> type_args;
+    RecordInfo* template_origin = nullptr;
+    bool auto_clone = true;
+    bool complete = false;
+    bool members_complete = false;
   };
 
   /// One local: the frame cell it lives in, whether it is definitely assigned on
@@ -261,12 +321,16 @@ private:
     bool mutable_object = false;
     bool moved = false;
     std::size_t flow_id = 0;
+    std::vector<ReferenceOrigin> origins = {};
+    std::optional<middleend::Operand> live_flag = std::nullopt;
+    bool parameter = false;
   };
 
   /// A lexical scope. A `for` init opens one of its own, so the loop variable dies
   /// with the loop even though CFG blocks do not nest the same way.
   struct Scope {
     std::unordered_map<std::string, LocalInfo> locals;
+    std::vector<std::string> declaration_order;
     /// The first frame cell this scope may hand out, handed back when it closes.
     std::uint64_t vreg_high_water = 0;
   };
@@ -291,6 +355,9 @@ private:
       LocalInfo* local;
       bool assigned;
       bool moved;
+      std::vector<ReferenceOrigin> origins;
+      std::size_t generation = 0;
+      std::size_t interior_generation = 0;
     };
     std::vector<Entry> flags;
   };
@@ -325,6 +392,23 @@ public:
     /// The same local, writable: an assignment marks it definitely assigned.
     LocalInfo* find_local(const std::string& name) noexcept;
     LocalInfo* local_at(std::uint64_t vreg) noexcept;
+    FunctionInfo* function_by_id(std::size_t id) noexcept;
+    LocalInfo* local_by_id(std::size_t id) noexcept;
+    std::expected<Value, ParseError> local_value(const LocalInfo& local, SourceLocation location);
+    std::expected<RecordInfo*, ParseError> declare_record(const std::string& qualified, SourceLocation location);
+    RecordInfo* find_record(const std::string& name) const noexcept;
+    std::vector<std::unique_ptr<RecordInfo>>& records() noexcept {
+      return records_;
+    }
+    const std::vector<std::unique_ptr<RecordInfo>>& records() const noexcept {
+      return records_;
+    }
+    RecordInfo* active_record = nullptr;
+    bool in_factory = false;
+    std::function<std::expected<RecordInfo*, ParseError>(RecordInfo*, std::vector<SemType>, SourceLocation)>
+        record_instantiator;
+    std::function<std::expected<std::size_t, ParseError>(RecordInfo*, SourceLocation)> clone_instantiator;
+    std::expected<std::size_t, ParseError> ensure_clone(RecordInfo* record, SourceLocation location);
     /// The global \p name, searching the current namespace outward to the root.
     const GlobalInfo* find_global(const std::string& name) const noexcept;
     /// The same global, writable: the declaration pass leaves the value unset and
@@ -427,6 +511,12 @@ public:
     /// The type at the cursor, resolving a type-parameter name through the active
     /// substitution before falling back to a concrete type name.
     std::expected<SemType, ParseError> read_type(TokenCursor& cursor, std::string_view context = {}) const;
+    std::expected<std::vector<SemType>, ParseError> read_type_arguments(TokenCursor& cursor) const;
+    std::expected<SemType, ParseError> resolve_type(const TemplateType& type, const std::vector<SemType>& args,
+                                                    SourceLocation location) const;
+    const std::unordered_map<std::string, SemType>& type_substitution() const noexcept {
+      return type_substitution_;
+    }
 
     /// A chain of instantiations demanding new types forever is a compile-time
     /// error (`docs/core/statements.md#templates`); this bounds the set.
@@ -484,8 +574,27 @@ public:
     /// Source-level definite initialization, including back edges after moves.
     void read_local(const LocalInfo& local, SourceLocation location);
     void initialize_local(const LocalInfo& local);
-    void move_local(const LocalInfo& local);
+    void move_local(LocalInfo& local);
     std::expected<void, ParseError> check_local_flow() const;
+    std::expected<Value, ParseError> borrow_value(const Value& value, bool mutable_reference, SourceLocation location,
+                                                  bool ephemeral = false);
+    std::expected<Value, ParseError> copy_value(const Value& value, SourceLocation location, bool materialize = false);
+    void drop_value(const Value& value);
+    void invalidate_value(const Value& value);
+    void invalidate_referent(const Value& reference);
+    void invalidate_interior(const Value& value);
+    std::vector<ReferenceOrigin> interior_origins(const Value& value);
+    void track_temporary(Value& value);
+    void transfer_value(const Value& value);
+    void cleanup_temporaries();
+    void emit_cleanup(std::size_t retained_scopes = 0);
+    bool has_owned_values() const;
+    std::expected<void, ParseError> validate_origins(const Value& value, SourceLocation location);
+    std::expected<void, ParseError> check_return(const Value& value, SourceLocation location);
+    std::expected<void, ParseError> bind_origins(LocalInfo& local, const Value& value, SourceLocation location);
+    std::expected<void, ParseError> store_origins(const Value& place, const Value& value, SourceLocation location);
+    std::expected<void, ParseError> propagate_call_origins(const std::vector<Value>& arguments,
+                                                           SourceLocation location);
 
 private:
     /// The root namespace holds the program's top-level names; `namespace_stack_`
@@ -512,6 +621,34 @@ private:
     };
     std::vector<LocalEvent> local_events_;
     std::vector<std::string> local_names_;
+    struct LoanInfo {
+      std::size_t root;
+      bool interior;
+      bool external;
+    };
+    struct LoanEvent {
+      enum class Kind {
+        Borrow,
+        Read,
+        Invalidate,
+        InvalidateInterior
+      } kind;
+      std::size_t block;
+      std::size_t subject;
+      SourceLocation location;
+      bool external = false;
+    };
+    std::vector<LoanInfo> loans_;
+    std::vector<LoanEvent> loan_events_;
+    ReferenceOrigin make_origin(std::size_t root, bool external, bool interior);
+    void record_invalidation(std::size_t root, bool interior_only, bool external = false);
+    std::vector<std::unique_ptr<RecordInfo>> records_;
+    std::unordered_map<std::string, RecordInfo*> record_names_;
+    std::vector<Value> temporaries_;
+    std::vector<std::size_t> origin_generations_;
+    std::vector<std::size_t> interior_generations_;
+    std::vector<bool> origin_alive_;
+    std::optional<ParseError> cleanup_error_;
   };
 
 }  // namespace erax::frontend

@@ -11,6 +11,7 @@
 
 #include "middleend/jir/Builder.hpp"
 #include "middleend/jir/Jir.hpp"
+#include "primitives/Primitives.hpp"
 
 namespace erax::frontend {
 
@@ -43,6 +44,37 @@ namespace erax::frontend {
         {"+=", Op::Add}, {"-=", Op::Sub}, {"*=", Op::Mul}, {"/=", Op::Sdiv}, {"%=", Op::Smod},
         {"&=", Op::And}, {"|=", Op::Or},  {"^=", Op::Xor}, {"<<=", Op::Shl}, {">>=", Op::Sar},
     };
+
+    bool at_assignment_operator(const TokenCursor& cursor) {
+      if (cursor.at_op("=")) {
+        return true;
+      }
+      return std::ranges::any_of(compound_assigns, [&](const CompoundAssign& op) {
+        return cursor.at_op(op.text);
+      });
+    }
+
+    bool rhs_may_call(const TokenCursor& cursor) {
+      const auto& tokens = cursor.tokens();
+      int parentheses = 0;
+      for (std::size_t i = cursor.index(); i < tokens.size(); ++i) {
+        if (tokens[i].type == TokenType::Semicolon || tokens[i].type == TokenType::EndOfFile) {
+          break;
+        }
+        if (tokens[i].type == TokenType::RParen) {
+          if (!parentheses) {
+            break;
+          }
+          --parentheses;
+        } else if (tokens[i].type == TokenType::LParen) {
+          if (i && tokens[i - 1].type == TokenType::Identifier) {
+            return true;
+          }
+          ++parentheses;
+        }
+      }
+      return false;
+    }
 
     std::string quoted(std::string_view text) {
       return "'" + std::string {text} + "'";
@@ -127,49 +159,120 @@ namespace erax::frontend {
     /// A type in a function signature: a type keyword, a type parameter of the
     /// enclosing template, or a note that `string` has no type yet.
     std::expected<TemplateType, ParseError> expect_signature_type(TokenCursor& cursor,
-                                                                  const std::vector<TypeParam>& type_params) {
-      if (cursor.at(TokenType::Identifier)) {
-        const std::string& text = cursor.current().text;
-        if (text == "ptr") {
+                                                                  const std::vector<TypeParam>& type_params,
+                                                                  ParseContext& context) {
+      const auto location = cursor.location();
+      if (!cursor.at(TokenType::Identifier)) {
+        return std::unexpected(ParseError {"expected a type", location});
+      }
+      const auto text = cursor.current().text;
+      TemplateType pattern;
+      if (text == "ptr" || text == "ref") {
+        cursor.take();
+        pattern.reference = text == "ref";
+        pattern.mutable_reference = pattern.reference && cursor.at_keyword(Keyword::Mut);
+        if (pattern.mutable_reference) {
           cursor.take();
-          auto pointee = expect_signature_type(cursor, type_params);
-          if (!pointee) {
-            return pointee;
-          }
-          if (pointee->param < 0 && !pointee->pointee) {
-            return TemplateType {SemType::pointer(pointee->type), -1};
-          }
-          return TemplateType {SemType::Void, -1, std::make_shared<const TemplateType>(*pointee)};
         }
-        if (const std::optional<SemType> type = type_of(keyword_of(text)); type) {
-          cursor.take();
+        auto inner = expect_signature_type(cursor, type_params, context);
+        if (!inner) {
+          return inner;
+        }
+        pattern.pointee = std::make_shared<const TemplateType>(*inner);
+      } else {
+        for (std::size_t i = 0; i < type_params.size(); ++i) {
+          if (type_params[i].name == text) {
+            cursor.take();
+            return TemplateType {SemType::Void, static_cast<int>(i)};
+          }
+        }
+        auto scan = cursor;
+        std::string name = scan.take().text;
+        while (scan.match(TokenType::Dot)) {
+          auto part = expect_identifier(scan);
+          if (!part) {
+            return std::unexpected(part.error());
+          }
+          name += "." + *part;
+        }
+        auto* record = context.find_record(name);
+        if (record && !record->type_params.empty() && scan.match_op("<")) {
+          pattern.record_template = record;
+          do {
+            auto argument = expect_signature_type(scan, type_params, context);
+            if (!argument) {
+              return argument;
+            }
+            pattern.arguments.push_back(*argument);
+          } while (scan.match(TokenType::Comma));
+          if (!scan.take_type_close()) {
+            return std::unexpected(ParseError {"expected '>'", scan.location()});
+          }
+          cursor = scan;
+        } else {
+          auto type = context.read_type(cursor);
+          if (!type) {
+            return std::unexpected(type.error());
+          }
           return TemplateType {*type, -1};
         }
-        for (std::size_t index = 0; index < type_params.size(); ++index) {
-          if (type_params[index].name == text) {
-            cursor.take();
-            return TemplateType {SemType::Void, static_cast<int>(index)};
-          }
-        }
-        if (text == "string") {
-          return std::unexpected(ParseError {"string is not supported yet", cursor.location()});
-        }
       }
-      return std::unexpected(ParseError {"expected a type", cursor.location()});
+      bool dependent = false;
+      for (std::size_t i = 0; i < type_params.size(); ++i) {
+        dependent |= pattern.contains(i);
+      }
+      if (!dependent) {
+        auto type = context.resolve_type(pattern, {}, location);
+        if (!type) {
+          return std::unexpected(type.error());
+        }
+        return TemplateType {*type, -1};
+      }
+      return pattern;
     }
 
   }  // namespace
 
-  ProgramParser::ProgramParser(const std::vector<Token>& tokens) : context_(tokens), expressions_(context_) {}
+  ProgramParser::ProgramParser(const std::vector<Token>& tokens) : context_(tokens), expressions_(context_) {
+    context_.record_instantiator = [this](RecordInfo* record, std::vector<SemType> args, SourceLocation location) {
+      return instantiate_record(record, std::move(args), location);
+    };
+    context_.clone_instantiator = [this](RecordInfo* record, SourceLocation) -> std::expected<std::size_t, ParseError> {
+      record->clone_id = context_.function_count++;
+      if (auto found = record->methods.find("clone"); found != record->methods.end() && !found->second.empty()) {
+        found->second.front().function.id = *record->clone_id;
+      }
+      return *record->clone_id;
+    };
+  }
 
   ProgramParser::result ProgramParser::parse() {
     if (auto checked = operator_whitelist(); !checked) {
       return std::unexpected(checked.error());
     }
+    TokenCursor discovery(context_.cursor.tokens());
+    if (auto discovered = discover_records(discovery, {}); !discovered) {
+      return std::unexpected(discovered.error());
+    }
     if (auto declared = declarations(); !declared) {
       return std::unexpected(declared.error());
     }
 
+    declarations_complete_ = true;
+    for (std::size_t i = 0; i < context_.records().size(); ++i) {
+      auto* record = context_.records()[i].get();
+      if (record->template_origin && !record->members_complete) {
+        auto completed = instantiate_record(record->template_origin, record->type_args, record->location);
+        if (!completed) {
+          return std::unexpected(completed.error());
+        }
+      }
+    }
+    if (auto validated = validate_record_ownership(); !validated) {
+      return std::unexpected(validated.error());
+    }
+    infer_function_effects();
+    program_.globals.resize(context_.global_count);
     if (auto parsed = items(/*top=*/true); !parsed) {
       return std::unexpected(parsed.error());
     }
@@ -178,20 +281,28 @@ namespace erax::frontend {
     // instantiation is a function of its own, parsed now, one per entry — but a
     // body can request further instantiations, hence the check on the running size
     // rather than a snapshot.
-    for (std::size_t index = 0; index < context_.instantiations().size(); ++index) {
-      if (context_.instantiations()[index].generated) {
+    std::size_t next_instantiation = 0;
+    while (true) {
+      if (auto lowered = lower_record_methods(); !lowered) {
+        return std::unexpected(lowered.error());
+      }
+      if (next_instantiation == context_.instantiations().size()) {
+        break;
+      }
+      const Instantiation inst = context_.instantiations()[next_instantiation++];
+      if (inst.generated) {
         continue;
       }
-      const Instantiation inst = context_.instantiations()[index];
       if (auto parsed = instantiate_function(inst); !parsed) {
         return std::unexpected(parsed.error());
       }
-      context_.instantiations()[index].generated = true;
+      context_.instantiations()[next_instantiation - 1].generated = true;
     }
 
     if (!has_entrypoint_) {
       return std::unexpected(ParseError {"the program must declare 'fn main(): i32'", context_.cursor.location()});
     }
+    generate_entrypoint_cleanup();
     program_.entrypoint = entrypoint_;
     return std::move(program_);
   }
@@ -203,7 +314,13 @@ namespace erax::frontend {
         return {};
       }
       step item;
-      if (cursor.at_keyword(Keyword::Fn)) {
+      if (cursor.current().text == "struct") {
+        cursor.take();
+        while (!cursor.at(TokenType::LBrace) && !cursor.at_end()) {
+          cursor.take();
+        }
+        item = skip_body(cursor);
+      } else if (cursor.at_keyword(Keyword::Fn)) {
         item = function();
       } else if (cursor.at_keyword(Keyword::Let) || cursor.at_keyword(Keyword::Const)) {
         item = global();
@@ -257,6 +374,9 @@ namespace erax::frontend {
     for (const Token& token : context_.cursor.tokens()) {
       if (token.type != TokenType::Operator) {
         continue;
+      }
+      if (token.text.size() > 2 && token.text.find_first_not_of('>') == std::string::npos) {
+        continue;  // Nested type closers are split only in type positions.
       }
       bool known = false;
       for (const std::string_view text : operators) {
@@ -340,7 +460,7 @@ namespace erax::frontend {
         if (auto colon = expect(cursor, TokenType::Colon); !colon) {
           return std::unexpected(colon.error());
         }
-        auto type = expect_signature_type(cursor, signature.type_params);
+        auto type = expect_signature_type(cursor, signature.type_params, context_);
         if (!type) {
           return std::unexpected(type.error());
         }
@@ -355,7 +475,7 @@ namespace erax::frontend {
       return std::unexpected(close.error());
     }
     if (cursor.match(TokenType::Colon)) {
-      auto type = expect_signature_type(cursor, signature.type_params);
+      auto type = expect_signature_type(cursor, signature.type_params, context_);
       if (!type) {
         return std::unexpected(type.error());
       }
@@ -374,7 +494,11 @@ namespace erax::frontend {
       if (!top && cursor.at(TokenType::RBrace)) {
         return {};
       }
-      if (cursor.at_keyword(Keyword::Let) || cursor.at_keyword(Keyword::Const)) {
+      if (cursor.current().text == "struct") {
+        if (auto declared = declare_record(cursor); !declared) {
+          return std::unexpected(declared.error());
+        }
+      } else if (cursor.at_keyword(Keyword::Let) || cursor.at_keyword(Keyword::Const)) {
         if (auto declared = declare_global(cursor); !declared) {
           return std::unexpected(declared.error());
         }
@@ -438,9 +562,12 @@ namespace erax::frontend {
     if (auto colon = expect(cursor, TokenType::Colon); !colon) {
       return std::unexpected(colon.error());
     }
-    auto type = expect_type(cursor);
+    auto type = context_.read_type(cursor);
     if (!type) {
       return std::unexpected(type.error());
+    }
+    if (type_has_references(*type)) {
+      return std::unexpected(ParseError {"global variables cannot contain safe references", cursor.location()});
     }
     if (auto equals = expect_op(cursor, "="); !equals) {
       return std::unexpected(equals.error());
@@ -469,7 +596,8 @@ namespace erax::frontend {
     // it with a global or a namespace. It may share it with a template, though —
     // the concrete declaration is preferred over the template at a call.
     if (context_.find_global_in_current(found.name) != nullptr ||
-        context_.find_namespace_in_current(found.name) != nullptr) {
+        context_.find_namespace_in_current(found.name) != nullptr ||
+        context_.find_record(qualified_name(context_.current_namespace(), found.name)) != nullptr) {
       return std::unexpected(ParseError {"'" + found.name + "' is already declared", found.location});
     }
 
@@ -508,6 +636,17 @@ namespace erax::frontend {
       // instantiation, so only its position is kept.
       info.body_index = cursor.index();
       context_.declare_template(found.name, std::move(info));
+      EffectSource source;
+      source.tmpl = &context_.current_namespace().templates.at(found.name);
+      source.ns_path = context_.current_namespace().path;
+      source.names = found.param_names;
+      source.body = cursor.index();
+      for (const auto& param : found.params) {
+        source.generic_mutable |= param.pointee && param.reference && param.mutable_reference;
+        source.generic_mutable |= param.type.is_reference() && param.type.mutable_reference;
+        source.params.push_back(param.type);
+      }
+      effect_sources_.push_back(std::move(source));
       if (auto body = skip_body(cursor); !body) {
         return std::unexpected(body.error());
       }
@@ -531,7 +670,9 @@ namespace erax::frontend {
       }
       has_entrypoint_ = true;
     }
-    context_.declare_function(found.name, FunctionInfo {params, found.return_type.type, 0});
+    const auto id = context_.declare_function(found.name, FunctionInfo {params, found.return_type.type, 0});
+    effect_sources_.push_back(
+        {id, nullptr, context_.current_namespace().path, found.param_names, params, cursor.index()});
     if (auto body = skip_body(cursor); !body) {
       return std::unexpected(body.error());
     }
@@ -574,17 +715,54 @@ namespace erax::frontend {
     if (auto colon = expect(cursor, TokenType::Colon); !colon) {
       return std::unexpected(colon.error());
     }
-    auto type = expect_type(cursor);
+    auto type = context_.read_type(cursor);
     if (!type) {
       return std::unexpected(type.error());
+    }
+    if (type_has_references(*type)) {
+      return std::unexpected(ParseError {"global variables cannot contain safe references", cursor.location()});
     }
     if (auto equals = expect_op(cursor, "="); !equals) {
       return std::unexpected(equals.error());
     }
     const std::size_t id = context_.find_global_in_current(*name)->id;
 
-    // A global's initializer is a constant expression, so it folds here: the value
-    // is both what the init CFG writes and what a later initializer reads.
+    if (type->is_record()) {
+      context_.reset_frame({});
+      context_.push_scope();
+      context_.active_record = nullptr;
+      context_.in_factory = false;
+      auto value = expressions_.expression(*type);
+      if (!value) {
+        return std::unexpected(value.error());
+      }
+      if (value->type != *type) {
+        return std::unexpected(ParseError {"global initializer has the wrong type", cursor.location()});
+      }
+      auto copied = context_.copy_value(*value, cursor.location());
+      if (!copied) {
+        return std::unexpected(copied.error());
+      }
+      if (auto checked = context_.check_return(*copied, cursor.location()); !checked) {
+        return checked;
+      }
+      if (auto semicolon = expect_semicolon(cursor); !semicolon) {
+        return std::unexpected(semicolon.error());
+      }
+      context_.builder.emit(Op::Mov, {Operand::global(lower(*type), id), copied->as_operand()});
+      context_.transfer_value(*copied);
+      context_.emit_cleanup(0);
+      context_.builder.emit(Op::Ret, {});
+      context_.pop_scope();
+      if (auto checked = context_.check_local_flow(); !checked) {
+        return checked;
+      }
+      context_.builder.prune();
+      program_.globals[id] = Global {lower(*type), context_.builder.take()};
+      owned_globals_.emplace_back(id, type->record);
+      return {};
+    }
+    // Scalar globals keep their constant-expression contract.
     auto value = expressions_.const_expression(*type);
     if (!value) {
       return std::unexpected(value.error());
@@ -595,7 +773,7 @@ namespace erax::frontend {
     context_.global_of(*name).value = value->constant;
 
     const Type lowered = lower(*type);
-    program_.globals.push_back(Global {lowered, middleend::Cfg {}});
+    program_.globals[id] = Global {lowered, middleend::Cfg {}};
     CfgBuilder init;
     init.emit(Op::Mov, {Operand::global(lowered, id), value->as_operand()});
     init.emit(Op::Ret, {});
@@ -633,9 +811,9 @@ namespace erax::frontend {
     context_.reset_frame(params);
     context_.push_scope();
     for (std::size_t index = 0; index < param_types.size(); ++index) {
-      if (auto declared = context_.declare_local(
-              found.param_names[index], LocalInfo {params[index], param_types[index], index, true, found.location});
-          !declared) {
+      LocalInfo parameter {params[index], param_types[index], index, true, found.location};
+      parameter.parameter = true;
+      if (auto declared = context_.declare_local(found.param_names[index], parameter); !declared) {
         return std::unexpected(declared.error());
       }
     }
@@ -651,6 +829,7 @@ namespace erax::frontend {
             found.location});
       }
       if (!context_.builder.terminated()) {
+        context_.emit_cleanup(0);
         context_.builder.emit(Op::Ret, {});
       }
     }
@@ -668,15 +847,16 @@ namespace erax::frontend {
     lowered.return_type = lower(found.return_type.type);
     lowered.frame_size = context_.builder.frame_size();
     lowered.cfg = context_.builder.take();
-    const std::size_t id = program_.functions.size();
-    program_.functions.push_back(std::move(lowered));
+    if (recorded == nullptr) {
+      return std::unexpected(ParseError {"internal error: missing function declaration", found.location});
+    }
+    const std::size_t id = recorded->id;
+    if (program_.functions.size() <= id) {
+      program_.functions.resize(id + 1);
+    }
+    program_.functions[id] = std::move(lowered);
     if (found.name == "main") {
       entrypoint_ = id;
-    }
-    if (recorded != nullptr && recorded->id != id) {
-      // The pre-pass and this pass walk the items in the same order, so the ids
-      // they hand out have to agree.
-      return std::unexpected(ParseError {"internal error: '" + found.name + "' changed id", found.location});
     }
     return {};
   }
@@ -693,14 +873,19 @@ namespace erax::frontend {
     std::vector<Type> params;
     param_types.reserve(tmpl->params.size());
     params.reserve(tmpl->params.size());
-    const auto resolve = [&inst](const TemplateType& type) {
-      return type.resolve(inst.type_args);
-    };
     for (const TemplateType& param : tmpl->params) {
-      param_types.push_back(resolve(param));
+      auto resolved = context_.resolve_type(param, inst.type_args, tmpl->location);
+      if (!resolved) {
+        return std::unexpected(resolved.error());
+      }
+      param_types.push_back(*resolved);
       params.push_back(lower(param_types.back()));
     }
-    const SemType return_type = resolve(tmpl->return_type);
+    auto resolved_return = context_.resolve_type(tmpl->return_type, inst.type_args, tmpl->location);
+    if (!resolved_return) {
+      return std::unexpected(resolved_return.error());
+    }
+    const SemType return_type = *resolved_return;
     for (std::size_t index = 0; index < tmpl->type_params.size(); ++index) {
       substitution.emplace(tmpl->type_params[index].name, inst.type_args[index]);
     }
@@ -719,9 +904,9 @@ namespace erax::frontend {
     context_.reset_frame(params);
     context_.push_scope();
     for (std::size_t index = 0; index < tmpl->param_names.size(); ++index) {
-      if (auto declared = context_.declare_local(
-              tmpl->param_names[index], LocalInfo {params[index], param_types[index], index, true, tmpl->location});
-          !declared) {
+      LocalInfo parameter {params[index], param_types[index], index, true, tmpl->location};
+      parameter.parameter = true;
+      if (auto declared = context_.declare_local(tmpl->param_names[index], parameter); !declared) {
         context_.clear_type_substitution();
         context_.cursor.seek(saved);
         context_.set_namespace_path(saved_namespace);
@@ -742,6 +927,7 @@ namespace erax::frontend {
             "control reaches the end of '" + qualified + "', which returns " + type_name(return_type), tmpl->location});
       }
       if (!context_.builder.terminated()) {
+        context_.emit_cleanup(0);
         context_.builder.emit(Op::Ret, {});
       }
     }
@@ -756,12 +942,10 @@ namespace erax::frontend {
     lowered.return_type = lower(return_type);
     lowered.frame_size = context_.builder.frame_size();
     lowered.cfg = context_.builder.take();
-    const std::size_t id = program_.functions.size();
-    if (id != inst.id) {
-      return std::unexpected(
-          ParseError {"internal error: instantiation '" + qualified + "' changed id", tmpl->location});
+    if (program_.functions.size() <= inst.id) {
+      program_.functions.resize(inst.id + 1);
     }
-    program_.functions.push_back(std::move(lowered));
+    program_.functions[inst.id] = std::move(lowered);
     return {};
   }
 
@@ -798,7 +982,11 @@ namespace erax::frontend {
         return std::unexpected(
             ParseError {"expected a value of type " + type_name(*type) + ", not " + type_name(parsed->type), start});
       }
-      value = *parsed;
+      auto copied = context_.copy_value(*parsed, start);
+      if (!copied) {
+        return std::unexpected(copied.error());
+      }
+      value = *copied;
       if (!type) {
         type = parsed->type;
       }
@@ -821,7 +1009,11 @@ namespace erax::frontend {
       return std::unexpected(declared.error());
     }
     if (value) {
+      if (auto bound = context_.bind_origins(*context_.find_local(*name), *value, start); !bound) {
+        return bound;
+      }
       context_.builder.emit(Op::Mov, {Operand::vreg(lowered, cell), value->as_operand()});
+      context_.transfer_value(*value);
     }
     return {};
   }
@@ -852,57 +1044,71 @@ namespace erax::frontend {
     return std::unexpected(ParseError {"undeclared identifier '" + qualified_path(parts) + "'", location});
   }
 
-  void ProgramParser::write(const LValue& target, const Value& value) {
-    context_.builder.emit(Op::Mov, {target.target, value.as_operand()});
-    last_assignment_ = Value {target.type, target.target};
+  ProgramParser::step ProgramParser::write(const LValue& target, const Value& value) {
+    if (target.place) {
+      if (auto valid = context_.validate_origins(*target.place, context_.cursor.location()); !valid) {
+        return valid;
+      }
+    }
+    Value previous {target.type, target.target};
+    if (target.place) {
+      previous = *target.place;
+    }
+    if (target.local) {
+      previous.local_id = target.local->flow_id;
+      previous.live_flag = target.local->live_flag;
+    }
+    if (target.type.is_record()) {
+      if (target.indirect) {
+        context_.invalidate_interior(previous);
+      } else {
+        context_.invalidate_value(previous);
+      }
+      if (auto valid = context_.validate_origins(value, context_.cursor.location()); !valid) {
+        return valid;
+      }
+      context_.drop_value(previous);
+    }
+    if (target.local) {
+      if (auto bound = context_.bind_origins(*target.local, value, context_.cursor.location()); !bound) {
+        return bound;
+      }
+    }
+    if (target.indirect) {
+      if (target.place) {
+        if (auto stored = context_.store_origins(*target.place, value, context_.cursor.location()); !stored) {
+          return stored;
+        }
+      }
+      context_.builder.emit(Op::Store, {*target.indirect, value.as_operand()});
+    } else {
+      context_.builder.emit(Op::Mov, {target.target, value.as_operand()});
+    }
+    context_.transfer_value(value);
     target.mark_assigned();
     if (target.local) {
       context_.initialize_local(*target.local);
     }
-  }
-
-  std::expected<Value, ParseError> ProgramParser::assignment_rhs(SemType expected) {
-    auto& cursor = context_.cursor;
-    if (cursor.at(TokenType::Identifier) && at_assignment(cursor)) {
-      auto scan = cursor;
-      scan.take();
-      while (scan.match(TokenType::Dot)) {
-        scan.take();
-      }
-      if (!scan.at_op("=")) {
-        return std::unexpected(ParseError {"only '=' may be chained", scan.location()});
-      }
-      if (auto assigned = assignment(); !assigned) {
-        return std::unexpected(assigned.error());
-      }
-      return last_assignment_;
-    }
-    if (cursor.at_op("*") && at_deref_assignment(cursor)) {
-      auto scan = cursor;
-      scan.take();
-      scan.seek(scan.past_operand(scan.index()));
-      if (!scan.at_op("=")) {
-        return std::unexpected(ParseError {"only '=' may be chained", scan.location()});
-      }
-      if (auto assigned = deref_assignment(); !assigned) {
-        return std::unexpected(assigned.error());
-      }
-      return last_assignment_;
-    }
-    return expressions_.expression(expected);
+    return {};
   }
 
   ProgramParser::step ProgramParser::assign(const LValue& target) {
     TokenCursor& cursor = context_.cursor;
     const SourceLocation location = cursor.location();
 
+    if (target.indirect && !target.mutable_object) {
+      return std::unexpected(ParseError {"cannot modify an object without mut access", location});
+    }
     if ((target.local && !target.local->reassignable) || (target.global && !target.global->reassignable)) {
       return std::unexpected(ParseError {"cannot assign to a const binding", location});
     }
     if (cursor.match_op("=")) {
-      auto value = assignment_rhs(target.type);
+      auto value = expressions_.expression(target.type);
       if (!value) {
         return std::unexpected(value.error());
+      }
+      if (at_assignment_operator(cursor)) {
+        return std::unexpected(ParseError {"assignment chains are not allowed", cursor.location()});
       }
       if (value->type != target.type) {
         return std::unexpected(
@@ -911,8 +1117,11 @@ namespace erax::frontend {
       if (value->moved_from && *value->moved_from == target.target) {
         return std::unexpected(ParseError {"cannot move a value into itself", location});
       }
-      write(target, *value);
-      return {};
+      auto copied = context_.copy_value(*value, location);
+      if (!copied) {
+        return std::unexpected(copied.error());
+      }
+      return write(target, *copied);
     }
 
     for (const CompoundAssign& compound : compound_assigns) {
@@ -929,23 +1138,40 @@ namespace erax::frontend {
       if (target.local) {
         context_.read_local(*target.local, location);
       }
+      auto left = target.target;
+      if (!target.indirect && rhs_may_call(cursor)) {
+        left = Operand::vreg(target.target.type, context_.builder.alloc(target.target.type));
+        context_.builder.emit(Op::Mov, {left, target.target});
+      }
       auto value = expressions_.expression(target.type);
       if (!value) {
         return std::unexpected(value.error());
+      }
+      if (at_assignment_operator(cursor)) {
+        return std::unexpected(ParseError {"assignment chains are not allowed", cursor.location()});
       }
       if (value->type != target.type) {
         return std::unexpected(
             ParseError {"cannot assign " + type_name(value->type) + " to " + type_name(target.type), location});
       }
+      if (target.place) {
+        if (auto valid = context_.validate_origins(*target.place, location); !valid) {
+          return valid;
+        }
+      }
       // A global is not an operand a command can compute into, so the read-
       // modify-write goes through a frame cell.
-      if (target.is_global()) {
+      if (target.is_global() || target.indirect) {
         const Type type = target.target.type;
         const std::uint64_t cell = context_.builder.alloc(type);
-        context_.builder.emit(compound.op, {Operand::vreg(type, cell), target.target, value->as_operand()});
-        context_.builder.emit(Op::Mov, {target.target, Operand::vreg(type, cell)});
+        context_.builder.emit(compound.op, {Operand::vreg(type, cell), left, value->as_operand()});
+        if (target.indirect) {
+          context_.builder.emit(Op::Store, {*target.indirect, Operand::vreg(type, cell)});
+        } else {
+          context_.builder.emit(Op::Mov, {target.target, Operand::vreg(type, cell)});
+        }
       } else {
-        context_.builder.emit(compound.op, {target.target, target.target, value->as_operand()});
+        context_.builder.emit(compound.op, {target.target, left, value->as_operand()});
       }
       target.mark_assigned();
       if (target.local) {
@@ -976,6 +1202,7 @@ namespace erax::frontend {
       flow.falls_through = flow.falls_through && parsed->falls_through;
     }
     cursor.take();
+    context_.emit_cleanup(context_.scope_depth() - 1);
     context_.pop_scope();
     return flow;
   }
@@ -998,6 +1225,7 @@ namespace erax::frontend {
         if (auto semicolon = expect_semicolon(cursor); !semicolon) {
           return std::unexpected(semicolon.error());
         }
+        context_.cleanup_temporaries();
         return Flow {};
       }
       case Keyword::If: return if_statement();
@@ -1019,6 +1247,7 @@ namespace erax::frontend {
       if (auto semicolon = expect_semicolon(cursor); !semicolon) {
         return std::unexpected(semicolon.error());
       }
+      context_.cleanup_temporaries();
       return Flow {};
     }
 
@@ -1032,6 +1261,7 @@ namespace erax::frontend {
       if (auto semicolon = expect_semicolon(cursor); !semicolon) {
         return std::unexpected(semicolon.error());
       }
+      context_.cleanup_temporaries();
       return Flow {};
     }
 
@@ -1042,6 +1272,7 @@ namespace erax::frontend {
     if (auto semicolon = expect_semicolon(cursor); !semicolon) {
       return std::unexpected(semicolon.error());
     }
+    context_.cleanup_temporaries();
     // A statement that ends its block — an expression calling a terminating
     // primitive like `exit` — stops flow here, exactly like `return`
     // (`docs/primitive.md#flow`).
@@ -1054,6 +1285,7 @@ namespace erax::frontend {
   ProgramParser::step ProgramParser::assignment() {
     TokenCursor& cursor = context_.cursor;
     const SourceLocation location = cursor.location();
+    const auto saved_cursor = cursor;
     std::vector<std::string> parts;
     auto name = expect_identifier(cursor);
     if (!name) {
@@ -1068,7 +1300,24 @@ namespace erax::frontend {
       }
       parts.push_back(*segment);
     }
-    auto target = lvalue(parts, location);
+    std::expected<LValue, ParseError> target;
+    if (parts.size() > 1 && context_.find_local(parts.front())) {
+      cursor = saved_cursor;
+      auto place = expressions_.expression(std::nullopt);
+      if (!place) {
+        return std::unexpected(place.error());
+      }
+      if (!place->place_address) {
+        return std::unexpected(ParseError {"assignment needs a storage place", location});
+      }
+      LValue member {nullptr, nullptr, place->type, place->as_operand()};
+      member.indirect = place->place_address;
+      member.mutable_object = place->object_mutable;
+      member.place = *place;
+      target = member;
+    } else {
+      target = lvalue(parts, location);
+    }
     if (!target) {
       return std::unexpected(target.error());
     }
@@ -1086,26 +1335,60 @@ namespace erax::frontend {
     if (!pointer) {
       return std::unexpected(pointer.error());
     }
-    if (!pointer->type.is_pointer()) {
+    if (pointer->type.is_reference() && !pointer->type.mutable_reference) {
+      return std::unexpected(ParseError {"cannot write through a read-only reference", location});
+    }
+    if (!pointer->type.is_pointer() && !pointer->type.is_reference()) {
       return std::unexpected(ParseError {
           "cannot assign through a value of type " + type_name(pointer->type) + ", which is not a pointer", location});
     }
     const SemType pointee = *pointer->type.pointee;
     const Type lowered = lower(pointee);
 
+    const auto capture_pointer = [&] {
+      const auto stable = Operand::vreg(lower(pointer->type), context_.builder.alloc(lower(pointer->type)));
+      context_.builder.emit(Op::Mov, {stable, pointer->as_operand()});
+      pointer->operand = stable;
+      pointer->constant.reset();
+    };
     if (cursor.match_op("=")) {
-      auto value = assignment_rhs(pointee);
+      if (rhs_may_call(cursor)) {
+        capture_pointer();
+      }
+      auto value = expressions_.expression(pointee);
       if (!value) {
         return std::unexpected(value.error());
+      }
+      if (at_assignment_operator(cursor)) {
+        return std::unexpected(ParseError {"assignment chains are not allowed", cursor.location()});
       }
       if (value->type != pointee) {
         return std::unexpected(ParseError {
             "cannot assign " + type_name(value->type) + " through a pointer to " + type_name(pointee), location});
       }
-      context_.builder.emit(Op::Store, {pointer->as_operand(), value->as_operand()});
-      last_assignment_ = *value;
-      last_assignment_.addressable = false;
-      last_assignment_.moved_from.reset();
+      if (auto valid = context_.validate_origins(*pointer, location); !valid) {
+        return valid;
+      }
+      auto copied = context_.copy_value(*value, location);
+      if (!copied) {
+        return std::unexpected(copied.error());
+      }
+      if (pointer->type.is_reference()) {
+        if (auto stored = context_.store_origins(*pointer, *copied, location); !stored) {
+          return stored;
+        }
+      }
+      if (pointer->type.is_reference() && pointee.is_record()) {
+        const auto old = Operand::vreg(lowered, context_.builder.alloc(lowered));
+        context_.builder.emit(Op::Load, {old, pointer->as_operand()});
+        context_.drop_value(Value {pointee, old});
+        context_.invalidate_referent(*pointer);
+        if (auto valid = context_.validate_origins(*copied, location); !valid) {
+          return valid;
+        }
+      }
+      context_.builder.emit(Op::Store, {pointer->as_operand(), copied->as_operand()});
+      context_.transfer_value(*copied);
       return {};
     }
 
@@ -1119,16 +1402,30 @@ namespace erax::frontend {
         return std::unexpected(
             ParseError {quoted(compound.text) + " is not defined for " + type_name(pointee), location});
       }
+      std::optional<std::uint64_t> captured;
+      if (rhs_may_call(cursor)) {
+        capture_pointer();
+        captured = context_.builder.alloc(lowered);
+        context_.builder.emit(Op::Load, {Operand::vreg(lowered, *captured), pointer->as_operand()});
+      }
       auto value = expressions_.expression(pointee);
       if (!value) {
         return std::unexpected(value.error());
+      }
+      if (at_assignment_operator(cursor)) {
+        return std::unexpected(ParseError {"assignment chains are not allowed", cursor.location()});
       }
       if (value->type != pointee) {
         return std::unexpected(ParseError {
             "cannot assign " + type_name(value->type) + " through a pointer to " + type_name(pointee), location});
       }
-      const std::uint64_t cell = context_.builder.alloc(lowered);
-      context_.builder.emit(Op::Load, {Operand::vreg(lowered, cell), pointer->as_operand()});
+      if (auto valid = context_.validate_origins(*pointer, location); !valid) {
+        return valid;
+      }
+      const std::uint64_t cell = captured ? *captured : context_.builder.alloc(lowered);
+      if (!captured) {
+        context_.builder.emit(Op::Load, {Operand::vreg(lowered, cell), pointer->as_operand()});
+      }
       context_.builder.emit(compound.op,
                             {Operand::vreg(lowered, cell), Operand::vreg(lowered, cell), value->as_operand()});
       context_.builder.emit(Op::Store, {pointer->as_operand(), Operand::vreg(lowered, cell)});
@@ -1144,18 +1441,21 @@ namespace erax::frontend {
       if (auto declared = let(); !declared) {
         return std::unexpected(declared.error());
       }
+      context_.cleanup_temporaries();
       return Flow {};
     }
     if (cursor.at(TokenType::Identifier) && at_assignment(cursor)) {
       if (auto written = assignment(); !written) {
         return std::unexpected(written.error());
       }
+      context_.cleanup_temporaries();
       return Flow {};
     }
     if (cursor.at_op("*") && at_deref_assignment(cursor)) {
       if (auto written = deref_assignment(); !written) {
         return std::unexpected(written.error());
       }
+      context_.cleanup_temporaries();
       return Flow {};
     }
     return std::unexpected(ParseError {"expected a declaration or an assignment in the 'for' init", location});
@@ -1170,6 +1470,7 @@ namespace erax::frontend {
     if (value->type != SemType::Bool) {
       return std::unexpected(ParseError {"condition must be 'bool', not " + type_name(value->type), location});
     }
+    context_.cleanup_temporaries();
     return value;
   }
 
@@ -1447,6 +1748,9 @@ namespace erax::frontend {
       context_.deferred_local_reads = true;
       step written = cursor.at_op("*") ? deref_assignment() : assignment();
       context_.deferred_local_reads = false;
+      if (written) {
+        context_.cleanup_temporaries();
+      }
       if (!written) {
         context_.pop_scope();
         return std::unexpected(written.error());
@@ -1482,6 +1786,7 @@ namespace erax::frontend {
     } else {
       context_.merge_assigned(after_init);
     }
+    context_.emit_cleanup(context_.scope_depth() - 1);
     context_.pop_scope();
 
     // A test that is not there, or that does not fold, may or may not fail, so the
@@ -1507,6 +1812,7 @@ namespace erax::frontend {
         return std::unexpected(semicolon.error());
       }
       if (!context_.builder.terminated()) {
+        context_.emit_cleanup(0);
         context_.builder.emit(Op::Ret, {});
       }
       return Flow {false};
@@ -1528,7 +1834,21 @@ namespace erax::frontend {
       return std::unexpected(semicolon.error());
     }
     if (!context_.builder.terminated()) {
-      context_.builder.emit(Op::Ret, {value->as_operand()});
+      auto copied = context_.copy_value(*value, location);
+      if (!copied) {
+        return std::unexpected(copied.error());
+      }
+      if (auto checked = context_.check_return(*copied, location); !checked) {
+        return std::unexpected(checked.error());
+      }
+      auto stable = copied->as_operand();
+      if (context_.has_owned_values()) {
+        stable = Operand::vreg(lower(copied->type), context_.builder.alloc(lower(copied->type)));
+        context_.builder.emit(Op::Mov, {stable, copied->as_operand()});
+      }
+      context_.transfer_value(*copied);
+      context_.emit_cleanup(0);
+      context_.builder.emit(Op::Ret, {stable});
     }
     return Flow {false};
   }
@@ -1545,6 +1865,7 @@ namespace erax::frontend {
     }
     const std::size_t target = keyword == Keyword::Break ? context_.loop().break_block : context_.loop().continue_block;
     if (!context_.builder.terminated()) {
+      context_.emit_cleanup(context_.loop().scope_depth);
       context_.builder.link_next(target);
     }
     if (keyword == Keyword::Break) {

@@ -32,8 +32,12 @@ add_library(erax
     src/frontend/parser/Value.cpp
     src/frontend/parser/ConstantRange.cpp
     src/frontend/parser/ParseContext.cpp
+    src/frontend/parser/ParseContext.ownership.cpp
     src/frontend/parser/ExpressionParser.cpp
+    src/frontend/parser/ExpressionParser.records.cpp
     src/frontend/parser/ProgramParser.cpp
+    src/frontend/parser/ProgramParser.records.cpp
+    src/frontend/parser/ProgramParser.effects.cpp
     src/middleend/jir/Jir.cpp
     src/middleend/jir/Builder.cpp
     src/middleend/jir/Fold.cpp

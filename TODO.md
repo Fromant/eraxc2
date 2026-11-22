@@ -20,75 +20,25 @@ Status: **WIP.** The lexer and the parser exist; the IR is specified and impleme
 
 ## Ownership and RAII
 
-Accepted design from the language discussion. This section records the implementation target, not features already available in `docs/core/`. No VM or AoT work is part of this change. The end-to-end target is a `std.vector<std.unique<Resource>>` passed between functions, with correct cleanup on all ordinary exits.
+Implemented contract lives in `docs/core/`, `docs/std.md`, and `docs/middleend/JIR.md`. VM/AoT remain deferred. `examples/raii.erx` and the record/reference/collection tests pin the target `std.vector<std.unique<Resource>>`, relocation, return-by-move, and exactly-once destruction.
 
-### Implementation status
+- [x] Heap liveness and zeroed reuse, portable cell offsets, and bounded-memory reuse tests.
+- [x] Independent `let`/`const` and `mut`, local inference, explicit whole-value moves, and CFG back-edge initialization checks.
+- [x] Assignment statement-only; **all chains `a = b = c` are forbidden** (revised decision).
+- [x] Named generic structures, recursive type applications, fields, factories, methods, private/public access, and owned-cycle validation.
+- [x] Safe `ref` / `ref mut`, reference fields, aliases, local lifetime dependencies, and invalidation checks through control flow.
+- [x] Automatic field/local/global cleanup, temporaries and parameters, user `destructor {}`, and `clone`-based copying independent of movement.
+- [x] Pure-erax `unique<T>` and `vector<T>` with relocation, cloning, checked access, clear/pop/release, and user element cleanup.
 
-- [x] Fix heap dereference of freed blocks and zero reused allocations; regression tests cover both.
-- [x] `const` versus `let`, independent `mut` binding metadata, local type inference, and explicit moves of locals/parameters.
-- [x] Source initialization events checked to a fixed point over the CFG, including loop back edges after moves.
-- [x] Right-associated statement-only chains of plain `=`, including raw dereference targets.
-- [x] Recursive template signature types (`ptr T`, `ptr ptr T`) and independent `Clonable` / `Movable` capability bounds for the existing scalar/pointer types.
-- [ ] Named generic structures, layout, fields, factories, methods, and visibility.
-- [ ] Safe `ref` / `ref mut`, reference fields, inferred lifetime dependencies, and invalidation effects across calls.
-- [ ] User-defined copying, automatic structural capabilities, RAII destruction, and temporary ownership.
-- [ ] `std.unique<T>`, `std.vector<T>`, and the target conformance programs.
-- [ ] Ordinary fallible factory results (`Result` needs a concrete representation and syntax); do not implement exceptions.
+Remaining work and deliberate restrictions:
 
-### Bindings and access
-
-`const` prohibits rebinding; `let` permits it. `mut` grants object mutation independently: `const mut v = ...` fixes the owner but permits changing the vector; `let v = ...` permits replacement but not mutation through that binding. No `readonly` keyword. Access without `mut` does not permit mutation through owned fields or owned pointees, nor extraction of mutable access through reference fields. It does not assert that no other alias can change the object.
-
-`ref object` and `ref mut object` explicitly create safe references. No implicit borrowing in ordinary initialization. Copying a reference preserves its target rather than copying the target. Mutable-reference aliases are permitted; Rust-style exclusive mutable borrowing is not the accepted model. A reference promises a valid resource at use. Ordinary mutation is permitted through other authorized access; destruction, replacement, relocation, and container operations that invalidate a referenced element must be checked against all still-used references. References to a vector object and references to its elements have different invalidation dependencies. Last-use analysis, not merely lexical scope, determines reference use. Reference fields are supported; dependencies survive packaging, copying, moves, returns, and collection storage. No user lifetime parameters in this implementation stage. A returned reference conservatively depends on the reference arguments; refine summaries where feasible. Self-referential object creation is excluded until stable storage and movement are specified.
-
-Raw `ptr` is unsafe, `ref` is safe. There is no `unsafe` keyword or block. Ordinary casts cannot manufacture a safe reference from arbitrary raw bits or a raw pointer. Code using raw pointer operations is responsible for preserving any live safe-reference contract.
-
-### Structures and creation
-
-All fields, methods, and factories are `private` by default; `public` and `private` apply to each. No inheritance, `protected`, or separate `impl` blocks. An explicitly public field can be changed through mutable access; its author is responsible for the exposed invariant. Receivers are written `this`, not `self`, with explicit `ref Type` or `ref mut Type` types.
-
-```
-struct Buffer {
-    data: ptr u8;
-    size: u64;
-
-    public new(size: u64): Buffer {
-        return { data: primitive alloc(size), size: size };
-    }
-
-    public fn length(this: ref Buffer): u64 {
-        return this.size;
-    }
-
-    destructor {
-        primitive free(this.data);
-    }
-}
-```
-
-`Buffer.new(...)` invokes a factory. An object literal `{ field: expression, ... }` inside the type's factory assembles the value directly without recursively invoking that factory. No `init` keyword and no general external `Buffer { ... }` construction. Every field is initialized exactly once; no accessible partially initialized `this`. Only the type's factories can assemble fields. Overload `new` by parameter types; named factories are ordinary receiverless methods that invoke `new`. Do not synthesize an unrestricted factory. Generic type factory calls use `std.vector<i32>.new()`; type parsing must handle nesting without changing maximal-munch operator tokenization.
-
-The factory may return an ordinary result carrying an error. Its failure path destroys already-created locals and temporaries. Fields evaluate in written order. Assembly from prepared fields introduces no independent hidden failure. Construction directly in final storage does not require copying or moving a pre-existing value. Temporaries last through their containing expression; saving a reference to a temporary for later use is rejected.
-
-### Copying, moving, assignment
-
-Ordinary initialization from an existing value and plain assignment copy; there is no implicit move. User `clone` implements the copying protocol; a separate `clone` keyword is unnecessary. A type may support either, both, or neither `Clonable` and `Movable`. Do not require repetitive explicit trait lists on every type. Simple structural copying is generated when fields permit it and there is no user destructor. A destructor disables automatic shallow copying, not automatic movement. `unique<T>` is not clonable; consequently neither is `vector<unique<T>>` without another explicit resource-copying contract.
-
-`move value` transfers a whole value and leaves its source uninitialized, rather than invoking a user-defined move method or requiring an empty state. `const` values can move; they cannot be reinitialized. Movability is checked independently of clonability and reference invalidation. Partial field moves are not supported in this stage.
-
-Assignment prepares the RHS before destroying the previous destination, then installs the new value. Reject a new value that would retain a safe reference to the destroyed destination. `a = a` copies before replacement; `a = move a` is an error. Plain `=` chains associate right to left and remain statement-only. Outward links copy the inner assigned value; a chain requiring a copy of a non-clonable owner must be rejected. Associativity does not replace explicit evaluation/cleanup ordering.
-
-### Destruction
-
-Destruction is universal, not an optional `Droppable` implementation. Optional `destructor { ... }` adds user cleanup. Run its body, then destroy owned fields in reverse declaration order. Locals are destroyed in reverse order of successful initialization on fallthrough, `return`, `break`, and `continue`. Prepare a returned value before local cleanup. By-value parameters belong to the callee unless moved out. Destroy global owners in reverse initialization order after normal `main` completion. Traps, `abort`, and immediate `exit` do not unwind.
-
-The language does not prescribe the order in which a container destroys its elements: that belongs to std or the particular collection. A destructor must not move the entire dying `this` or leak a safe reference to it. Forgetting a user destructor must not disable automatic field destruction. Manually managed raw pointers still require a correct manual resource contract.
-
-### Architecture and remaining layout decisions
-
-Introduce a typed representation of storage places and initialization/copy/move/borrow/destroy operations before expanding parser-side cleanup logic. Lower cleanup to ordinary calls and CFG edges, not a backend-specific RAII mechanism. Extend semantic types with named generic applications and references. Resolve representation, allocation size/stride, addressable fields and elements, and aggregate call/return lowering before implementing vector storage; do not encode the interpreter's region/index layout in pure-erax pointer arithmetic. Concrete memory/layout changes may require JIR and reference-interpreter work but no VM/AoT development.
-
-Safe generic containers must invoke user element destruction/copy operations, so replace the obsolete std rule forbidding every call into user code with protocol-based composition. Specify how library raw-storage operations establish and invalidate safe element references before claiming memory safety. Explicit opt-out syntax for automatically inferred capabilities, non-relocatable storage, and precise reference-field effect summaries remain design work.
+- **Fallible factories / Result / Option.** Current factories return exactly their own record type. Define a tagged result representation and propagation syntax before introducing factories returning errors; do not add exceptions. Error-return paths must destroy prepared locals/fields. This is separate from traps/abort/exit, which deliberately do not unwind.
+- **Global reference summaries.** Safe references to global storage and globals containing safe references are currently rejected. Sound support needs interprocedural escape/invalidation and teardown-dependency summaries, not just permanent global-cell addresses. Global owning records already initialize in source order and destroy after `main` in reverse order. Destructor access to an already destroyed global owner traps; global initialization/teardown dependencies need an explicit dependency policy.
+- **More precise inferred lifetimes.** Current dependency sets combine possible sources conservatively. Replacing/removing a reference can retain obsolete dependencies. Copying reference-bearing records retains source lifetime dependencies because a custom clone may borrow the source's owned fields. Additional mutable record-reference method/factory arguments and unknown alias/generic effects are conservative invalidation boundaries. Refine per-field, container, clone-result and call summaries before considering user lifetime annotations.
+- **Temporary reference receivers.** Reference-returning calls on unnamed owned temporaries are rejected even for immediate uses that could be safe within one full expression. Add scoped temporary loans if needed.
+- **Movability control and self references.** All current structures infer movement from fields. Explicit opt-out/non-relocatable storage, pinning, self-referential construction and partial safe field moves need their own contract; no user move method is defined. Raw pointer storage remains manual and unchecked at the language level.
+- **Generic methods and type operations.** Generic record types and generic free functions exist; methods cannot declare additional type parameters. Add method-level generic bounds only with explicit resolution rules. Layout is cell based and record storage is boxed; inline aggregates/packed bytes, a source `sizeof`, slices, indexing protocols, iterator protocols, strings and richer collections need separate design. Do not encode address-region bits in stdlib.
+- **Front-end architecture.** Storage places and ownership/loan metadata are explicit in `Value` and `ParseContext`; CFG events check initialization and loans. Further growth may warrant a typed operations layer before JIR lowering. Avoid duplicating cleanup logic or introducing backend-specific destructor instructions.
 
 ## Beyond v1 (future work)
 
@@ -98,7 +48,7 @@ Source-level additions that are out of scope for v1 — listed here so the langu
 - Short-circuit `&&` / `||` — v1 evaluates both operands (see `docs/core/expressions.md`). It needs an op the current table has none of (a conditional-jump or select form), so it is a `.jir` version bump.
 - An `unreachable code` diagnostic — v1 parses dead code, checks it, and drops it.
 - Strings and string literals, floats — and with them string support in the stdlib (`std.print`); v0.1 std lives in `stdlib/std.erx` already (`docs/std.md`). `examples/helloworld.erx` is aspirational on `string`.
-- Machine-level futures — arrays/indices, references, objects/classes, closures — live in the JIR section below. Raw pointers (`ptr T`, `&`, `*`) and the `alloc`/`free` heap are implemented.
+- Machine-level futures — arrays/indices, closures, and inline aggregate layout — live in the JIR section below. Structures and safe references are implemented. Raw pointers (`ptr T`, `&`, `*`) and the `alloc`/`free` heap are implemented.
 - **A `char` suffix.** `char` is a type name and `is_integer(char)` holds, but it is not a literal suffix (`types.md#literals`), so a *constant* `char` expression cannot be written: `let x: char = 255 / 16;` is an `i32` division in a `char` position. `(255 / 16) as char` already spells the value (`types.md#casts`), but only a suffix makes the arithmetic itself read as `char` arithmetic instead of `i32` ending in a cast — adding `char` to the suffix set closes that.
 - **Literal / singleton types.** `let b: i32 = 0;` gives `b` the type `i32`, not the value `0`. A type system that tracked the value — so `b` has type `0` and a later `b = 2` is an error until the use — would catch the divide-by-a-literal-zero and the accidental-overflow class of bug at compile time instead of at the trap, and it is the natural end state of the constants work in `types.md#constants`. It costs a real type-inference term and is far past v1.
 - **More template machinery.** v1 templates (`docs/core/statements.md#templates`) are deliberately minimal: **one template per name**, type arguments **always deduced**, and a **closed** capability bound vocabulary (`docs/core/types.md#capabilities`). Each extension has a cost. A second template per name needs a rule for which one a call picks — v1 says the name decides, and a concrete declaration that matches exactly wins. **Explicit instantiation** (`f<u8>(x)`) reopens the ambiguity that kept it out: `a < b > (c)` is an unknown-operator error today (`docs/core/language.md#operator-set`), and making it a call needs either a `::`-style token (banned — dots are the namespace syntax) or a grammar rule the language does not have. A **wider capability vocabulary** veers into a full interface system — `Equatable`, `Bitwise`, ordering beyond `<`, and user-declarable bounds and the types that name them — which is real type-system work well past v1.
@@ -123,7 +73,7 @@ Source-level additions that are out of scope for v1 — listed here so the langu
 
 - Floats — they will reuse the operand's `u64` bit pattern; no format change.
 - Strings — `std.string` in the stdlib, a heap-pointer wrapper; **no string ops in JIR, ever**. It sits on the raw pointers below.
-- Ownership / RAII (drop, moves, `std.unique`), arrays/indices, references — the uses that pointers currently leave to the program: a pointer is a raw cell with no lifetime, so forgetting a `free` leaks and remembering it twice traps. A managed form (free exactly once, automatically) is the future work; raw pointers stay available underneath.
+- Ownership refinements, arrays/indices, slices and iterator protocols — see [Ownership and RAII](#ownership-and-raii). Raw pointers remain available underneath the implemented managed types.
 - Closures, objects/classes.
 - Imports — `std.erx` is auto-imported by the driver today (`docs/std.md`); a real import system replaces that. Dot access already works: the auto-imported stdlib is the root namespace `std`, reached as `std.…`.
 - New primitives — each is a catalog addition in `docs/primitive.md`, never a language change: memory (`alloc`/`free`) landed; raw byte output (`write_bytes`, what strings will print through), and friends. Time/random stay excluded: the determinism rule in `docs/primitive.md` is what makes a backend comparison mean anything.
@@ -137,7 +87,7 @@ The driver contract for both is **flag = backend** (decided): `eraxc file.erx` r
 
 ## Serialization (`TODO.md` owns the format versioning)
 
-`.jir` = magic + `u32` version + deterministic little-endian encoding of `Program` (commands as op + operand list; arity from the op table; a `PRIM` carries the primitive's catalog `u32` id). The op table **and the primitive catalog** are frozen by the format — a new op or primitive is a version bump. The pointer phase added three ops (`LOAD`/`STORE`/`ADDR`), the `ptr T` type, and two primitives (`alloc`/`free`); when serialization lands it must carry a version past the one the five-primitive, nineteen-op set was frozen at.
+`.jir` = magic + `u32` version + deterministic little-endian encoding of `Program` (commands as op + operand list; arity from the op table; a `PRIM` carries the primitive's catalog `u32` id). The op table **and the primitive catalog** are frozen by the format — a new op or primitive is a version bump. The pointer phase added `LOAD`/`STORE`/`ADDR`, the `ptr T` type, and `alloc`/`free`; the ownership phase appended `OFFSET` and the `offset` primitive (id 7), preserving existing ids; when serialization lands it must carry a version past the one the five-primitive, nineteen-op set was frozen at.
 
 ## Conformance
 

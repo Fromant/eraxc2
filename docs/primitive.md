@@ -32,6 +32,7 @@ Ids are fixed: the table order is the contract (the serialized IR names a primit
 | 4  | `abort`     | `() → void`               |
 | 5  | `alloc`     | `(bytes: u64) → ptr u8`   |
 | 6  | `free`      | `(p: ptr u8) → void`      |
+| 7  | `offset`    | `(p: ptr u8, index: u64) → ptr u8` |
 
 ## Contracts
 
@@ -72,6 +73,16 @@ Ids are fixed: the table order is the contract (the serialized IR names a primit
 
 `primitive free(p)` returns the block `p` names to the allocator, so a later `alloc` may offer the same cells. `free` of the **null pointer does nothing**. Any other pointer that names no live block — an address that was never allocated, one from `&` (a stack or global cell, not a heap block), or a block already freed — is the same trap as a dead deref. After a `free`, the pointer `p` is a dead pointer: passing it to `free` again, or dereferencing it, is that trap (`JIR.md#runtime-semantics`).
 
+### `offset`
+
+`primitive offset(p, index)` returns the address `index` **cells** forward from `p`, preserving the pointer's allocation. It uses the same checked address operation as JIR `OFFSET` (`docs/middleend/JIR.md#pointers`); it does not add to a pointer's integer encoding. A cell is one 64-bit storage slot, regardless of the pointee value's integer width. This is raw memory access, not a safe-reference constructor.
+
+- Both `p` and the result must name live cells of the same allocation. An interior pointer can advance only through the remaining cells of its block. The one-past address is not a valid result.
+- `offset(p, 0)` returns `p` if it is live. Null and freed pointers trap even for zero.
+- An out-of-bounds or overflowing index traps with `InvalidPointer`; it cannot walk into an adjacent allocation.
+- Stack pointers remain in their source frame; a global is a single-cell allocation and permits only index zero.
+- A caller casts the result to a different pointee type when accessing a differently typed storage slot. That cast does not change the slot's identity or allocation.
+
 ### Flow
 
 `exit` and `abort` end the flow of the block they are in, exactly like `return`: flow analysis stops there, code after them is unreachable (parsed and checked, but dropped — `statements.md#statements`), and in a non-void function a path ending in one of them satisfies the reaching-return check. In the IR, a block ending in `PRIM exit` / `PRIM abort` has no outgoing edges, like a `RET` block (`JIR.md#primitives`).
@@ -80,6 +91,6 @@ Ids are fixed: the table order is the contract (the serialized IR names a primit
 
 Every primitive is deterministic: the same program with the same input has the same observable result on every backend. Output and termination never depend on the host beyond delivering the bytes and the code; `read_char` depends only on the input bytes it is given, which the caller/test supplies.
 
-`alloc` and `free` are deterministic in the same sense: the *block a pointer names* and its contents are fully defined, and the reference interpreter's allocator is a fixed first-fit that reuses blocks deterministically. The *address value* `alloc` returns is executor-internal, exactly as `&`'s address is (`JIR.md#runtime-semantics`) — a program compares pointers for identity and never prints or further compares an address's integer form. This is the one primitive whose value is defined only up to identity; the conformance corpus keeps to that (`TODO.md#conformance`).
+`alloc` and `free` are deterministic in the same sense: the *block a pointer names* and its contents are fully defined, and the reference interpreter's allocator is a fixed first-fit that reuses blocks deterministically. The *address value* `alloc` returns is executor-internal, exactly as `&`'s address is (`JIR.md#runtime-semantics`) — a program compares pointers for identity and never prints or further compares an address's integer form. `alloc` and the addresses derived by `offset` are defined only up to identity; the conformance corpus keeps to that (`TODO.md#conformance`).
 
 The parser lowers each primitive call to one `PRIM` instruction (`JIR.md#primitives`); backends execute `PRIM` straight from this catalog.

@@ -143,4 +143,147 @@ namespace std {
     fn alloc(bytes: u64): ptr u8 { return primitive alloc(bytes); }
     fn free(p: ptr u8) { primitive free(p); }
 
+
+    // One owned T, stored in one raw cell. The slot owns the value until a
+    // transfer explicitly moves it into a local or a caller's result.
+    struct unique<T> {
+        storage: ptr T;
+
+        public new(value: T): unique<T> {
+            const slot = primitive alloc(8) as ptr T;
+            *slot = move value;
+            return { storage: slot };
+        }
+
+        public fn get(this: ref unique<T>): ref T {
+            assert(this.storage != 0 as ptr T);
+            return ref *this.storage;
+        }
+
+        public fn get_mut(this: ref mut unique<T>): ref mut T {
+            assert(this.storage != 0 as ptr T);
+            return ref mut *this.storage;
+        }
+
+        public fn release(this: ref mut unique<T>): T {
+            assert(this.storage != 0 as ptr T);
+            const value: T = move *this.storage;
+            primitive free(this.storage as ptr u8);
+            this.storage = 0 as ptr T;
+            return move value;
+        }
+
+        destructor {
+            if (this.storage != 0 as ptr T) {
+                const value: T = move *this.storage;
+                primitive free(this.storage as ptr u8);
+            }
+        }
+    }
+
+    // Every source value occupies one storage cell, including a record handle.
+    // Raw relocation transfers each initialized element; it never clones it.
+    struct vector<T> {
+        storage: ptr u8;
+        count: u64;
+        capacity_count: u64;
+
+        public new(): vector<T> {
+            return { storage: 0 as ptr u8, count: 0u64, capacity_count: 0u64 };
+        }
+
+        public fn length(this: ref vector<T>): u64 {
+            return this.count;
+        }
+
+        public fn capacity(this: ref vector<T>): u64 {
+            return this.capacity_count;
+        }
+
+        public fn empty(this: ref vector<T>): bool {
+            return this.count == 0;
+        }
+
+        public fn reserve(this: ref mut vector<T>, capacity: u64) {
+            if (capacity <= this.capacity_count) {
+                return;
+            }
+            // Multiplication must not wrap before the allocator sees the size.
+            assert(capacity <= 2305843009213693951u64);
+            const replacement = primitive alloc(capacity * 8);
+            let i: u64 = 0;
+            while (i < this.count) {
+                const source = primitive offset(this.storage, i) as ptr T;
+                const destination = primitive offset(replacement, i) as ptr T;
+                *destination = move *source;
+                i += 1;
+            }
+            primitive free(this.storage);
+            this.storage = replacement;
+            this.capacity_count = capacity;
+        }
+
+        public fn push(this: ref mut vector<T>, value: T) {
+            if (this.count == this.capacity_count) {
+                let capacity: u64 = 4;
+                if (this.capacity_count != 0) {
+                    assert(this.capacity_count < 2305843009213693951u64);
+                    if (this.capacity_count <= 1152921504606846975u64) {
+                        capacity = this.capacity_count * 2;
+                    } else {
+                        capacity = 2305843009213693951u64;
+                    }
+                }
+                this.reserve(capacity);
+            }
+            const slot = primitive offset(this.storage, this.count) as ptr T;
+            *slot = move value;
+            this.count += 1;
+        }
+
+        public fn at(this: ref vector<T>, index: u64): ref T {
+            assert(index < this.count);
+            const slot = primitive offset(this.storage, index) as ptr T;
+            return ref *slot;
+        }
+
+        public fn at_mut(this: ref mut vector<T>, index: u64): ref mut T {
+            assert(index < this.count);
+            const slot = primitive offset(this.storage, index) as ptr T;
+            return ref mut *slot;
+        }
+
+        public fn pop(this: ref mut vector<T>): T {
+            assert(this.count != 0);
+            this.count -= 1;
+            const slot = primitive offset(this.storage, this.count) as ptr T;
+            return move *slot;
+        }
+
+        public fn clear(this: ref mut vector<T>) {
+            while (this.count != 0) {
+                this.count -= 1;
+                const slot = primitive offset(this.storage, this.count) as ptr T;
+                const value: T = move *slot;
+            }
+        }
+
+        public fn clone(this: ref vector<T>): vector<T> {
+            let mut result = vector<T>.new();
+            result.reserve(this.count);
+            let i: u64 = 0;
+            while (i < this.count) {
+                const source = primitive offset(this.storage, i) as ptr T;
+                result.push(*source);
+                i += 1;
+            }
+            return move result;
+        }
+
+        destructor {
+            this.clear();
+            primitive free(this.storage);
+        }
+    }
+
 }  // namespace std

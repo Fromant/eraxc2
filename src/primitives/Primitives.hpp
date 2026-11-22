@@ -45,10 +45,11 @@ namespace erax::primitives {
     Abort = 4,
     Alloc = 5,
     Free = 6,
+    Offset = 7,
   };
 
   /// How many parameters a signature can hold. The widest primitive today takes
-  /// one; raise this, and the table's arrays, if the catalog ever needs more.
+  /// two; raise this, and the table's arrays, if the catalog ever needs more.
   inline constexpr std::size_t max_params = 2;
 
   /// One primitive's contract. `params` holds the fixed parameters; a

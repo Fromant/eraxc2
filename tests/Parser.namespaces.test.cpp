@@ -168,5 +168,5 @@ fn main(): i32 { return a.b.c; }
   // The first segment resolves outward, so a local never takes the qualified path.
   CHECK(parse_error(R"(
 fn main(): i32 { let a: i32 = 1; return a.b; }
-)") == "unknown namespace 'a'");
+)") == "member access needs a structure, not i32");
 }

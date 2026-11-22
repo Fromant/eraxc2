@@ -1,0 +1,29 @@
+
+let drops: i32 = 0;
+let total: i32 = 0;
+
+struct Resource {
+    id: i32;
+    public new(id: i32): Resource { return { id: id }; }
+    public fn number(this: ref Resource): i32 { return this.id; }
+    destructor { drops += 1; total += this.id; }
+}
+
+fn make(): std.vector<std.unique<Resource>> {
+    let mut result = std.vector<std.unique<Resource>>.new();
+    result.push(std.unique<Resource>.new(Resource.new(3)));
+    result.push(std.unique<Resource>.new(Resource.new(5)));
+    result.reserve(20);
+    return move result;
+}
+
+fn consume(values: std.vector<std.unique<Resource>>) {
+    std.assert(values.length() == 2);
+}
+
+fn main(): i32 {
+    consume(make());
+    std.assert(drops == 2);
+    std.assert(total == 8);
+    return 0;
+}

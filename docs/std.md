@@ -9,7 +9,7 @@ Alongside it, `stdlib/std.test.erx` is the **std self-test**: ordinary erax, no 
 ## Rules
 
 - **std's names are its own namespace.** std's declarations all live inside `namespace std` (`language.md#namespaces`), and the auto-import registers that namespace before the user's declarations: user code reaches std's functions only as `std.…` — there is no bare `print` — and std's names are separate from the user's, so a user function named `abs` or `print` at the root or in a namespace does not clash with std's (`statements.md#namespaces`). Inside `namespace std`, the functions call each other by bare name, exactly as the enclosing-scope rules say. `namespace std` (or another root `std`) may not be reopened by the program.
-- **std is closed.** It may call primitives and other std functions, never user code: it is fully parsed before the user's declarations exist, so the reverse could not resolve anyway.
+- **The std namespace is closed, not its generic composition.** User code cannot reopen `std`. Library templates and generic containers may copy, move, and destroy user-defined element types through the same language protocols available to user code. The declaration pre-pass sees the combined library and user token stream; std is not a separately privileged parser phase.
 - **No globals, no `main`.** std declares no globals (so it cannot affect a program's observable global state) and never contains the entrypoint.
 - Everything std can do, user code can do too: std has no privileges — it uses the same primitives, the same language, and the same templates.
 
@@ -22,3 +22,72 @@ Each name below is reached qualified — `std.print`, `std.min`, `std.assert` �
 - **Math** — `abs<T extends Ordered & Negatable>`, `min<T extends Ordered>`, `max<T extends Ordered>`, `pow<T extends Ordered & Arithmetic>` (exponentiation by squaring, wraps), `gcd<T extends Arithmetic>` (Euclid, `gcd(0, 0) = 0`). Arithmetic wraps exactly as the language says.
 - **`assert(cond: bool)`** — `primitive abort()`s when `cond` is false; it writes no message itself, so print context first if you want any.
 - **Heap** — `alloc(bytes: u64) → ptr u8` and `free(p: ptr u8)`: thin wraps over the `alloc`/`free` primitives (`docs/primitive.md#alloc`), so a program reaches the allocator as `std.alloc` / `std.free` like every other std name. The block's contract — zeroed, at least `ceil(bytes / 8)` whole cells — is the primitive's.
+
+## Ownership and collections
+
+The library's generic structures use the same factories, references, copying,
+explicit moves, and automatic destruction as user structures
+(`core/statements.md`, `core/types.md`). Their fields are private. They own
+storage through raw pointers internally; callers use checked references or
+transfer complete values.
+
+### `std.unique<T>`
+
+`std.unique<T>.new(value)` creates one owner of a `T`. A pre-existing value is
+copied when passed normally and transferred when passed as `move value`; a
+freshly created value can initialize the owner directly. `unique<T>` is movable
+and is not clonable. Destroying a nonempty owner destroys its value and frees
+its storage exactly once.
+
+| Method | Receiver | Result and behavior |
+| ------ | -------- | ------------------- |
+| `new(value: T)` | factory | An owner containing `value` |
+| `get()` | `ref unique<T>` | `ref T` for reading the owned value |
+| `get_mut()` | `ref mut unique<T>` | `ref mut T` for changing the owned value |
+| `release()` | `ref mut unique<T>` | Transfers the `T` to the caller and empties the owner |
+
+A released owner remains valid and can be moved or destroyed; its destructor
+has no contained value to destroy. Calling `get`, `get_mut`, or `release` on an
+empty owner fails `std.assert`, terminating with code 134. References obtained
+from the owner may not be used after release or destruction.
+
+### `std.vector<T>`
+
+`std.vector<T>.new()` creates an empty vector with no allocated element buffer.
+The vector owns its initialized elements and releases its buffer on destruction.
+Growth transfers existing elements; it does not require `T` to be clonable.
+Consequently `std.vector<std.unique<Resource>>` can grow, be returned, and be
+passed between functions with explicit `move`.
+
+| Method | Receiver | Result and behavior |
+| ------ | -------- | ------------------- |
+| `new()` | factory | An empty vector |
+| `length()` | `ref vector<T>` | Number of initialized elements, `u64` |
+| `capacity()` | `ref vector<T>` | Number of available storage slots, `u64` |
+| `empty()` | `ref vector<T>` | Whether the length is zero |
+| `reserve(capacity: u64)` | `ref mut vector<T>` | Ensures at least that capacity without changing length |
+| `push(value: T)` | `ref mut vector<T>` | Appends a copied or explicitly moved value |
+| `at(index: u64)` | `ref vector<T>` | `ref T` to an initialized element |
+| `at_mut(index: u64)` | `ref mut vector<T>` | `ref mut T` to an initialized element |
+| `pop()` | `ref mut vector<T>` | Removes the last element and transfers it to the caller |
+| `clear()` | `ref mut vector<T>` | Destroys all initialized elements, preserving capacity |
+| `clone()` | `ref vector<T>` | A vector with independent storage and copied elements |
+
+Ordinary copying uses the vector's `clone` implementation and requires clonable
+elements. Copying a vector of nonclonable owners is a compile-time error.
+`at` and `at_mut` require `index < length()`; `pop` requires a nonempty vector.
+Violations fail `std.assert` with code 134. Capacity multiplication is checked
+before requesting raw allocation; allocator exhaustion remains a machine trap.
+
+A reference to the vector object remains valid when its internal buffer changes.
+A reference to an element must not be used after an operation that may invalidate
+that element, such as buffer relocation, element removal, or clearing. Element
+mutation through a valid mutable reference does not itself relocate the buffer.
+Container element destruction order is a library matter, not a language rule;
+callers must not depend on an order promised by neither the API nor their own
+container implementation.
+
+The implementation stores one source value per 64-bit machine cell, including
+record handles. It uses `primitive offset` to address slots and explicit raw
+storage moves to transfer initialized values. It does not perform arithmetic on
+an executor's pointer encoding (`primitive.md#offset`).

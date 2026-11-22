@@ -16,21 +16,29 @@ Source-level contract of the erax language: grammar, types, and semantics. The d
 
 - **Post-name type syntax.** Types are written after the name, everywhere: `let t: i32 = 123;`, params `fn foo(x: i32, y: bool)`, return `fn main(): i32 { … }`.
 - **Post-name annotations and local inference.** Parameters and globals name their types. A local may omit its annotation when it has an initializer; the initializer then determines the type.
-- **Assignment is a statement, not an expression.** `a = b = c` is a right-associated assignment chain, but an assignment has no value usable by an expression; compound forms like `a += 2` are the idiomatic mutation.
+- **Assignment is a statement, not an expression.** `a = b = c` is forbidden, and an assignment has no value usable by an expression; compound forms like `a += 2` are the idiomatic mutation.
 - **Required `;`.** Every terminating statement ends in `;`. No automatic semicolon insertion.
-- A source file holds only **global declarations and function declarations** (top level). Everything else lives inside functions.
+- A source file holds globals, functions, structures, and namespaces at top level. Everything else lives inside functions.
 
 ## Grammar
 
 Terminals in quotes; `[]` optional, `{}` repeated, `|` choice. `INT`/`CHAR` are integer/character literals as lexed (see the tokenizer spec); an `INT` may carry a type suffix, which is part of the token (`5i64`, `0xFFu8`) — see `types.md#literals`.
 
 ```
-program        = { global | function | namespace } ;
-namespace      = "namespace" IDENT "{" { global | function | namespace } "}" ;
+program        = { global | function | structure | namespace } ;
+namespace      = "namespace" IDENT "{" { global | function | structure | namespace } "}" ;
 
-global         = binding [ "mut" ] IDENT ":" type "=" const-expr ";" ;
+global         = binding [ "mut" ] IDENT ":" type "=" expr ";" ;
 binding        = "let" | "const" ;
 function       = "fn" IDENT [ type-params ] "(" [ param { "," param } ] ")" [ ":" type ] block ;
+
+structure      = "struct" IDENT [ type-params ] "{" { member } "}" ;
+member         = [ "public" | "private" ] ( field | method | factory | destructor ) ;
+field          = IDENT ":" type ";" ;
+method         = "fn" IDENT "(" [ param { "," param } ] ")" [ ":" type ] block ;
+factory        = "new" "(" [ param { "," param } ] ")" ":" type block ;
+destructor     = "destructor" block ;
+object-literal = "{" [ IDENT ":" expr { "," IDENT ":" expr } [ "," ] ] "}" ;
 
 type-params    = "<" type-param { "," type-param } ">" ;
 type-param     = IDENT [ "extends" capability { "&" capability } ] ;
@@ -38,7 +46,9 @@ capability     = "Ordered" | "Negatable" | "Arithmetic" | "Clonable" | "Movable"
 
 param          = IDENT ":" type ;
 type           = "i8" | "u8" | "i16" | "u16" | "i32" | "u32" | "i64" | "u64"
-               | "bool" | "char" | "ptr" type | type-variable ;
+               | "bool" | "char" | "ptr" type | "ref" [ "mut" ] type
+               | named-type | type-variable ;
+named-type     = qualified-name [ "<" type { "," type } ">" ] ;
 type-variable  = IDENT ;   // a name bound by the enclosing template's type-params
 
 block          = "{" { block | statement } "}" ;        // a block is itself a statement
@@ -50,7 +60,7 @@ statement      = let-stmt | assign-stmt | expr-stmt | return-stmt
 let-stmt       = local-decl ";" ;
 local-decl     = binding [ "mut" ] IDENT [ ":" type ] [ "=" expr ] ;
 assign-stmt    = assignment ";" ;
-assignment     = lvalue "=" ( assignment | expr ) | lvalue compound-op expr ;
+assignment     = lvalue "=" expr | lvalue compound-op expr ;
 compound-op    = "+=" | "-=" | "*=" | "/=" | "%=" | "&=" | "|=" | "^=" | "<<=" | ">>=" ;
 expr-stmt      = expr ";" ;
 return-stmt    = "return" [ expr ] ";" ;
@@ -78,14 +88,16 @@ shift          = additive { ( "<<" | ">>" ) additive } ;
 additive       = multiplicative { ( "+" | "-" ) multiplicative } ;
 multiplicative = cast { ( "*" | "/" | "%" ) cast } ;
 cast           = unary { "as" type } ;
-unary          = ( "*" | "&" | "-" | "!" | "~" | "move" ) unary | postfix ;
-postfix        = primary | call ;
+unary          = ( "*" | "&" | "-" | "!" | "~" | "move" ) unary
+               | "ref" [ "mut" ] unary | postfix ;
+postfix        = ( primary | call | type-call ) { "." IDENT [ "(" [ expr { "," expr } ] ")" ] } ;
+type-call      = named-type "." IDENT "(" [ expr { "," expr } ] ")" ;
 call           = qualified-name "(" [ expr { "," expr } ] ")" ;
 primitive-call = "primitive" IDENT "(" [ expr { "," expr } ] ")" ;
 qualified-name = IDENT { "." IDENT } ;
-primary        = INT | CHAR | "true" | "false" | qualified-name | primitive-call | "(" expr ")" ;
+primary        = INT | CHAR | "true" | "false" | qualified-name | primitive-call | object-literal | "(" expr ")" ;
 
-lvalue         = "*" expr | qualified-name ;
+lvalue         = "*" expr | postfix ;
 const-expr     = expr limited to literals, the unary `-`/`!`/`~`, arithmetic and
                  comparison operators, `as` casts, and references to globals
                  declared earlier in the file;
@@ -95,26 +107,28 @@ Notes:
 
 - Every non-void `primary` `IDENT` is a **read** of a variable or global. An `IDENT` naming a parameter is also a read.
 - A `condition` is the grammar shape of every test (`if`, `while`, `do`'s trailing `while`, and `for`'s cond): an `expr` whose type must be `bool`. Which expressions are `bool` is a typing rule in `expressions.md`, so the grammar only pins the shape here.
-- A call names its callee with a `qualified-name` followed by `(`: the leading segments resolve to a namespace and the last names a function or template inside it. Thus `std.print(x)` calls the `print` in `std`, and a bare `print(x)` calls the `print` visible from the current namespace (`#namespaces`, `expressions.md#names`).
-- `[` `]` lex but are not part of v1 (arrays are future work); using them is a syntax error.
-- `const-expr` is enforced additionally: it must be constant-foldable and contain no calls (a `primitive` call is a call).
+- A call names its callee with a `qualified-name` followed by `(`: the leading segments resolve to a namespace and the last names a function or template inside it. Structures also provide type-qualified factories and receiverless methods, and object expressions provide instance methods. Thus `std.print(x)` calls the `print` in `std`, and a bare `print(x)` calls the `print` visible from the current namespace (`#namespaces`, `expressions.md#names`).
+- `[` `]` lex but are not expression indexing syntax; collections use their declared methods.
+- Scalar global initializers must be constant-foldable and contain no calls. Record globals may call factories/functions and initialize in declaration order. Globals cannot contain safe references. See `statements.md#globals`.
 - Every program is compiled with `stdlib/std.erx` parsed first (auto-import), so std's declarations are part of the program and need no import of their own (`docs/std.md`).
+- Object literals are checked additionally: they assemble exactly the factory's own record type and are legal only inside that factory. See `statements.md#structures`.
+- Nested type argument closers are interpreted by the parser even when the tokenizer emits a maximal-munch `>>` or `>>>` run. The operator whitelist remains unchanged outside type-argument positions.
 - A `primitive-call` is answered by the built-in primitive catalog, never by a declaration: `primitive` + `IDENT` + `(` reaches exactly that primitive and nothing else (`docs/primitive.md#calling`). Primitives live in their own namespace — a plain `call` never resolves to one, and a function may share a primitive's name.
 - A `cast`'s right side is a `type`, not an expression: `x as i8 + 1` is `(x as i8) + 1` and `x + 1 as i32` is `x + (1 as i32)` (`expressions.md#precedence`). The conversion rules — which types may cast to which, and what wrapping means — are `types.md#casts`.
 - `*` and `&` are prefix in unary position and binary (`*` multiply, `&` bitwise-and) wherever a binary operator is expected — the position decides. `*p` reads the cell `p` points at, `&x` is the address of the variable or global `x` (`expressions.md#typing-rules`); `*` in front of a `=`/compound-assign makes a **store through a pointer** — `*p = v;` — a statement form, see `statements.md#statements`.
 - `ptr T` is the pointer-to-`T` type (`types.md#types`): `ptr i32`, `ptr ptr i32`. `ptr` is **contextual**, like `string` — it is a type only in type position and remains an ordinary identifier everywhere else (`#reserved-words`). A pointer is one cell wide whatever it points at (`JIR.md#types`).
-- A call to a **template** (`statements.md#templates`) deduces its type arguments from the argument types; v1 has **no explicit instantiation syntax** — `abs<u8>(x)` is not written, because `::` is not a token and `<`/`>` compose at parse, so naming the arguments is future work (`TODO.md`). A `type-param` binds its name as a `type-variable` for the declaration's signature and body only.
+- A call to a **template** (`statements.md#templates`) deduces its type arguments from the argument types; v1 has **no explicit instantiation syntax** — `abs<u8>(x)` is not written, because `::` is not a token and `<`/`>` compose at parse, so free-function type arguments remain deduction-only. A `type-param` binds its name as a `type-variable` for the declaration's signature and body only.
 
 ## Namespaces
 
-A **namespace** is a named scope for the top-level names — globals, functions,
+A **namespace** is a named scope for the top-level names — globals, functions, structures,
 and nested namespaces — declared with `namespace NAME { … }` (`#grammar`,
 `statements.md#namespaces`). Names are reached **qualified**: `std.print(x)` calls
 the `print` declared in `std`, and a bare name searches the current namespace
 outward to the root.
 
 - A namespace body holds `global`, `function` (concrete declarations, overloads,
-  and templates alike), and `namespace` declarations. The body is a scope: a bare
+  and templates alike), `structure`, and `namespace` declarations. The body is a scope: a bare
   `f(...)` or `g` inside it refers to that namespace's `f`/`g` first, then its
   enclosing namespaces.
 - A qualified name's first segment resolves as a name searches its enclosing
@@ -160,7 +174,11 @@ Every keyword is reserved: it cannot be used as an `IDENT` (declaration or refer
 | `let` | reassignable variable / global declaration |
 | `const` | fixed variable / global binding |
 | `mut` | permission to mutate an object independently of rebinding |
-| `move` | consume a local value or parameter |
+| `move` | explicitly transfer a value |
+| `ref` | safe reference type or explicit borrowing |
+| `struct` | structure declaration |
+| `public` `private` | structure member visibility |
+| `destructor` | additional resource cleanup |
 | `namespace` | named scope for top-level declarations |
 | `if` | conditional block |
 | `else` | alternate branch of `if` |
@@ -183,10 +201,11 @@ Type names, `true`, and `false` are reserved because they carry their meaning in
 
 ## Semantics
 
-- **By-value; pointers are values, not references.** Variables hold values, copied on assignment and call; there are no reference bindings and no lvalue-producing binary operators. A **pointer** is one of those values — the address of a cell, named with `&` and followed with `*` (`types.md#types`, `expressions.md#typing-rules`). Pointers are plain data: they copy, they pass by value, they compare equal iff they name the same cell, and they satisfy `Clonable` and `Movable`, but no arithmetic or ordering capability (`types.md#capabilities`).
+- **Value semantics and explicit borrowing.** Scalar values copy their bits; record lvalues copy through `Clonable`, and `move` transfers ownership explicitly. `ref` and `ref mut` create checked references; reference values copy the reference, not its target. Raw `ptr` remains an unchecked ownership mechanism underneath. See `types.md#references` and `statements.md#structures`.
 - **Scoping.** A `block` (and a `for`'s init) opens a scope; enclosing scopes are visible, inner names shadow outer ones. A name is in scope from its declaration to the end of its block. Globals are visible everywhere, including inside functions and other global initializers — but a global initializer may reference only globals **declared earlier** in the file. A `namespace` is a scope too, for top-level names only (`#namespaces`).
-- **Definite assignment.** Every read of a variable is preceded, on every execution path, by a write (`let` initializer or an assignment). Parameters start initialized; `move` consumes their value just as it consumes a local. Globals have constant initializers. This is enforced statically; it never produces runtime behavior. Pointer reads and stores do not reach the check but cannot defeat it: `&x` is itself a *read*, so the address of an as-yet-unassigned local is the same `read before it is assigned` error as any other read, and a `*p = v` store writes a cell the checker cannot track, so it never counts as the write that satisfies a name.
+- **Definite assignment.** Every read of a variable is preceded, on every execution path, by a write (`let` initializer or an assignment). Parameters start initialized; `move` consumes their value just as it consumes a local. Scalar globals have constant initializers; record globals initialize through ordinary expressions. This is enforced statically; it never produces runtime behavior. Pointer reads and stores do not reach the check but cannot defeat it: `&x` is itself a *read*, so the address of an as-yet-unassigned local is the same `read before it is assigned` error as any other read, and a `*p = v` store writes a cell the checker cannot track, so it never counts as the write that satisfies a name.
 - **Bindings and moves.** `const` prevents rebinding, not moving. `let` may be initialized again after `move`; `const` may not. A local without an annotation needs an initializer, and every `const` needs one. Initialization state is checked over the CFG, including loop back edges. See `statements.md#bindings-and-moves`.
+- **RAII.** Initialized owners are destroyed on ordinary scope exits, returns, breaks, and continues. Local order is reverse initialization; field order is reverse declaration after the user destructor. Traps and immediate termination do not unwind. See `statements.md#destruction`.
 - **Runtime arithmetic.** All integer arithmetic wraps (two's complement), exactly as the IR defines. Division/modulo truncate toward zero; `x / 0` (and `imin / -1`) terminate the process — no UB. Shift counts are masked to the operand width (`count & (width-1)`), so no shift is undefined.
 - **Division by zero is a run-time error, not a compile-time one.** Only a *constant* zero divisor can be caught while reading: `a / 0` is rejected, because a constant expression has to have an answer. With a variable, `let b: i32 = 0; a / b;` compiles and traps when it runs — the same way the machine's own divide instruction does. This is a documented, uniform rule, not undefined behaviour; the error surfaces wherever the trap does, and a backend may add a message to it. See `types.md#constants` for why a constant is checked and a runtime value is not.
 - **Pointer misuse is a run-time error, not a compile-time one.** `&x` needs a cell to name, but a pointer can be copied to anywhere and the machine cannot know every read targets its cell: `*p` or `*p = v` through a pointer that names nothing — the null pointer, an address freed or never allocated, a cell in a frame that has returned — terminates the process with the same machinery a divide does (`JIR.md#runtime-semantics`). The parser still rejects what it can see: `&` of a constant or expression is a compile error, and a deref whose operand is not a pointer is a type error (`expressions.md#typing-rules`).
@@ -204,6 +223,10 @@ The language lowers 1:1 to JIR:
 | `char` | `u8` |
 | `i8`…`u64` | same |
 | `ptr T` | `ptr T` (a pointer is one word, the pointee lowered) |
+| `ref T` / `ref mut T` | a pointer to the lowered target cell; safety is checked before lowering |
+| structure value | one owned heap handle; fields occupy one cell each, nested owned records use handles |
+| structure member | `OFFSET` plus typed `LOAD` / `STORE` |
+| factory / method / destructor | ordinary functions and `CALL`; cleanup uses CFG edges |
 | local / param | a vreg at a frame offset |
 | global | a `@` global, zeroed then set by its init |
 | expression temps | fresh vregs |

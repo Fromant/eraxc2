@@ -694,3 +694,16 @@ TEST_CASE("an address is only of a cell") {
   CHECK(messages(program) ==
         std::vector<std::string> {"ADDR needs a vreg or a global to take the address of, but arg 1 is an instant"});
 }
+TEST_CASE("offset preserves the pointer type and takes an unsigned cell index") {
+  const Type pointer = Type::pointer(Type::I32);
+  Program program = minimal();
+  program.functions[0].frame_size = 2;
+  body(program,
+       {{Op::Offset, {Operand::vreg(pointer, 0), Operand::instant(pointer, 0), Operand::instant(Type::U64, 1)}}});
+  CHECK(validate(program).empty());
+  program.functions[0].cfg.blocks[0].commands[0].args[2].type = Type::I32;
+  CHECK_FALSE(validate(program).empty());
+  program.functions[0].cfg.blocks[0].commands[0].args[2].type = Type::U64;
+  program.functions[0].cfg.blocks[0].commands[0].args[0].type = Type::pointer(Type::U8);
+  CHECK_FALSE(validate(program).empty());
+}

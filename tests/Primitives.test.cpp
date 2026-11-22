@@ -27,13 +27,14 @@ namespace {
 }  // namespace
 
 TEST_CASE("the catalog is the primitives of primitive.md, in id order") {
-  CHECK(names() == std::vector<std::string> {"print", "print_char", "read_char", "exit", "abort", "alloc", "free"});
+  CHECK(names() ==
+        std::vector<std::string> {"print", "print_char", "read_char", "exit", "abort", "alloc", "free", "offset"});
   // The index is the id: a primitive is never renumbered.
   for (std::size_t id = 0; id < catalog().size(); ++id) {
     REQUIRE(by_id(static_cast<std::uint32_t>(id)) != nullptr);
     CHECK(by_id(static_cast<std::uint32_t>(id))->id == static_cast<Prim>(id));
   }
-  CHECK(by_id(7) == nullptr);
+  CHECK(by_id(8) == nullptr);
   CHECK(by_id(0xFFFFFFFFu) == nullptr);
 }
 
@@ -92,6 +93,14 @@ TEST_CASE("a signature types its parameters, its result, and its flow") {
   CHECK(release->param_count == 1);
   CHECK(release->params[0] == SigType::Ptr);
   CHECK(release->return_type == SigType::Void);
+
+  const Signature* offset = by_name("offset");
+  REQUIRE(offset != nullptr);
+  CHECK(offset->param_count == 2);
+  CHECK(offset->params[0] == SigType::Ptr);
+  CHECK(offset->params[1] == SigType::U64);
+  CHECK(offset->return_type == SigType::Ptr);
+  CHECK_FALSE(offset->terminating);
 }
 
 TEST_CASE("a signature type lowers the way the source type does") {

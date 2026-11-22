@@ -153,6 +153,7 @@ namespace erax::middleend {
     Call,
     Primitive,
     Ret,
+    Offset,
   };
 
   std::string_view to_string(Op op) noexcept;
@@ -191,7 +192,8 @@ namespace erax::middleend {
       case Op::CmpLt:
       case Op::CmpLe:
       case Op::CmpGt:
-      case Op::CmpGe: return {3, 3};
+      case Op::CmpGe:
+      case Op::Offset: return {3, 3};
       case Op::Mov:
       case Op::Inc:
       case Op::Dec:

@@ -10,6 +10,8 @@ The grammar for types is in `language.md`; these are the rules the parser enforc
 | `bool` | exactly `true` / `false` |
 | `char` | a byte: ASCII code point, range 0–255 |
 | `ptr T` | a pointer to a cell holding a `T` — the cell's address (`&x` / `*p` / `*p = v`, `expressions.md#typing-rules`) |
+| `ref T` / `ref mut T` | safe reference to a target cell, with read or mutation access |
+| named structure, including `Box<T>` | nominal owned value declared by `struct` |
 | `ptr ptr T` | a pointer to a pointer: `ptr T` is a type like any other, so it nests with no special rule |
 
 Mapping to the IR: `bool` lowers to `i8` and `char` to `u8` (a `0–255` byte, so character comparison and character `/ % << >>` are unsigned). The type is preserved in the source; the machine just sees a byte — and a pointer lowers to `ptr T`, a single machine word that holds the **address of a cell** (`JIR.md#types`). `ptr T` describes what a read through the pointer yields; the pointer cell itself is always one word, whatever `T` is.
@@ -32,7 +34,7 @@ Mapping to the IR: `bool` lowers to `i8` and `char` to `u8` (a `0–255` byte, s
 
 ## No implicit conversions
 
-Two operands of a binary operator must have the **exact same type**; an `=` / compound-assign RHS and a call argument must exactly match the target type — except for a *lone* literal, which takes the type of its position and is range-checked against it. Identifiers never silently widen or narrow. Mixing `i8` and `i32`, or `bool` and an integer, is a type error. (Implicit widening is future work — `TODO.md`. The one *explicit* conversion, `as`, is next.)
+Two operands of a binary operator must have the **exact same type**; an `=` / compound-assign RHS and a call argument must exactly match the target type — except for a *lone* literal, which takes the type of its position and is range-checked against it. Identifiers never silently widen or narrow. Mixing `i8` and `i32`, or `bool` and an integer, is a type error. (The explicit scalar/raw-pointer conversion, `as`, is next.)
 
 **For arithmetic, bitwise, and shift operators, the expected type threads to the first operand when it stands alone.** This means `let x: i8 = 127 + 1` is a range error (128 does not fit `i8`), not a type error. The first operand becomes `i8`, the second inherits `i8`, the addition folds to `128i8`, and the range check fails. Similarly, `let x: i64 = 1 + 2` is now valid: the addition folds to `3i64`.
 
@@ -40,7 +42,7 @@ Two operands of a binary operator must have the **exact same type**; an `=` / co
 
 ## Casts {#casts}
 
-`x as T` is the **only** conversion in the language, and it is explicit: every non-`void` type — `i8` … `u64`, `bool`, `char`, and each `ptr T` — casts to every other non-`void` type. Values never change type on their own; if one needs a different type, the source says so.
+`x as T` is the **only** conversion in the language, and it is explicit: the scalar and raw-pointer types — `i8` … `u64`, `bool`, `char`, and each `ptr T` — cast to one another. Structures and safe references cannot be created, weakened, or reinterpreted with `as`; a same-type cast preserves an existing value. Values never change type on their own; if one needs a different type, the source says so.
 
 The rule has one shape:
 
@@ -75,8 +77,8 @@ A **capability** is a named set of operations a type supports. Capabilities are 
 | `Ordered` | `<` `<=` `>` `>=` | the integer types and `char` |
 | `Negatable` | unary `-` | the signed integer types |
 | `Arithmetic` | `+` `-` `*` `/` `%` | the integer types and `char` |
-| `Clonable` | value copying | every non-void scalar and pointer type |
-| `Movable` | explicit `move` | every non-void scalar and pointer type |
+| `Clonable` | value copying | scalars, raw pointers, references, and records with a valid copy implementation |
+| `Movable` | explicit `move` | scalars, raw pointers, references, and records whose owned fields support movement |
 
 - A type **structurally** satisfies a capability when the operator rules already accept those operators on it (`expressions.md#typing-rules`) — nothing is declared and there is no `implements`. `u8` satisfies `Ordered` and `Arithmetic` but not `Negatable`; `bool` satisfies no arithmetic, ordering, or negation capability (it is not ordered, has no arithmetic, and cannot be negated), even though `==`/`!=` accept any two same-typed values. A pointer (`ptr T`) satisfies `Clonable` and `Movable`, but none of the three operator capabilities: it has no order that means anything in the source (`==`/`!=` still accept two same-typed pointers), it has no arithmetic, and it cannot be negated — so a `ptr` never deduces a template parameter bound to `Ordered`/`Negatable`/`Arithmetic`.
 - `char` is an integer byte, so it takes part in `Ordered` and `Arithmetic` as its unsigned value (`#types`); being unsigned, it is not `Negatable`.
@@ -85,13 +87,31 @@ A **capability** is a named set of operations a type supports. Capabilities are 
 - A cast (`#casts`) works on every type and needs no capability.
 - The bound is checked at each call, against the deduced type (`expressions.md#typing-rules`) — which is why `abs(12u8)` is rejected for wanting `Negatable` rather than failing somewhere inside the body.
 
+## Structures
+
+A structure is a nominal type: two declarations with equal fields remain different types. Generic structure applications such as `std.vector<i32>` are also types, with concrete fields and methods per type argument set. `ptr T`, `ref T`, and nested structure applications can contain type parameters. No implicit numeric, structure, or reference conversion is performed.
+
+All fields, including nested record handles, occupy one machine cell. The reference lowering stores a record's ordered fields in an owned heap block and carries its handle as one value. Nested values retain value semantics; a copied record does not silently share owned fields. This storage representation is part of lowering, not a user-visible constructor or address encoding. Use portable pointer offset operations rather than arithmetic on address bits.
+
+A structure without a user destructor receives structural copying when all fields are clonable. A user destructor disables automatic shallow copying; a `clone(this: ref Structure): Structure` method supplies copying explicitly. Generic clone bodies are checked when copying is requested. `Clonable` is independent of `Movable`: a unique owner may move while copying is forbidden. Plain reference fields are copied as references. Recursive owned-field cycles are rejected; raw pointer and reference edges do not imply recursive ownership.
+
+## References
+
+`ref T` and `ref mut T` refer to an existing storage place. `ref value` borrows it for reading; `ref mut value` requires mutation permission. `*reference` reads its target and `*reference = value` requires mutable reference access. Fields and methods automatically follow a reference receiver. Taking a safe reference to an unnamed temporary is rejected. `const` fixes the reference binding; its `ref mut` type still permits modifying the target.
+
+Mutable aliases are permitted. A read-only reference restricts access through that reference; it does not freeze the object against other authorized access. Ordinary scalar mutation preserves references. Moving, destroying, replacing an owned value, or invalidating collection storage must not precede a later use of a reference to the affected target. Whole-vector references and references to vector elements have distinct dependencies. Method effects propagate storage invalidation through calls. Free-function invalidation summaries propagate through known calls and typed member operations; uncertain aliases and generic effects are summarized conservatively. Additional mutable record-reference arguments to methods and factories are conservative invalidation boundaries.
+
+The frontend infers reference dependencies through local bindings, fields, copies, moves, calls, and returns, including CFG back edges. A returned reference depends on reference arguments; an owned returned structure retains the dependencies of contained references. Dependencies on several inputs are combined conservatively. Stores through mutable aliases preserve these dependencies, and references used by a destructor are checked at cleanup. Reference fields can therefore be used without explicit lifetime parameters. A reference to a local cannot escape through a return, field, or mutable external destination.
+
+Safe references to global storage, and globals containing safe references, are rejected. Global owners may be used through methods during a call, but those calls cannot expose safe references to global storage. Raw pointers remain available for explicitly manual memory contracts. There is no `unsafe` keyword: dereferencing/casting raw pointers and explicit borrowing through a raw dereference are the programmer's responsibility. An ordinary `as` cast cannot turn a raw pointer into `ref`.
+
 ## Constants {#constants}
 
-A **constant expression** is one the parser can evaluate while reading it: literals, unary `-` / `!` / `~`, arithmetic, comparisons, and `as` casts. It appears wherever a value is required — a `let` initializer, a global's initializer, an assignment RHS, a call argument. Reading a variable, or calling a function or a primitive, is not constant (`expressions.md#typing-rules`). `&x` is not constant either — reading a variable, it names a cell the parser does not know — so a global initializer cannot take an address. A pointer *comparison* over constants is constant, as any comparison is: `0 as ptr i32 == 0 as ptr i32` folds to `true`.
+A **constant expression** is one the parser can evaluate while reading it: literals, unary `-` / `!` / `~`, arithmetic, comparisons, and `as` casts. It appears wherever a value is required — a `let` initializer, a global's initializer, an assignment RHS, a call argument. Reading a variable, or calling a function or a primitive, is not constant (`expressions.md#typing-rules`). `&x` is not constant either — reading a variable, it names a cell the parser does not know — so a scalar constant initializer cannot take an address. A pointer *comparison* over constants is constant, as any comparison is: `0 as ptr i32 == 0 as ptr i32` folds to `true`.
 
-A global's initializer *must* be a constant expression. A `let` initializer need not be, but whatever part of it is constant is still folded.
+A scalar global's initializer *must* be a constant expression; record globals use the initialization rules in `statements.md#globals`. A `let` initializer need not be, but whatever part of it is constant is still folded.
 
-A reference to a global is constant by bare or by qualified name alike — `g` and `n.g` are the same kind of read (`expressions.md#names`), both folded where the initializer is, and both limited to globals declared earlier in the file.
+Reading an earlier scalar global in a constant initializer is constant by bare or by qualified name alike — `g` and `n.g` are the same kind of read (`expressions.md#names`), both folded where the initializer is, and both limited to globals declared earlier in the file.
 
 ### Why a constant is checked where a runtime value wraps
 

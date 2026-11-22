@@ -33,6 +33,31 @@ namespace erax::frontend {
       return qualified;
     }
 
+    bool right_side_may_call(const TokenCursor& cursor) {
+      const auto& tokens = cursor.tokens();
+      int nesting = 0;
+      for (std::size_t index = cursor.index(); index < tokens.size(); ++index) {
+        const auto kind = tokens[index].type;
+        if (kind == TokenType::LParen) {
+          return true;
+        }
+        if (kind == TokenType::LBrace || kind == TokenType::LBracket) {
+          ++nesting;
+        }
+        if (kind == TokenType::RParen || kind == TokenType::RBrace || kind == TokenType::RBracket) {
+          if (nesting == 0) {
+            break;
+          }
+          --nesting;
+        }
+        if (nesting == 0 &&
+            (kind == TokenType::Comma || kind == TokenType::Semicolon || kind == TokenType::EndOfFile)) {
+          break;
+        }
+      }
+      return false;
+    }
+
     /// The source type a catalog signature type spells. The two enums list the
     /// same types in the same order but alias nothing: the mapping is stated so
     /// a catalog edit that forgets a type is a compile error here, not a silent
@@ -171,14 +196,20 @@ namespace erax::frontend {
   }  // namespace
 
   ExpressionParser::result ExpressionParser::expression(std::optional<SemType> expected) {
-    return or_expression(expected);
+    auto value = or_expression(expected);
+    const auto& token = context().cursor.current();
+    if (value && token.type == TokenType::Operator && token.text.size() > 2 &&
+        token.text.find_first_not_of('>') == std::string::npos) {
+      return std::unexpected(at("unknown operator '" + token.text + "'", token.location));
+    }
+    return value;
   }
 
   ExpressionParser::result ExpressionParser::const_expression(SemType expected) {
     const SourceLocation start = context().cursor.location();
     const bool was_const = const_mode_;
     const_mode_ = true;
-    auto value = or_expression(expected);
+    auto value = expression(expected);
     const_mode_ = was_const;
     if (!value) {
       return value;
@@ -267,6 +298,9 @@ namespace erax::frontend {
     if (value.type == target) {
       return value;
     }
+    if (value.type.is_reference() || target.is_reference() || value.type.is_record() || target.is_record()) {
+      return std::unexpected(at("casts cannot create or reinterpret records or safe references", location));
+    }
     // `bool` has no type of its own in the IR — it is an `i8` 0/1 cell — so a cast TO
     // bool is the compare the machine already spells "nonzero" with, whatever integer
     // (or char, or bool, handled above) sits on the left.
@@ -279,7 +313,9 @@ namespace erax::frontend {
     // `char` and `u8` — and `bool` and `i8` — name one cell two ways: the bits are
     // already the target's, so only the source-level type changes.
     if (from == to) {
-      return Value {target, value.operand, value.constant};
+      Value result {target, value.operand, value.constant};
+      result.origins = value.origins;
+      return result;
     }
     if (value.constant) {
       const std::uint64_t bits = middleend::fold::convert(to, from, value.constant->bits);
@@ -288,7 +324,9 @@ namespace erax::frontend {
     }
     const std::uint64_t destination = context().builder.alloc(to);
     context().builder.emit(Op::Cast, {Operand::vreg(to, destination), value.as_operand()});
-    return Value {target, Operand::vreg(to, destination), std::nullopt};
+    Value result {target, Operand::vreg(to, destination), std::nullopt};
+    result.origins = value.origins;
+    return result;
   }
 
   ExpressionParser::result ExpressionParser::binary_level(operand_level operand, std::optional<SemType> expected,
@@ -307,7 +345,7 @@ namespace erax::frontend {
     std::optional<SemType> first_expected;
     if (thread_expected && expected && is_integer(*expected)) {
       first_expected = expected;  // Thread only integer types for arithmetic/bitwise/shift
-    } else if (!thread_expected && lone) {
+    } else if (lone && (!thread_expected || (expected && expected->is_record()))) {
       first_expected = expected;  // Thread for comparisons/logical only when lone
     } else {
       first_expected = std::nullopt;
@@ -333,6 +371,13 @@ namespace erax::frontend {
       const SourceLocation location = context().cursor.location();
       context().cursor.take();
 
+      if (!left.type.is_record() && (left.addressable || left.place_address) && right_side_may_call(context().cursor)) {
+        auto snapshot = context().copy_value(left, location, true);
+        if (!snapshot) {
+          return snapshot;
+        }
+        left = *snapshot;
+      }
       // Each operand takes the type of the operand before it, so `x + 1` types the
       // `1` as whatever `x` is.
       auto parsed = (this->*operand)(left.type);
@@ -372,6 +417,9 @@ namespace erax::frontend {
                                 location));
     }
 
+    if (left.type.is_record()) {
+      return std::unexpected(at(quoted + " is not defined for " + to_string(left.type), location));
+    }
     if (op == "==" || op == "!=") {
       return apply(op == "==" ? Op::CmpEq : Op::CmpNe, SemType::Bool, left, right, location);
     }
@@ -543,6 +591,21 @@ namespace erax::frontend {
   ExpressionParser::result ExpressionParser::unary_expression(std::optional<SemType> expected) {
     TokenCursor& cursor = context().cursor;
 
+    if (cursor.at_keyword(Keyword::Ref)) {
+      const SourceLocation location = cursor.take().location;
+      const bool mut = cursor.at_keyword(Keyword::Mut);
+      if (mut) {
+        cursor.take();
+      }
+      if (const_mode_) {
+        return std::unexpected(at("a constant expression may not borrow a value", location));
+      }
+      auto value = unary_expression(std::nullopt);
+      if (!value) {
+        return value;
+      }
+      return context().borrow_value(*value, mut, location);
+    }
     if (cursor.at_keyword(Keyword::Move)) {
       const SourceLocation location = cursor.take().location;
       if (const_mode_) {
@@ -552,7 +615,19 @@ namespace erax::frontend {
       if (!value) {
         return value;
       }
-      if (!value->addressable || value->operand.kind != middleend::OperandKind::VReg) {
+      if (!satisfies(value->type, Capability::Movable)) {
+        return std::unexpected(at(to_string(value->type) + " is not Movable", location));
+      }
+      if (value->raw_storage && value->place_address) {
+        Value moved = *value;
+        moved.addressable = false;
+        moved.place_address.reset();
+        moved.raw_storage = false;
+        moved.local_id.reset();
+        context().track_temporary(moved);
+        return moved;
+      }
+      if (!value->addressable || !value->local_id || value->place_address) {
         return std::unexpected(at("move needs a local variable or parameter", location));
       }
       LocalInfo* source = context().local_at(value->operand.value);
@@ -567,6 +642,8 @@ namespace erax::frontend {
       source->moved = true;
       Value moved {value->type, destination};
       moved.moved_from = value->operand;
+      moved.origins = value->origins;
+      context().track_temporary(moved);
       return moved;
     }
 
@@ -591,14 +668,21 @@ namespace erax::frontend {
       if (value.operand.kind != middleend::OperandKind::VReg && value.operand.kind != middleend::OperandKind::Global) {
         return std::unexpected(at("cannot take the address of this expression", location));
       }
-      if (!value.addressable) {
+      if (!value.addressable || value.raw_storage) {
         return std::unexpected(at("cannot take the address of this expression", location));
       }
       const SemType pointer = SemType::pointer(value.type);
       const Type lowered = lower(pointer);
+      if (value.place_address) {
+        Value result {pointer, *value.place_address};
+        result.origins = value.origins;
+        return result;
+      }
       const std::uint64_t destination = context().builder.alloc(lowered);
       context().builder.emit(Op::Addr, {Operand::vreg(lowered, destination), value.as_operand()});
-      return Value {pointer, Operand::vreg(lowered, destination), std::nullopt};
+      Value result {pointer, Operand::vreg(lowered, destination)};
+      result.origins = value.origins;
+      return result;
     }
 
     // `*p` reads the cell a pointer names; the result's type is the pointee's, which
@@ -613,14 +697,23 @@ namespace erax::frontend {
         return operand;
       }
       const Value value = *operand;
-      if (!value.type.is_pointer()) {
+      if (!value.type.is_pointer() && !value.type.is_reference()) {
         return std::unexpected(at("'*' needs a pointer, but got " + std::string {to_string(value.type)}, location));
       }
-      const SemType pointee = *value.type.pointee;
+      SemType pointee = *value.type.pointee;
+      if (value.type.is_reference() && !value.type.mutable_reference && pointee.is_reference() &&
+          pointee.mutable_reference) {
+        pointee = SemType::reference(*pointee.pointee, false);
+      }
       const Type lowered = lower(pointee);
       const std::uint64_t destination = context().builder.alloc(lowered);
       context().builder.emit(Op::Load, {Operand::vreg(lowered, destination), value.as_operand()});
-      return Value {pointee, Operand::vreg(lowered, destination), std::nullopt};
+      Value result {pointee, Operand::vreg(lowered, destination), std::nullopt, true};
+      result.place_address = value.as_operand();
+      result.object_mutable = value.type.is_pointer() || value.type.mutable_reference;
+      result.raw_storage = value.type.is_pointer();
+      result.origins = value.origins;
+      return result;
     }
 
     std::string_view op;
@@ -679,12 +772,17 @@ namespace erax::frontend {
       }
       return apply_unary(op == "-" ? Op::Neg : Op::Not, value.type, value, location);
     }
-    return primary(expected);
+    auto value = primary(expected);
+    if (!value) {
+      return value;
+    }
+    return postfix(*value);
   }
 
   ExpressionParser::result ExpressionParser::call(const std::string& qualified,
                                                   const std::vector<FunctionInfo>* candidates, const TemplateInfo* tmpl,
-                                                  SourceLocation location) {
+                                                  SourceLocation location, std::vector<Value> arguments,
+                                                  bool implicit_receiver) {
     if (const_mode_) {
       return std::unexpected(at("a constant expression may not call '" + qualified + "'", location));
     }
@@ -696,7 +794,6 @@ namespace erax::frontend {
     const bool contextual = candidates != nullptr && candidates->size() == 1 && tmpl == nullptr;
     const FunctionInfo* primary = contextual ? &(*candidates)[0] : nullptr;
 
-    std::vector<Value> arguments;
     if (!context().cursor.at(TokenType::RParen)) {
       while (true) {
         // An argument past the last parameter has no type to take, so it is
@@ -714,7 +811,11 @@ namespace erax::frontend {
                                         std::string {to_string(argument->type)},
                                     location));
         }
-        arguments.push_back(*argument);
+        auto copied = context().copy_value(*argument, location, true);
+        if (!copied) {
+          return copied;
+        }
+        arguments.push_back(*copied);
         if (!context().cursor.match(TokenType::Comma)) {
           break;
         }
@@ -731,9 +832,15 @@ namespace erax::frontend {
     const FunctionInfo* function = nullptr;
     if (candidates != nullptr) {
       for (const FunctionInfo& candidate : *candidates) {
-        if (candidate.params == types) {
+        bool matches = candidate.params == types;
+        if (implicit_receiver && candidate.params.size() == types.size() && !types.empty() &&
+            candidate.params[0].is_reference() && types[0].is_reference() &&
+            *candidate.params[0].pointee == *types[0].pointee &&
+            (!candidate.params[0].mutable_reference || types[0].mutable_reference)) {
+          matches = std::equal(candidate.params.begin() + 1, candidate.params.end(), types.begin() + 1);
+        }
+        if (matches && (!function || (implicit_receiver && candidate.params[0].mutable_reference))) {
           function = &candidate;
-          break;
         }
       }
     }
@@ -752,6 +859,15 @@ namespace erax::frontend {
       }
     }
     if (function == nullptr && !deduced) {
+      if (implicit_receiver && candidates != nullptr && !candidates->empty() && !arguments.empty()) {
+        const auto& receiver = arguments.front().type;
+        const bool requires_mutable = std::all_of(candidates->begin(), candidates->end(), [](const FunctionInfo& f) {
+          return !f.params.empty() && f.params.front().is_reference() && f.params.front().mutable_reference;
+        });
+        if (requires_mutable && (!receiver.is_reference() || !receiver.mutable_reference)) {
+          return std::unexpected(at("method '" + qualified + "' needs mutable access", location));
+        }
+      }
       if (candidates != nullptr && candidates->size() > 1) {
         std::string listed;
         for (const SemType& type : types) {
@@ -784,7 +900,11 @@ namespace erax::frontend {
     SemType return_type;
     std::size_t callee = 0;
     if (deduced) {
-      return_type = tmpl->return_type.resolve(type_args);
+      auto resolved = context().resolve_type(tmpl->return_type, type_args, location);
+      if (!resolved) {
+        return std::unexpected(resolved.error());
+      }
+      return_type = *resolved;
       const auto instantiated = context().instantiate(tmpl, type_args, location);
       if (!instantiated) {
         return std::unexpected(instantiated.error());
@@ -794,20 +914,59 @@ namespace erax::frontend {
       return_type = function->return_type;
       callee = function->id;
     }
+    if (implicit_receiver && function && !arguments.empty()) {
+      arguments[0].type = function->params[0];
+    }
+    last_callee_ = callee;
     const Type lowered = lower(return_type);
     const std::uint64_t destination = lowered == Type::Void ? 0 : context().builder.alloc(lowered);
     std::vector<Operand> args;
     args.push_back(lowered == Type::Void ? Operand::empty() : Operand::vreg(lowered, destination));
     args.push_back(Operand::function(lowered, callee));
     for (const Value& argument : arguments) {
+      if (auto valid = context().validate_origins(argument, location); !valid) {
+        return std::unexpected(valid.error());
+      }
       args.push_back(argument.as_operand());
+      context().transfer_value(argument);
     }
     context().builder.emit(Op::Call, std::move(args));
+    if (auto propagated = context().propagate_call_origins(arguments, location); !propagated) {
+      return std::unexpected(propagated.error());
+    }
+    if (!implicit_receiver && (deduced ? tmpl->invalidates_references : function->invalidates_references)) {
+      for (const auto& argument : arguments) {
+        if (is_mutable_record_reference(argument.type)) {
+          context().invalidate_interior(argument);
+        }
+      }
+    }
+    if (implicit_receiver) {
+      for (std::size_t index = 1; index < arguments.size(); ++index) {
+        const auto& argument = arguments[index];
+        if (is_mutable_record_reference(argument.type)) {
+          context().invalidate_interior(argument);
+        }
+      }
+    }
 
     if (lowered == Type::Void) {
       return Value {SemType::Void, Operand::empty(), std::nullopt};
     }
-    return Value {return_type, Operand::vreg(lowered, destination), std::nullopt};
+    Value result {return_type, Operand::vreg(lowered, destination)};
+    if (return_type.is_reference() || return_type.is_pointer() || type_has_references(return_type)) {
+      for (const auto& argument : arguments) {
+        result.origins.insert(result.origins.end(), argument.origins.begin(), argument.origins.end());
+        if (return_type.is_reference() && argument.type.is_reference() && argument.type.pointee->is_record() &&
+            *return_type.pointee != *argument.type.pointee) {
+          const auto interior = context().interior_origins(argument);
+          result.origins.insert(result.origins.end(), interior.begin(), interior.end());
+        }
+      }
+      result.object_mutable = return_type.is_reference() && return_type.mutable_reference;
+    }
+    context().track_temporary(result);
+    return result;
   }
 
   /// Deduces the template \p tmpl's type arguments from argument types \p types,
@@ -815,7 +974,7 @@ namespace erax::frontend {
   /// its type exactly; a type parameter binds the argument's type, all its
   /// occurrences agreeing, and must satisfy the parameter's capability bounds.
   std::optional<ParseError> ExpressionParser::deduce(const TemplateInfo* tmpl, const std::vector<SemType>& types,
-                                                     SourceLocation location, std::vector<SemType>& type_args) const {
+                                                     SourceLocation location, std::vector<SemType>& type_args) {
     if (types.size() != tmpl->params.size()) {
       return ParseError {"'" + tmpl->name + "' takes " + std::to_string(tmpl->params.size()) + " arguments, but " +
                              std::to_string(types.size()) + " were given",
@@ -826,11 +985,27 @@ namespace erax::frontend {
     const auto match = [&](const auto& self, const TemplateType& pattern, const SemType& actual,
                            std::size_t index) -> std::optional<ParseError> {
       if (pattern.pointee) {
-        if (!actual.is_pointer()) {
-          return ParseError {"argument " + std::to_string(index + 1) + " of '" + tmpl->name + "' needs a pointer",
+        if (pattern.reference ? (!actual.is_reference() || actual.mutable_reference != pattern.mutable_reference) :
+                                !actual.is_pointer()) {
+          return ParseError {"argument " + std::to_string(index + 1) + " of '" + tmpl->name +
+                                 (pattern.reference ? "' needs a matching reference" : "' needs a pointer"),
                              location};
         }
         return self(self, *pattern.pointee, *actual.pointee, index);
+      }
+      if (pattern.record_template) {
+        if (!actual.is_record() || actual.record->template_origin != pattern.record_template ||
+            actual.record->type_args.size() != pattern.arguments.size()) {
+          return ParseError {"argument " + std::to_string(index + 1) + " of '" + tmpl->name + "' needs " +
+                                 pattern.record_template->name,
+                             location};
+        }
+        for (std::size_t slot = 0; slot < pattern.arguments.size(); ++slot) {
+          if (auto error = self(self, pattern.arguments[slot], actual.record->type_args[slot], index)) {
+            return error;
+          }
+        }
+        return std::nullopt;
       }
       if (pattern.param >= 0) {
         const std::size_t slot = static_cast<std::size_t>(pattern.param);
@@ -864,6 +1039,12 @@ namespace erax::frontend {
                                  tmpl->type_params[slot].name + "' of '" + tmpl->name + "')",
                              location};
         }
+        if (capability == Capability::Clonable && type_args[slot].is_record()) {
+          auto clone = context().ensure_clone(type_args[slot].record, location);
+          if (!clone) {
+            return clone.error();
+          }
+        }
       }
     }
     return std::nullopt;
@@ -879,6 +1060,7 @@ namespace erax::frontend {
     }
 
     std::vector<Operand> args;
+    std::vector<ReferenceOrigin> pointer_origins;
     if (!context().cursor.at(TokenType::RParen)) {
       while (true) {
         // A fixed parameter types its argument the way a call's does, so a lone
@@ -900,7 +1082,17 @@ namespace erax::frontend {
                                         std::string {to_string(argument->type)},
                                     location));
         }
-        args.push_back(argument->as_operand());
+        if (argument->type.is_record() || argument->type.is_reference()) {
+          return std::unexpected(at("primitives cannot consume records or safe references", location));
+        }
+        if (argument->type.is_pointer()) {
+          pointer_origins.insert(pointer_origins.end(), argument->origins.begin(), argument->origins.end());
+        }
+        auto snapshot = context().copy_value(*argument, location, true);
+        if (!snapshot) {
+          return snapshot;
+        }
+        args.push_back(snapshot->as_operand());
         if (!context().cursor.match(TokenType::Comma)) {
           break;
         }
@@ -925,7 +1117,11 @@ namespace erax::frontend {
     if (return_type == Type::Void) {
       return Value {SemType::Void, Operand::empty(), std::nullopt};
     }
-    return Value {sem_of(signature->return_type), Operand::vreg(return_type, destination), std::nullopt};
+    Value result {sem_of(signature->return_type), Operand::vreg(return_type, destination), std::nullopt};
+    if (result.type.is_pointer()) {
+      result.origins = std::move(pointer_origins);
+    }
+    return result;
   }
 
   ExpressionParser::result ExpressionParser::primary(std::optional<SemType> expected, bool negated) {
@@ -934,6 +1130,7 @@ namespace erax::frontend {
     const Token token = cursor.current();
 
     switch (token.type) {
+      case TokenType::LBrace: return object_literal(expected);
       case TokenType::Number: {
         cursor.take();
         return integer_literal(token, expected, negated);
@@ -1003,6 +1200,32 @@ namespace erax::frontend {
       return std::unexpected(at("'" + name + "' is a reserved word", location));
     }
 
+    if (const LocalInfo* local = context().find_local(name)) {
+      cursor.take();
+      if (cursor.at(TokenType::LParen)) {
+        return std::unexpected(at("value '" + name + "' is not callable", location));
+      }
+      if (const_mode_) {
+        return std::unexpected(at("a constant expression may not read a local", location));
+      }
+      return context().local_value(*local, location);
+    }
+    {
+      auto scan = cursor;
+      auto named = context().read_type(scan);
+      if (named && named->is_record() && scan.at(TokenType::Dot)) {
+        scan.take();
+        auto member = expect_identifier(scan);
+        if (!member) {
+          return std::unexpected(member.error());
+        }
+        if (scan.at(TokenType::LParen)) {
+          cursor.seek(scan.index() + 1);
+          return record_call(*named->record, *member, location);
+        }
+      }
+    }
+
     // An identifier begins a name. A dotted name is a namespace-qualified reference
     // (`std.print`): the leading segments are a namespace path and the last is the
     // name itself. There are no members, so no other dotted name exists.
@@ -1010,6 +1233,22 @@ namespace erax::frontend {
     parts.push_back(name);
     cursor.take();
     while (cursor.at(TokenType::Dot)) {
+      const GlobalInfo* object = nullptr;
+      if (parts.size() == 1) {
+        object = context().find_global(parts.front());
+      } else {
+        const std::vector<std::string> path(parts.begin(), parts.end() - 1);
+        auto space = context().resolve_namespace(path, location);
+        if (space) {
+          object = context().find_global_in(**space, parts.back());
+        }
+      }
+      if (object) {
+        Value value {object->sem_type, Operand::global(object->type, object->id), std::nullopt, true};
+        value.object_mutable = object->mutable_object;
+        value.global_storage = true;
+        return value;
+      }
       cursor.take();
       auto segment = expect_identifier(cursor);
       if (!segment) {
@@ -1047,18 +1286,6 @@ namespace erax::frontend {
       return std::unexpected(at("'" + qualified + "' is a function and can only be called", location));
     }
 
-    // A local can only be reached by a bare, unqualified name.
-    if (ns == nullptr) {
-      if (const LocalInfo* local = context().find_local(leaf)) {
-        if (!local->assigned && !context().deferred_local_reads) {
-          return std::unexpected(
-              at("'" + leaf + (local->moved ? "' is used after it was moved" : "' is read before it is assigned"),
-                 location));
-        }
-        context().read_local(*local, location);
-        return Value {local->sem_type, Operand::vreg(local->type, local->vreg), std::nullopt, true};
-      }
-    }
     const GlobalInfo* global = ns != nullptr ? context().find_global_in(*ns, leaf) : context().find_global(leaf);
     if (global != nullptr) {
       if (const_mode_) {
@@ -1067,7 +1294,10 @@ namespace erax::frontend {
         }
         return Value {global->sem_type, Operand::global(global->type, global->id), global->value, true};
       }
-      return Value {global->sem_type, Operand::global(global->type, global->id), std::nullopt, true};
+      Value value {global->sem_type, Operand::global(global->type, global->id), std::nullopt, true};
+      value.object_mutable = global->mutable_object;
+      value.global_storage = true;
+      return value;
     }
 
     // A name may name a namespace rather than a value: say so, rather than call it

@@ -17,7 +17,7 @@ namespace {
   using fold::Result;
 
   Op from_name(std::string_view name) {
-    for (int i = 0; i <= static_cast<int>(Op::Ret); ++i) {
+    for (int i = 0; i <= static_cast<int>(Op::Offset); ++i) {
       const auto op = static_cast<Op>(i);
       if (to_string(op) == name) {
         return op;
@@ -67,15 +67,18 @@ TEST_CASE("the op table is complete and round-trips by name") {
   REQUIRE(from_name("CALL") == Op::Call);
   REQUIRE(from_name("PRIM") == Op::Primitive);
   REQUIRE(from_name("RET") == Op::Ret);
+  REQUIRE(from_name("OFFSET") == Op::Offset);
   REQUIRE(from_name("NOPE") == Op::Ret);
 
-  for (int i = 0; i <= static_cast<int>(Op::Ret); ++i) {
+  for (int i = 0; i <= static_cast<int>(Op::Offset); ++i) {
     const auto op = static_cast<Op>(i);
     REQUIRE(from_name(to_string(op)) == op);
   }
 }
 
 TEST_CASE("arity comes from the op table") {
+  CHECK(arity(Op::Offset).min == 3);
+  CHECK(arity(Op::Offset).max == 3);
   CHECK(arity(Op::Add).min == 3);
   CHECK(arity(Op::Add).max == 3);
   CHECK(arity(Op::Neg).min == 2);

@@ -1,6 +1,36 @@
 #include "SemType.hpp"
 
+#include <algorithm>
+
+#include "ParseContext.hpp"
+
 namespace erax::frontend {
+
+  bool type_has_references(const SemType& type) {
+    std::vector<const RecordInfo*> visiting;
+    const auto contains = [&](const auto& self, const SemType& candidate) -> bool {
+      if (candidate.is_reference()) {
+        return true;
+      }
+      if (!candidate.is_record() || !candidate.record) {
+        return false;
+      }
+      if (std::ranges::find(visiting, candidate.record) != visiting.end()) {
+        return false;
+      }
+      visiting.push_back(candidate.record);
+      bool result = false;
+      for (const auto& field : candidate.record->fields) {
+        result = result || self(self, field.type);
+      }
+      for (const auto& arg : candidate.record->type_args) {
+        result = result || self(self, arg);
+      }
+      visiting.pop_back();
+      return result;
+    };
+    return contains(contains, type);
+  }
 
   middleend::Type lower(const SemType& type) noexcept {
     switch (type.kind) {
@@ -16,6 +46,8 @@ namespace erax::frontend {
       case SemType::Kind::I64: return middleend::Type::I64;
       case SemType::Kind::U64: return middleend::Type::U64;
       case SemType::Kind::Ptr: return middleend::Type::pointer(lower(*type.pointee));
+      case SemType::Kind::Ref: return middleend::Type::pointer(lower(*type.pointee));
+      case SemType::Kind::Record: return middleend::Type::pointer(middleend::Type::U64);
     }
     return middleend::Type::Void;
   }
@@ -50,6 +82,9 @@ namespace erax::frontend {
       case SemType::Kind::I64: return "i64";
       case SemType::Kind::U64: return "u64";
       case SemType::Kind::Ptr: return "ptr " + to_string(*type.pointee);
+      case SemType::Kind::Ref:
+        return std::string(type.mutable_reference ? "ref mut " : "ref ") + to_string(*type.pointee);
+      case SemType::Kind::Record: return type.record ? type.record->name : "<record>";
     }
     return "?";
   }

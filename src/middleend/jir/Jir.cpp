@@ -105,6 +105,7 @@ namespace erax::middleend {
       case Op::Call: return "CALL";
       case Op::Primitive: return "PRIM";
       case Op::Ret: return "RET";
+      case Op::Offset: return "OFFSET";
     }
     return "unknown";
   }

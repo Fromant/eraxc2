@@ -76,17 +76,14 @@ TEST_CASE("a move cannot read the previous iteration's consumed value") {
       8);
 }
 
-TEST_CASE("assignment chains store from right to left and have no expression value") {
-  CHECK(execute_owned("fn main(): i32 { let a = 0; let b = 0; let c = 0; a = b = c = 7; return a + b + c; }").code ==
-        21);
-  CHECK(execute_owned("let g: i32 = 0; namespace n { let g: i32 = 0; } "
-                      "fn main(): i32 { let a = 0; a = n.g = g = 7; return a + n.g + g; }")
-            .code == 21);
-  CHECK(execute_owned("fn main(): i32 { let a = 1; let b = 2; let p = &b; a = *p = 7; return a + b; }").code == 14);
-  CHECK(execute_owned("fn main(): i32 { let a = 1; let b = 2; let p = &b; *p = a = 7; return a + b; }").code == 14);
-  CHECK(parse_error("fn main(): i32 { let a = 0; let b = 0; a = b += 1; return 0; }") == "only '=' may be chained");
-  CHECK(parse_error("fn main(): i32 { let a = 0; const b = 0; a = b = 1; return a; }") ==
-        "cannot assign to a const binding");
+TEST_CASE("assignment chains are rejected in statements and expressions") {
+  for (const auto source : {"fn main(): i32 { let a = 0; let b = 0; a = b = 7; return a; }",
+                            "fn main(): i32 { let a = 0; let b = 0; let p = &b; a = *p = 7; return a; }",
+                            "fn main(): i32 { let a = 0; let b = 0; let p = &b; *p = a = 7; return a; }",
+                            "let g: i32 = 0; fn main(): i32 { let a = 0; a = g = 7; return a; }",
+                            "fn main(): i32 { let a = 0; let b = 0; a = b += 1; return a; }"}) {
+    CHECK(parse_error(source) == "assignment chains are not allowed");
+  }
   CHECK(parse_error("fn main(): i32 { let a = 0; const b = (a = 1); return a; }") != "");
 }
 

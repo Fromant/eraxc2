@@ -137,6 +137,9 @@ tests/
   ParserTest.hpp           shared parser-test helpers (parse_ok / parse_error / ops_of)
   Parser.test.cpp          parser headline cases, accepted programs and their JIR
   Parser.literals.test.cpp literals, constant folding, and type ranges
+  Records.test.cpp         factories, visibility, copying, destructors, and global owners
+  References.test.cpp      inferred reference dependencies and safe access
+  Collections.test.cpp     pure-erax unique/vector conformance and storage reuse
   Ownership.test.cpp       bindings, moves, assignment chains, and heap lifetime regressions
   Parser.globals.test.cpp  globals, declarations, control flow, and CFG lowering
   Parser.errors.test.cpp   rejection messages and error locations
@@ -226,8 +229,9 @@ fn main(): i32 {
 - No Unicode identifiers.
 - Strings store raw escape text; `\"`-style unescaping happens with the parser.
 - Digit separators must sit between digits — `1_000` is fine, `1_` and `0x_1` are lexer errors.
-- The language is v1-incomplete on purpose: no `string`, no float, no `?.`/member access, no
-  `match`, no user types. The parser rejects them with a clear error rather than guessing.
+- Structures support private/public fields, factories, methods, explicit references/moves, and RAII destructors.
+  The pure-erax standard library provides `std.unique<T>` and `std.vector<T>`; see `examples/raii.erx`.
+  Strings, floats, optional chaining, and pattern matching remain outside the implemented language.
 - Two ways to print: `primitive print(a, b, …)` writes each value as the decimal its type reads, space-separated,
   ending in one newline; `primitive print_char(c)` writes one byte. The standard library (`stdlib/std.erx`,
   auto-imported before every program) lives in the root namespace `std` and is reached qualified
