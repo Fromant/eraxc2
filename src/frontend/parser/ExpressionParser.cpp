@@ -1,5 +1,6 @@
 #include "ExpressionParser.hpp"
 
+#include <algorithm>
 #include <cstdint>
 #include <limits>
 #include <optional>
@@ -597,6 +598,7 @@ namespace erax::frontend {
       if (mut) {
         cursor.take();
       }
+      const bool conditional = mut && cursor.match_op("?");
       if (const_mode_) {
         return std::unexpected(at("a constant expression may not borrow a value", location));
       }
@@ -604,7 +606,23 @@ namespace erax::frontend {
       if (!value) {
         return value;
       }
-      return context().borrow_value(*value, mut, location);
+      if (!conditional) {
+        return context().borrow_value(*value, mut, location);
+      }
+      const auto root = context().conditional_receiver;
+      const auto from_receiver = [&](const ReferenceOrigin& origin) {
+        return root && origin.external && origin.local == *root;
+      };
+      const bool raw_projection =
+          value->raw_storage && !value->origins.empty() && std::ranges::all_of(value->origins, from_receiver);
+      if (!root || (!value->receiver_projection && !raw_projection)) {
+        return std::unexpected(at("ref mut? requires a place projected through this", location));
+      }
+      auto borrowed = context().borrow_value(*value, false, location);
+      if (borrowed) {
+        borrowed->conditional_borrow = true;
+      }
+      return borrowed;
     }
     if (cursor.at_keyword(Keyword::Move)) {
       const SourceLocation location = cursor.take().location;
@@ -712,6 +730,7 @@ namespace erax::frontend {
       result.place_address = value.as_operand();
       result.object_mutable = value.type.is_pointer() || value.type.mutable_reference;
       result.raw_storage = value.type.is_pointer();
+      result.receiver_projection = value.receiver_projection && !pointee.is_reference();
       result.origins = value.origins;
       return result;
     }
@@ -1208,7 +1227,11 @@ namespace erax::frontend {
       if (const_mode_) {
         return std::unexpected(at("a constant expression may not read a local", location));
       }
-      return context().local_value(*local, location);
+      auto value = context().local_value(*local, location);
+      if (value && context().conditional_receiver == local->flow_id) {
+        value->receiver_projection = true;
+      }
+      return value;
     }
     {
       auto scan = cursor;

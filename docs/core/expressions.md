@@ -51,9 +51,9 @@ Lowest to highest (binary operators on the same line are left-associative; unary
 
 ## Structure and reference expressions
 
-`value.field` reads an accessible field and also denotes its storage place for assignment or borrowing. Fields and instance methods automatically follow reference receivers. `Type.new(...)` and receiverless methods use the named structure type; a generic type is explicit, as in `std.vector<i32>.new()`. A method call supplies its declared `this` argument automatically, while ordinary function arguments still require explicit `ref` or `move`.
+`value.field` reads an accessible field and also denotes its storage place for assignment or borrowing. Fields and instance methods automatically follow reference receivers. `Type.new(...)` and receiverless methods use the named structure type; a generic type is explicit, as in `std.vector<i32>.new()`. A method call supplies its implicit `this` argument automatically, while ordinary function arguments still require explicit `ref` or `move`.
 
-`ref place` and `ref mut place` create safe reference values (`types.md#references`). The target must already exist. A read-only path cannot recover mutation permission by copying an embedded mutable reference. `*reference` reads its target; `*reference = expr` requires a mutable reference. Ordinary primitive calls cannot accept record owners or safe references. Explicit raw pointer operations retain their separate manual contract.
+`ref place` and `ref mut place` create safe reference values (`types.md#references`). The target must already exist. In a `ref mut?` accessor, `ref mut? place` marks a receiver projection whose returned access depends on the call site. A read-only path cannot recover mutation permission by copying an embedded mutable reference. `*reference` reads its target; `*reference = expr` requires a mutable reference. Ordinary primitive calls cannot accept record owners or safe references. Explicit raw pointer operations retain their separate manual contract.
 
 Operands and arguments evaluate left to right: an earlier value read is captured before a later call can modify its source. This applies to ordinary binary operators, function calls, primitive calls, and factory field expressions. The eager logical operator rule is unchanged.
 

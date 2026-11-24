@@ -38,8 +38,8 @@ TEST_CASE("factories construct private fields and methods use this") {
     struct Counter {
       value: i32;
       public new(value: i32): Counter { return { value: value }; }
-      public fn get(this: ref Counter): i32 { return this.value; }
-      public fn increment(this: ref mut Counter) { this.value += 1; }
+      public fn get(): i32 { return this.value; }
+      public mut fn increment() { this.value += 1; }
       destructor { primitive print(this.value); }
     }
     fn main(): i32 { const mut value = Counter.new(4); value.increment(); return value.get(); }
@@ -54,7 +54,7 @@ TEST_CASE("structure creation and access preserve visibility and mutability") {
       private hidden: i32;
       public exposed: i32;
       public new(): Value { return { hidden: 1, exposed: 2 }; }
-      public fn set(this: ref mut Value) { this.hidden = 3; }
+      public mut fn set() { this.hidden = 3; }
     }
   )";
   CHECK(record_error(declaration + "fn main(): i32 { const value = Value.new(); return value.hidden; }")
@@ -108,7 +108,7 @@ TEST_CASE("record copies use clone and both owners destroy independently") {
     struct Resource {
       public value: i32;
       public new(value: i32): Resource { return { value: value }; }
-      public fn clone(this: ref Resource): Resource { return Resource.new(this.value); }
+      public fn clone(): Resource { return Resource.new(this.value); }
       destructor { primitive print(this.value); }
     }
     fn main(): i32 {
@@ -180,7 +180,7 @@ TEST_CASE("generic structure fields and methods specialize their type arguments"
     struct Box<T> {
       public value: T;
       public new(value: T): Box<T> { return { value: move value }; }
-      public fn get(this: ref Box<T>): ref T { return ref this.value; }
+      public fn get(): ref T { return ref this.value; }
     }
     fn main(): i32 { const value = Box<i32>.new(7); const borrowed = value.get(); return *borrowed; }
   )")
@@ -193,7 +193,7 @@ TEST_CASE("global owners initialize in source order and destroy after main in re
     struct Resource {
       value: i32;
       public new(value: i32): Resource { return { value: value }; }
-      public fn get(this: ref Resource): i32 { return this.value; }
+      public fn get(): i32 { return this.value; }
       destructor { drops += 1; primitive print(this.value); }
     }
     const first: Resource = Resource.new(1);
@@ -225,8 +225,8 @@ TEST_CASE("method overloads resolve arguments and receiver permissions together"
   CHECK(run_record(R"(
     struct Value {
       public new(): Value { return {}; }
-      public fn read(this: ref Value, value: i32): i32 { return value; }
-      public fn read(this: ref mut Value, value: bool): i32 { if (value) { return 2; } return 3; }
+      public fn read(value: i32): i32 { return value; }
+      public mut fn read(value: bool): i32 { if (value) { return 2; } return 3; }
     }
     fn main(): i32 { const mut value = Value.new(); return value.read(7) + value.read(true); }
   )")

@@ -35,7 +35,8 @@ function       = "fn" IDENT [ type-params ] "(" [ param { "," param } ] ")" [ ":
 structure      = "struct" IDENT [ type-params ] "{" { member } "}" ;
 member         = [ "public" | "private" ] ( field | method | factory | destructor ) ;
 field          = IDENT ":" type ";" ;
-method         = "fn" IDENT "(" [ param { "," param } ] ")" [ ":" type ] block ;
+method         = [ "mut" | "static" ] "fn" IDENT "(" [ param { "," param } ] ")" [ ":" method-result ] block ;
+method-result  = type | "ref" "mut" "?" type ;
 factory        = "new" "(" [ param { "," param } ] ")" ":" type block ;
 destructor     = "destructor" block ;
 object-literal = "{" [ IDENT ":" expr { "," IDENT ":" expr } [ "," ] ] "}" ;
@@ -89,7 +90,7 @@ additive       = multiplicative { ( "+" | "-" ) multiplicative } ;
 multiplicative = cast { ( "*" | "/" | "%" ) cast } ;
 cast           = unary { "as" type } ;
 unary          = ( "*" | "&" | "-" | "!" | "~" | "move" ) unary
-               | "ref" [ "mut" ] unary | postfix ;
+               | "ref" [ "mut" [ "?" ] ] unary | postfix ;
 postfix        = ( primary | call | type-call ) { "." IDENT [ "(" [ expr { "," expr } ] ")" ] } ;
 type-call      = named-type "." IDENT "(" [ expr { "," expr } ] ")" ;
 call           = qualified-name "(" [ expr { "," expr } ] ")" ;
@@ -112,6 +113,7 @@ Notes:
 - Scalar global initializers must be constant-foldable and contain no calls. Record globals may call factories/functions and initialize in declaration order. Globals cannot contain safe references. See `statements.md#globals`.
 - Every program is compiled with `stdlib/std.erx` parsed first (auto-import), so std's declarations are part of the program and need no import of their own (`docs/std.md`).
 - Object literals are checked additionally: they assemble exactly the factory's own record type and are legal only inside that factory. See `statements.md#structures`.
+- The parser recognizes `?` after `ref mut` in conditional method results and borrows.
 - Nested type argument closers are interpreted by the parser even when the tokenizer emits a maximal-munch `>>` or `>>>` run. The operator whitelist remains unchanged outside type-argument positions.
 - A `primitive-call` is answered by the built-in primitive catalog, never by a declaration: `primitive` + `IDENT` + `(` reaches exactly that primitive and nothing else (`docs/primitive.md#calling`). Primitives live in their own namespace — a plain `call` never resolves to one, and a function may share a primitive's name.
 - A `cast`'s right side is a `type`, not an expression: `x as i8 + 1` is `(x as i8) + 1` and `x + 1 as i32` is `x + (1 as i32)` (`expressions.md#precedence`). The conversion rules — which types may cast to which, and what wrapping means — are `types.md#casts`.

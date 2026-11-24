@@ -371,8 +371,11 @@ namespace erax::frontend {
   }
 
   ProgramParser::step ProgramParser::operator_whitelist() {
-    for (const Token& token : context_.cursor.tokens()) {
-      if (token.type != TokenType::Operator) {
+    const auto& tokens = context_.cursor.tokens();
+    for (std::size_t index = 0; index < tokens.size(); ++index) {
+      const auto& token = tokens[index];
+      if (token.type != TokenType::Operator ||
+          (token.text == "?" && index >= 2 && tokens[index - 1].text == "mut" && tokens[index - 2].text == "ref")) {
         continue;
       }
       if (token.text.size() > 2 && token.text.find_first_not_of('>') == std::string::npos) {
@@ -391,7 +394,8 @@ namespace erax::frontend {
     return {};
   }
 
-  std::expected<ProgramParser::Signature, ParseError> ProgramParser::signature(TokenCursor& cursor) {
+  std::expected<ProgramParser::Signature, ParseError> ProgramParser::signature(TokenCursor& cursor,
+                                                                               bool allow_receiver_result) {
     Signature signature;
     const SourceLocation start = cursor.location();
     auto name = expect_identifier(cursor);
@@ -475,6 +479,20 @@ namespace erax::frontend {
       return std::unexpected(close.error());
     }
     if (cursor.match(TokenType::Colon)) {
+      if (allow_receiver_result && cursor.at_keyword(Keyword::Ref) && cursor.peek().text == "mut" &&
+          cursor.peek(2).text == "?") {
+        cursor.take();
+        cursor.take();
+        cursor.take();
+        auto pointee = expect_signature_type(cursor, signature.type_params, context_);
+        if (!pointee) {
+          return std::unexpected(pointee.error());
+        }
+        signature.receiver_result = true;
+        signature.return_type.reference = true;
+        signature.return_type.pointee = std::make_shared<const TemplateType>(*pointee);
+        return signature;
+      }
       auto type = expect_signature_type(cursor, signature.type_params, context_);
       if (!type) {
         return std::unexpected(type.error());
@@ -1825,6 +1843,9 @@ namespace erax::frontend {
     auto value = expressions_.expression(current_return_type_);
     if (!value) {
       return std::unexpected(value.error());
+    }
+    if (context_.conditional_receiver && !value->conditional_borrow) {
+      return std::unexpected(ParseError {"ref mut? result requires a conditional borrow of this", location});
     }
     if (value->type != current_return_type_) {
       return std::unexpected(ParseError {

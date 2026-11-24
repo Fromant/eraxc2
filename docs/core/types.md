@@ -93,11 +93,19 @@ A structure is a nominal type: two declarations with equal fields remain differe
 
 All fields, including nested record handles, occupy one machine cell. The reference lowering stores a record's ordered fields in an owned heap block and carries its handle as one value. Nested values retain value semantics; a copied record does not silently share owned fields. This storage representation is part of lowering, not a user-visible constructor or address encoding. Use portable pointer offset operations rather than arithmetic on address bits.
 
-A structure without a user destructor receives structural copying when all fields are clonable. A user destructor disables automatic shallow copying; a `clone(this: ref Structure): Structure` method supplies copying explicitly. Generic clone bodies are checked when copying is requested. `Clonable` is independent of `Movable`: a unique owner may move while copying is forbidden. Plain reference fields are copied as references. Recursive owned-field cycles are rejected; raw pointer and reference edges do not imply recursive ownership.
+A structure without a user destructor receives structural copying when all fields are clonable. A user destructor disables automatic shallow copying; a `clone(): Structure` method supplies copying explicitly. Generic clone bodies are checked when copying is requested. `Clonable` is independent of `Movable`: a unique owner may move while copying is forbidden. Plain reference fields are copied as references. Recursive owned-field cycles are rejected; raw pointer and reference edges do not imply recursive ownership.
 
 ## References
 
 `ref T` and `ref mut T` refer to an existing storage place. `ref value` borrows it for reading; `ref mut value` requires mutation permission. `*reference` reads its target and `*reference = value` requires mutable reference access. Fields and methods automatically follow a reference receiver. Taking a safe reference to an unnamed temporary is rejected. `const` fixes the reference binding; its `ref mut` type still permits modifying the target.
+
+An ordinary instance method may declare `ref mut? T` as its return type. Its body
+uses read-only `this` and returns an explicit conditional borrow such as
+`return ref mut? this.field;`. The borrow must project through the receiver.
+An explicit raw dereference with receiver provenance follows the manual raw
+storage contract. At the call site the result is `ref mut T` through mutable
+receiver access and `ref T` through read-only receiver access. A plain
+`ref T` return type always grants read-only access.
 
 Mutable aliases are permitted. A read-only reference restricts access through that reference; it does not freeze the object against other authorized access. Ordinary scalar mutation preserves references. Moving, destroying, replacing an owned value, or invalidating collection storage must not precede a later use of a reference to the affected target. Whole-vector references and references to vector elements have distinct dependencies. Method effects propagate storage invalidation through calls. Free-function invalidation summaries propagate through known calls and typed member operations; uncertain aliases and generic effects are summarized conservatively. Additional mutable record-reference arguments to methods and factories are conservative invalidation boundaries.
 

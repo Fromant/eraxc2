@@ -38,7 +38,7 @@ namespace {
     struct Resource {
       id: i32;
       public new(id: i32): Resource { return { id: id }; }
-      public fn number(this: ref Resource): i32 { return this.id; }
+      public fn number(): i32 { return this.id; }
       destructor { drops += 1; total += this.id; }
     }
   )";
@@ -97,11 +97,11 @@ TEST_CASE("std unique destroys an owned user resource exactly once") {
   CHECK(outcome.globals[1] == 7);
 }
 
-TEST_CASE("std unique grants mutable access only through its mutable accessor") {
+TEST_CASE("std unique get inherits the receiver access") {
   const auto outcome = run_collections(R"(
     fn main(): i32 {
       const mut owner = std.unique<i32>.new(7);
-      *owner.get_mut() = 9;
+      *owner.get() = 9;
       return *owner.get();
     }
   )");
@@ -109,7 +109,7 @@ TEST_CASE("std unique grants mutable access only through its mutable accessor") 
   const auto program = parse_collections(R"(
     fn main(): i32 {
       const owner = std.unique<i32>.new(7);
-      owner.get_mut();
+      *owner.get() = 9;
       return 0;
     }
   )");
@@ -138,7 +138,7 @@ TEST_CASE("std vector cloning creates independent scalar storage") {
       values.push(7);
       const mut copied = values;
       values.push(9);
-      *copied.at_mut(0) = 42;
+      *copied.at(0) = 42;
       std.assert(values.length() == 2);
       std.assert(copied.length() == 1);
       std.assert(*values.at(0) == 7);
@@ -271,7 +271,7 @@ TEST_CASE("std element references observe ordinary mutation through another vali
       const mut values = std.vector<i32>.new();
       values.push(7);
       const reading = values.at(0);
-      *values.at_mut(0) = 9;
+      *values.at(0) = 9;
       return *reading;
     }
   )");
@@ -296,8 +296,8 @@ TEST_CASE("fallible factories transfer success and clean up ordinary error retur
         return std.Result<Item, i32>.ok({ value: n });
       }
       new(): Item { return { value: 0 }; }
-      fn prepare(): Item { return Item.new(); }
-      public fn get(this: ref Item): i32 { return this.value; }
+      static fn prepare(): Item { return Item.new(); }
+      public fn get(): i32 { return this.value; }
       destructor { drops += 1; }
     }
     fn main(): i32 {

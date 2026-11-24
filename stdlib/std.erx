@@ -155,17 +155,12 @@ namespace std {
             return { storage: slot };
         }
 
-        public fn get(this: ref unique<T>): ref T {
+        public fn get(): ref mut? T {
             assert(this.storage != 0 as ptr T);
-            return ref *this.storage;
+            return ref mut? *this.storage;
         }
 
-        public fn get_mut(this: ref mut unique<T>): ref mut T {
-            assert(this.storage != 0 as ptr T);
-            return ref mut *this.storage;
-        }
-
-        public fn release(this: ref mut unique<T>): T {
+        public mut fn release(): T {
             assert(this.storage != 0 as ptr T);
             const value: T = move *this.storage;
             primitive free(this.storage as ptr u8);
@@ -191,21 +186,21 @@ namespace std {
             return { success: success, value_slot: value_slot, error_slot: error_slot };
         }
 
-        public fn ok(value: T): Result<T, E> {
+        public static fn ok(value: T): Result<T, E> {
             const slot = primitive alloc(8) as ptr T;
             *slot = move value;
             return Result<T, E>.new(true, slot, 0 as ptr E);
         }
 
-        public fn err(error: E): Result<T, E> {
+        public static fn err(error: E): Result<T, E> {
             const slot = primitive alloc(8) as ptr E;
             *slot = move error;
             return Result<T, E>.new(false, 0 as ptr T, slot);
         }
 
-        public fn is_ok(this: ref Result<T, E>): bool { return this.success; }
+        public fn is_ok(): bool { return this.success; }
 
-        public fn take_value(this: ref mut Result<T, E>): T {
+        public mut fn take_value(): T {
             assert(this.value_slot != 0 as ptr T);
             const value = move *this.value_slot;
             primitive free(this.value_slot as ptr u8);
@@ -213,7 +208,7 @@ namespace std {
             return move value;
         }
 
-        public fn take_error(this: ref mut Result<T, E>): E {
+        public mut fn take_error(): E {
             assert(this.error_slot != 0 as ptr E);
             const error = move *this.error_slot;
             primitive free(this.error_slot as ptr u8);
@@ -242,19 +237,19 @@ namespace std {
             return { storage: 0 as ptr u8, count: 0u64, capacity_count: 0u64 };
         }
 
-        public fn length(this: ref vector<T>): u64 {
+        public fn length(): u64 {
             return this.count;
         }
 
-        public fn capacity(this: ref vector<T>): u64 {
+        public fn capacity(): u64 {
             return this.capacity_count;
         }
 
-        public fn empty(this: ref vector<T>): bool {
+        public fn empty(): bool {
             return this.count == 0;
         }
 
-        public fn reserve(this: ref mut vector<T>, capacity: u64) {
+        public mut fn reserve(capacity: u64) {
             if (capacity <= this.capacity_count) {
                 return;
             }
@@ -273,7 +268,7 @@ namespace std {
             this.capacity_count = capacity;
         }
 
-        public fn push(this: ref mut vector<T>, value: T) {
+        public mut fn push(value: T) {
             if (this.count == this.capacity_count) {
                 let capacity: u64 = 4;
                 if (this.capacity_count != 0) {
@@ -291,26 +286,20 @@ namespace std {
             this.count += 1;
         }
 
-        public fn at(this: ref vector<T>, index: u64): ref T {
+        public fn at(index: u64): ref mut? T {
             assert(index < this.count);
             const slot = primitive offset(this.storage, index) as ptr T;
-            return ref *slot;
+            return ref mut? *slot;
         }
 
-        public fn at_mut(this: ref mut vector<T>, index: u64): ref mut T {
-            assert(index < this.count);
-            const slot = primitive offset(this.storage, index) as ptr T;
-            return ref mut *slot;
-        }
-
-        public fn pop(this: ref mut vector<T>): T {
+        public mut fn pop(): T {
             assert(this.count != 0);
             this.count -= 1;
             const slot = primitive offset(this.storage, this.count) as ptr T;
             return move *slot;
         }
 
-        public fn clear(this: ref mut vector<T>) {
+        public mut fn clear() {
             while (this.count != 0) {
                 this.count -= 1;
                 const slot = primitive offset(this.storage, this.count) as ptr T;
@@ -318,7 +307,7 @@ namespace std {
             }
         }
 
-        public fn clone(this: ref vector<T>): vector<T> {
+        public fn clone(): vector<T> {
             let mut result = vector<T>.new();
             result.reserve(this.count);
             let i: u64 = 0;

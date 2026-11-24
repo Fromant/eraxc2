@@ -42,7 +42,7 @@ TEST_CASE("reference fields preserve contained dependencies when their owner mov
     struct View {
       public target: ref i32;
       public new(target: ref i32): View { return { target: target }; }
-      public fn get(this: ref View): ref i32 { return this.target; }
+      public fn get(): ref i32 { return this.target; }
     }
   )";
   CHECK(reference_code(std::string(view) +
@@ -112,7 +112,7 @@ TEST_CASE("global reference storage is rejected without weakening local referenc
     struct Resource {
       public value: i32;
       public new(): Resource { return { value: 1 }; }
-      public fn get(this: ref Resource): ref i32 { return ref this.value; }
+      public fn get(): ref i32 { return ref this.value; }
     }
     const value: Resource = Resource.new();
     fn main(): i32 { const reader = value.get(); return *reader; }
@@ -135,7 +135,7 @@ TEST_CASE("writing reference fields preserves dependencies through mutable alias
     struct Holder {
       public target: ref i32;
       public new(target: ref i32): Holder { return { target: target }; }
-      public fn set(this: ref mut Holder, target: ref i32) { this.target = target; }
+      public mut fn set(target: ref i32) { this.target = target; }
     }
   )";
   CHECK(parse_error(std::string(holder) +
@@ -178,7 +178,7 @@ TEST_CASE("custom generic copying depends on its body rather than every type arg
     struct Phantom<T> {
       public value: i32;
       public new(value: i32): Phantom<T> { return { value: value }; }
-      public fn clone(this: ref Phantom<T>): Phantom<T> { return Phantom<T>.new(this.value); }
+      public fn clone(): Phantom<T> { return Phantom<T>.new(this.value); }
     }
     fn duplicate<T extends Clonable>(value: ref T): T { return *value; }
     fn main(): i32 {
@@ -196,7 +196,7 @@ TEST_CASE("reference-bearing custom copies retain their source lifetime dependen
       own: i32;
       target: ref i32;
       public new(target: ref i32): ReferenceCopy { return { own: 9, target: target }; }
-      public fn clone(this: ref ReferenceCopy): ReferenceCopy {
+      public fn clone(): ReferenceCopy {
         return ReferenceCopy.new(ref this.own);
       }
     }
@@ -209,4 +209,41 @@ TEST_CASE("reference-bearing custom copies retain their source lifetime dependen
                     "fn bad(external: ref i32): ReferenceCopy { const local = ReferenceCopy.new(external); "
                     "return local.clone(); } fn main(): i32 { return 0; }") ==
         "cannot return a value that references a local object");
+}
+
+TEST_CASE("conditional method results inherit receiver access without granting mutation to the body") {
+  const std::string declaration = R"(
+    struct Entry {
+      key: i32;
+      value: i32;
+      public new(): Entry { return { key: 1, value: 2 }; }
+      public fn key_ref(): ref i32 { return ref this.key; }
+      public fn value_ref(): ref mut? i32 { return ref mut? this.value; }
+    }
+  )";
+  CHECK(reference_code(declaration + R"(
+    fn main(): i32 {
+      const mut item = Entry.new();
+      *item.value_ref() = 9;
+      const reader = ref item;
+      const value: ref i32 = reader.value_ref();
+      return *value;
+    }
+  )") == 9);
+  CHECK(parse_error(declaration + R"(
+    fn main(): i32 { const mut item = Entry.new(); *item.key_ref() = 9; return 0; }
+  )") != "");
+  CHECK(parse_error(R"(
+    struct Entry {
+      value: i32;
+      public fn bad(): ref mut? i32 { this.value = 9; return ref mut? this.value; }
+    }
+    fn main(): i32 { return 0; }
+  )") != "");
+  CHECK(parse_error(R"(
+    struct Entry {
+      public fn bad(other: ref i32): ref mut? i32 { return ref mut? *other; }
+    }
+    fn main(): i32 { return 0; }
+  )") == "ref mut? requires a place projected through this");
 }

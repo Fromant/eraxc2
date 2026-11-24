@@ -42,12 +42,11 @@ its storage exactly once.
 | Method | Receiver | Result and behavior |
 | ------ | -------- | ------------------- |
 | `new(value: T)` | factory | An owner containing `value` |
-| `get()` | `ref unique<T>` | `ref T` for reading the owned value |
-| `get_mut()` | `ref mut unique<T>` | `ref mut T` for changing the owned value |
+| `get()` | `ref unique<T>` | `ref mut? T` to the owned value |
 | `release()` | `ref mut unique<T>` | Transfers the `T` to the caller and empties the owner |
 
 A released owner remains valid and can be moved or destroyed; its destructor
-has no contained value to destroy. Calling `get`, `get_mut`, or `release` on an
+has no contained value to destroy. Calling `get` or `release` on an
 empty owner fails `std.assert`, terminating with code 134. References obtained
 from the owner may not be used after release or destruction.
 
@@ -67,15 +66,14 @@ passed between functions with explicit `move`.
 | `empty()` | `ref vector<T>` | Whether the length is zero |
 | `reserve(capacity: u64)` | `ref mut vector<T>` | Ensures at least that capacity without changing length |
 | `push(value: T)` | `ref mut vector<T>` | Appends a copied or explicitly moved value |
-| `at(index: u64)` | `ref vector<T>` | `ref T` to an initialized element |
-| `at_mut(index: u64)` | `ref mut vector<T>` | `ref mut T` to an initialized element |
+| `at(index: u64)` | `ref vector<T>` | `ref mut? T` to an initialized element |
 | `pop()` | `ref mut vector<T>` | Removes the last element and transfers it to the caller |
 | `clear()` | `ref mut vector<T>` | Destroys all initialized elements, preserving capacity |
 | `clone()` | `ref vector<T>` | A vector with independent storage and copied elements |
 
 Ordinary copying uses the vector's `clone` implementation and requires clonable
 elements. Copying a vector of nonclonable owners is a compile-time error.
-`at` and `at_mut` require `index < length()`; `pop` requires a nonempty vector.
+`at` requires `index < length()`; `pop` requires a nonempty vector.
 Violations fail `std.assert` with code 134. Capacity multiplication is checked
 before requesting raw allocation; allocator exhaustion remains a machine trap.
 

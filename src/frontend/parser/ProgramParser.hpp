@@ -46,6 +46,7 @@ private:
     /// call needs before the function itself is parsed. A non-empty `type_params`
     /// makes it a template, whose parameter and return types may name them.
     struct Signature {
+      bool receiver_result = false;
       std::string name;
       SourceLocation location;
       std::vector<TypeParam> type_params;
@@ -129,7 +130,7 @@ private:
     /// pass, once per instantiation that a call requested.
     step instantiate_function(const Instantiation& inst);
 
-    std::expected<Signature, ParseError> signature(TokenCursor& cursor);
+    std::expected<Signature, ParseError> signature(TokenCursor& cursor, bool allow_receiver_result = false);
     /// Skips a `{ … }` body, brace for brace.
     static step skip_body(TokenCursor& cursor);
 

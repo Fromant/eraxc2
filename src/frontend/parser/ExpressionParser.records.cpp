@@ -156,6 +156,9 @@ namespace erax::frontend {
         continue;
       }
       auto candidate = method.function;
+      if (method.receiver_result && receiver->object_mutable) {
+        candidate.return_type = SemType::reference(*candidate.return_type.pointee, true);
+      }
       if (!instance) {
         candidate.invalidates_references = std::ranges::any_of(candidate.params, [](const SemType& type) {
           return is_mutable_record_reference(type);
@@ -227,6 +230,7 @@ namespace erax::frontend {
         read.place_address = value.as_operand();
         read.object_mutable = value.type.mutable_reference;
         read.origins = value.origins;
+        read.receiver_projection = value.receiver_projection && !type.is_reference();
         value = std::move(read);
       }
       if (!value.type.is_record()) {
@@ -272,6 +276,7 @@ namespace erax::frontend {
       member.origins = value.origins;
       member.place_origins = ctx.interior_origins(value);
       member.global_storage = value.global_storage;
+      member.receiver_projection = value.receiver_projection && !type.is_reference();
       value = std::move(member);
     }
     return value;

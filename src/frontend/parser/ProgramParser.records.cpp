@@ -182,11 +182,18 @@ namespace erax::frontend {
         continue;
       }
       const bool factory = cursor.current().text == "new";
-      if (factory || cursor.at_keyword(Keyword::Fn)) {
+      const bool static_method = !factory && cursor.current().text == "static";
+      const bool mut_method = !factory && cursor.at_keyword(Keyword::Mut);
+      if (static_method || mut_method) {
+        cursor.take();
+      }
+      if (factory || cursor.at_keyword(Keyword::Fn) || static_method || mut_method) {
         if (!factory) {
-          cursor.take();
+          if (auto keyword = expect_keyword(cursor, Keyword::Fn); !keyword) {
+            return finish(std::unexpected(keyword.error()));
+          }
         }
-        auto parsed = signature(cursor);
+        auto parsed = signature(cursor, true);
         if (!parsed) {
           return finish(std::unexpected(parsed.error()));
         }
@@ -225,13 +232,17 @@ namespace erax::frontend {
           return finish(std::unexpected(
               ParseError {"a factory must return its structure type or std.Result of that type", found.location}));
         }
-        for (std::size_t i = 0; i < method.param_names.size(); ++i) {
-          if (method.param_names[i] == "this" &&
-              (i != 0 || factory || !method.function.params[i].is_reference() ||
-               *method.function.params[i].pointee != SemType::record_type(&record))) {
-            return finish(std::unexpected(
-                ParseError {"this must be the first reference parameter of an instance method", found.location}));
-          }
+        if (std::ranges::find(method.param_names, "this") != method.param_names.end()) {
+          return finish(std::unexpected(ParseError {"this is implicit in instance methods", found.location}));
+        }
+        const bool instance = !factory && !static_method;
+        if (found.receiver_result && (!instance || mut_method)) {
+          return finish(std::unexpected(ParseError {"ref mut? requires an ordinary instance method", found.location}));
+        }
+        method.receiver_result = found.receiver_result;
+        if (instance) {
+          method.param_names.insert(method.param_names.begin(), "this");
+          method.function.params.insert(method.function.params.begin(), SemType::reference(own_type, mut_method));
         }
         auto& overloads = record.methods[found.name];
         if (std::ranges::any_of(overloads, [&](const MethodInfo& m) {
@@ -244,7 +255,8 @@ namespace erax::frontend {
               method.function.params != std::vector<SemType> {SemType::reference(SemType::record_type(&record))} ||
               method.function.return_type != SemType::record_type(&record)) {
             return finish(std::unexpected(
-                ParseError {"clone must take this: ref structure and return the structure", found.location}));
+                ParseError {"clone must be a read-only instance method with no arguments and return the structure",
+                            found.location}));
           }
           // The body of a generic clone is checked only when copying is requested.
           record.auto_clone = false;
@@ -478,10 +490,16 @@ namespace erax::frontend {
     for (std::size_t i = 0; i < params.size(); ++i) {
       LocalInfo local {params[i], method.function.params[i], i, true, method.location};
       local.parameter = true;
+      if (method.param_names[i] == "this") {
+        local.reassignable = false;
+      }
       local.mutable_object = method.function.params[i].is_reference() && method.function.params[i].mutable_reference;
       if (auto declared = context_.declare_local(method.param_names[i], local); !declared) {
         return std::unexpected(declared.error());
       }
+    }
+    if (method.receiver_result) {
+      context_.conditional_receiver = context_.find_local("this")->flow_id;
     }
     auto body = block();
     if (!body) {
@@ -513,6 +531,7 @@ namespace erax::frontend {
     context_.set_type_substitution(saved_substitution);
     context_.active_record = nullptr;
     context_.in_factory = false;
+    context_.conditional_receiver.reset();
     return {};
   }
 

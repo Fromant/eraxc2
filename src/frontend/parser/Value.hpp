@@ -63,6 +63,9 @@ namespace erax::frontend {
     bool object_mutable = false;
     bool raw_storage = false;
     bool global_storage = false;
+    /// A direct projection through the readonly receiver of a conditional accessor.
+    bool receiver_projection = false;
+    bool conditional_borrow = false;
     std::vector<ReferenceOrigin> origins = {};
     std::vector<ReferenceOrigin> place_origins = {};
     /// A temporary ownership flag, cleared when its value is transferred.

@@ -43,18 +43,18 @@ Fields and methods belong to the structure declaration, not a separate implement
 struct Resource {
     value: i32;
     public new(value: i32): Resource { return { value: value }; }
-    public fn number(this: ref Resource): i32 { return this.value; }
+    public fn number(): i32 { return this.value; }
     destructor { primitive print(this.value); }
 }
 ```
 
 Every field, method, and factory is private by default. `public` and `private` explicitly set visibility of a member. Fields exposed as public may be modified through mutable access; protecting their invariant is the type author's responsibility. Outside access to private members is rejected. Visibility does not prevent the compiler from invoking a destructor or the copying protocol.
 
-An instance method declares `this` explicitly as its first parameter, `ref Structure` or `ref mut Structure`. The latter requires mutable access to the receiver. `value.method(args)` borrows its receiver for the call; this does not change ordinary assignment into implicit borrowing. A receiverless method is called through the type. Method overloads match argument types and receiver permissions; an available mutable receiver overload is preferred when the explicit arguments also match it.
+An ordinary instance method has an implicit `this` of type `ref Structure`. A `mut fn` has an implicit `this` of type `ref mut Structure` and requires mutable access to the receiver. `value.method(args)` borrows its receiver for the call; this does not change ordinary assignment into implicit borrowing. A `static fn` is called through the type and has no `this`. Method overloads match argument types and receiver permissions; an available mutable receiver overload is preferred when the explicit arguments also match it.
 
 `Type.new(args)` invokes a factory. Factories may overload their parameter types, return their own structure type or `std.Result<Structure, E>`, and have no pre-existing `this`. The `{ field: expression, ... }` object literal is legal only inside that type's factory, where it assembles the value directly instead of recursively calling `new`. Every field must appear exactly once; expressions evaluate in written order before assembly. Field types provide contextual literal types. A fallible factory can pass its object literal directly to `std.Result<Structure, E>.ok(...)` or return `err(...)`. Returning either variant follows ordinary return cleanup rules. No external object-literal creation bypasses visibility or factory checks. No default factory is synthesized. A named factory can be an ordinary receiverless method delegating to `new`.
 
-`struct Box<T> { ... }` specializes fields and methods for each concrete type argument set. `Box<i32>.new(...)` chooses a concrete structure type; function templates still deduce their arguments. A user copying method has signature `clone(this: ref Structure): Structure`; copying requests its concrete body. Methods live in the declaring namespace and can reference the type's parameters. Owned field cycles are rejected; reference and raw-pointer recursion does not recursively own the target.
+`struct Box<T> { ... }` specializes fields and methods for each concrete type argument set. `Box<i32>.new(...)` chooses a concrete structure type; function templates still deduce their arguments. A user copying method has signature `clone(): Structure`; copying requests its concrete body. Methods live in the declaring namespace and can reference the type's parameters. Owned field cycles are rejected; reference and raw-pointer recursion does not recursively own the target.
 
 ## Destruction
 

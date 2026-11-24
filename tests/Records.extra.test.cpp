@@ -20,7 +20,7 @@ TEST_CASE("a signature can instantiate a structure from a later namespace") {
       struct Box<T> {
         value: T;
         public new(value: T): Box<T> { return { value: move value }; }
-        public fn get(this: ref Box<T>): ref T { return ref this.value; }
+        public fn get(): ref T { return ref this.value; }
       }
     }
     fn main(): i32 { const box = later.Box<i32>.new(7); return read(ref box); }
@@ -71,7 +71,7 @@ TEST_CASE("method invalidation follows explicit delegated mutable access") {
     struct Holder {
       public child: Child;
       public new(): Holder { return { child: Child.new(1) }; }
-      public fn reset(this: ref mut Holder) { replace(ref mut this.child); }
+      public mut fn reset() { replace(ref mut this.child); }
     }
     fn main(): i32 {
       const mut holder = Holder.new();
@@ -89,8 +89,8 @@ TEST_CASE("a scalar setter does not inherit unrelated resource invalidation") {
       public number: i32;
       storage: ptr u8;
       public new(): Value { return { number: 1, storage: primitive alloc(8) }; }
-      public fn increment(this: ref mut Value) { this.number += 1; }
-      public fn release(this: ref mut Value) {
+      public mut fn increment() { this.number += 1; }
+      public mut fn release() {
         primitive free(this.storage);
         this.storage = 0 as ptr u8;
       }

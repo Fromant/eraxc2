@@ -281,6 +281,7 @@ private:
   };
 
   struct MethodInfo {
+    bool receiver_result = false;
     FunctionInfo function;
     std::vector<std::string> param_names;
     std::size_t body_index = 0;
@@ -405,6 +406,7 @@ public:
     }
     RecordInfo* active_record = nullptr;
     bool in_factory = false;
+    std::optional<std::size_t> conditional_receiver;
     std::function<std::expected<RecordInfo*, ParseError>(RecordInfo*, std::vector<SemType>, SourceLocation)>
         record_instantiator;
     std::function<std::expected<std::size_t, ParseError>(RecordInfo*, SourceLocation)> clone_instantiator;

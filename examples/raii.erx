@@ -5,7 +5,7 @@ let total: i32 = 0;
 struct Resource {
     id: i32;
     public new(id: i32): Resource { return { id: id }; }
-    public fn number(this: ref Resource): i32 { return this.id; }
+    public fn number(): i32 { return this.id; }
     destructor { drops += 1; total += this.id; }
 }
 
