@@ -252,12 +252,10 @@ namespace std {
                 return;
             }
             const replacement = alloc<T>(capacity);
-            let i: u64 = 0;
-            while (i < this.count) {
+            for (let i: u64 = 0; i < this.count; i += 1) {
                 const source = this.storage + i;
                 const destination = replacement + i;
                 *destination = move *source;
-                i += 1;
             }
             free(this.storage);
             this.storage = replacement;
@@ -304,11 +302,9 @@ namespace std {
         public fn clone(): vector<T> {
             let mut result = vector<T>.new();
             result.reserve(this.count);
-            let i: u64 = 0;
-            while (i < this.count) {
+            for (let i: u64 = 0; i < this.count; i += 1) {
                 const source = this.storage + i;
                 result.push(*source);
-                i += 1;
             }
             return move result;
         }
