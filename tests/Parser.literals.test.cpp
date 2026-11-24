@@ -518,7 +518,7 @@ TEST_CASE("a literal takes the type of the position, and only if it fits") {
   CHECK(parse_error("fn main(): i32 { let x: i32 = 1.5; return 0; }") == "float is not supported yet");
   CHECK(parse_error("fn main(): i32 { let x: i32 = 1e3; return 0; }") == "float is not supported yet");
   // ... and so is a string, for the same reason.
-  CHECK(parse_error("fn main(): i32 { let x: i32 = \"hi\"; return 0; }") == "string is not supported yet");
+  CHECK(parse_error("fn main(): i32 { let x: i32 = \"hi\"; return 0; }") == "string literals require std.string");
   // A `1` followed by a dot is a `1` and a dot, not a float: the dot is not a number.
   CHECK(parse_error("fn main(): i32 { let x: i32 = 1.; return 0; }") == "expected ';'");
   CHECK(parse_error("fn main(): i32 { let x: i32 = 1.0; return 0; }") == "float is not supported yet");

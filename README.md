@@ -189,13 +189,12 @@ push toward 100%.
 
 ## Example
 
-`examples/helloworld.erx` is the current syntax vision, and it is ahead of the implementation — `string` and
-`std.print` are not v1 yet:
+`examples/helloworld.erx` prints a string through the auto-imported standard library.
 
 ```erax
 fn main(): i32 {
-    let text: string = "Hello, \"world\"!\nOn a new line";
-    std.print(text);
+    let text: std.string = "Hello, \"world\"!\nOn a new line";
+    std.print(ref text);
     return 0;
 }
 ```
@@ -254,4 +253,4 @@ fn main(): i32 {
   folds constants with, so a folded answer and a computed one cannot drift apart.
 - **A cell is one `u64`.** A value is never held in a host type, so wrapping and narrowing are the IR's business:
   an `i32` cell is zero-extended, and `i32 -1` is `0xFFFFFFFF`.
-- **Shared test corpus.** Programs under `examples/` double as the conformance suite: same files, every backend, identical observable result — the stdout bytes (`primitive print` / `print_char`, directly or through std), final global state, and the exit code (the entrypoint's return, or the code `exit`/`abort` gave). The primitives are the only stdout in v0.1; strings and `std.print` arrive later.
+- **Shared test corpus.** Programs under `examples/` double as the conformance suite: same files, every backend, identical observable result — the stdout bytes (`primitive print` / `print_char`, directly or through std), final global state, and the exit code (the entrypoint's return, or the code `exit`/`abort` gave).

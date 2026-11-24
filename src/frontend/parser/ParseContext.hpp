@@ -400,6 +400,7 @@ public:
     std::expected<Value, ParseError> local_value(const LocalInfo& local, SourceLocation location);
     std::expected<RecordInfo*, ParseError> declare_record(const std::string& qualified, SourceLocation location);
     RecordInfo* find_record(const std::string& name) const noexcept;
+    RecordInfo* find_root_record(const std::string& qualified) const noexcept;
     std::vector<std::unique_ptr<RecordInfo>>& records() noexcept {
       return records_;
     }

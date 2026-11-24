@@ -739,6 +739,11 @@ namespace erax::frontend {
     return result;
   }
 
+  RecordInfo* ParseContext::find_root_record(const std::string& qualified) const noexcept {
+    auto found = record_names_.find(qualified);
+    return found == record_names_.end() ? nullptr : found->second;
+  }
+
   RecordInfo* ParseContext::find_record(const std::string& name) const noexcept {
     for (std::size_t depth = current_namespace().path.size() + 1; depth > 0; --depth) {
       std::string key;
@@ -746,8 +751,8 @@ namespace erax::frontend {
         key += current_namespace().path[index] + '.';
       }
       key += name;
-      if (auto found = record_names_.find(key); found != record_names_.end()) {
-        return found->second;
+      if (auto* found = find_root_record(key)) {
+        return found;
       }
     }
     return nullptr;

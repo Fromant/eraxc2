@@ -201,7 +201,7 @@ CALL EMPTY &log i32 $3                  ; EMPTY dst — no value comes back
 - `print` is the one variadic primitive: any number of value operands, none of them `void` (arity `0..∞`), `dst` `EMPTY` — every operand is a read.
 - `print` and `print_char` write to stdout; those bytes are part of the observable result ([execution model](#execution-model)). `exit` and `abort` terminate the run: a block ending in either has no outgoing edges, like a `RET` block.
 - `alloc` and `free` move blocks through the heap: `alloc` hands back a pointer to `bytes` worth of zeroed cells (rounded up to whole cells, at least one), `free` returns a live pointer's block to the allocator and traps on one that names nothing. They are the primitive pair [pointers](#runtime-semantics) sit on; their exact contract is `docs/primitive.md`.
-- `PRIM` is the one way a program touches the world; strings and formatted output arrive later (`TODO.md`).
+- `PRIM` is the one way a program touches the world. String literals lower to ordinary calls that construct and fill `std.string`. The library writes their bytes through `PRIM print_char`.
 
 ## Runtime semantics
 

@@ -308,4 +308,66 @@ namespace std {
         }
     }
 
+    // A string owns bytes in order, including any embedded zero bytes.
+    struct string {
+        bytes: vector<char>;
+
+        public new(): string {
+            return { bytes: vector<char>.new() };
+        }
+
+        public fn length(): u64 { return this.bytes.length(); }
+        public fn empty(): bool { return this.bytes.empty(); }
+        public fn at(index: u64): char { return *this.bytes.at(index); }
+
+        public mut fn set(index: u64, value: char) {
+            *this.bytes.at(index) = value;
+        }
+
+        public mut fn push(value: char) { this.bytes.push(value); }
+        public mut fn pop(): char { return this.bytes.pop(); }
+        public mut fn clear() { this.bytes.clear(); }
+        public mut fn reserve(capacity: u64) { this.bytes.reserve(capacity); }
+
+        public mut fn append(other: ref string) {
+            const count = other.length();
+            for (let i: u64 = 0; i < count; i += 1) {
+                this.push(other.at(i));
+            }
+        }
+
+        public fn concat(other: ref string): string {
+            let mut result = this.clone();
+            result.append(other);
+            return move result;
+        }
+
+        public fn equals(other: ref string): bool {
+            if (this.length() != other.length()) { return false; }
+            for (let i: u64 = 0; i < this.length(); i += 1) {
+                if (this.at(i) != other.at(i)) { return false; }
+            }
+            return true;
+        }
+
+        public fn slice(start: u64, end: u64): string {
+            assert(start <= end && end <= this.length());
+            let mut result = string.new();
+            result.reserve(end - start);
+            for (let i = start; i < end; i += 1) {
+                result.push(this.at(i));
+            }
+            return move result;
+        }
+
+        public fn write() {
+            for (let i: u64 = 0; i < this.length(); i += 1) {
+                primitive print_char(this.at(i));
+            }
+        }
+    }
+
+    fn print(value: ref string) { value.write(); }
+    fn print(value: string) { value.write(); }
+
 }  // namespace std

@@ -218,7 +218,7 @@ TEST_CASE("a string and a float are not types yet") {
   CHECK(parse_error("fn main(): i32 { let x: i32 = 1.5; return 0; }") == "float is not supported yet");
   CHECK(parse_error("fn main(): i32 { let x: i32 = 1.5 + 1; return 0; }") == "float is not supported yet");
   CHECK(parse_error("fn main(): i32 { let x: string = \"hi\"; return 0; }") == "string is not supported yet");
-  CHECK(parse_error("fn main(): i32 { let x: i32 = \"hi\"; return 0; }") == "string is not supported yet");
+  CHECK(parse_error("fn main(): i32 { let x: i32 = \"hi\"; return 0; }") == "string literals require std.string");
   CHECK(parse_error("let g: i32 = 1.5; fn main(): i32 { return 0; }") == "float is not supported yet");
   // A `1` followed by a dot is a `1` and a dot, since a dot is not part of a number.
   CHECK(parse_error("fn main(): i32 { let x: i32 = 1.; return 0; }") == "expected ';'");

@@ -22,7 +22,7 @@ Source-level contract of the erax language: grammar, types, and semantics. The d
 
 ## Grammar
 
-Terminals in quotes; `[]` optional, `{}` repeated, `|` choice. `INT`/`CHAR` are integer/character literals as lexed (see the tokenizer spec); an `INT` may carry a type suffix, which is part of the token (`5i64`, `0xFFu8`) — see `types.md#literals`.
+Terminals in quotes; `[]` optional, `{}` repeated, `|` choice. `INT`, `CHAR`, and `STRING` are integer, character, and string literals as lexed (see the tokenizer spec); an `INT` may carry a type suffix, which is part of the token (`5i64`, `0xFFu8`) — see `types.md#literals`.
 
 ```
 program        = { global | function | structure | namespace } ;
@@ -97,7 +97,7 @@ call           = qualified-name "(" [ expr { "," expr } ] ")" ;
 primitive-call = "primitive" IDENT "(" [ expr { "," expr } ] ")" ;
 qualified-name = IDENT { "." IDENT } ;
 allocation     = "alloc" "<" type ">" "(" expr ")" ;
-primary        = allocation | INT | CHAR | "true" | "false" | "null" | qualified-name | primitive-call | object-literal | "(" expr ")" ;
+primary        = allocation | INT | CHAR | STRING | "true" | "false" | "null" | qualified-name | primitive-call | object-literal | "(" expr ")" ;
 
 lvalue         = "*" expr | postfix ;
 const-expr     = expr limited to literals, the unary `-`/`!`/`~`, arithmetic and
@@ -119,7 +119,7 @@ Notes:
 - A `primitive-call` is answered by the built-in primitive catalog, never by a declaration: `primitive` + `IDENT` + `(` reaches exactly that primitive and nothing else (`docs/primitive.md#calling`). Primitives live in their own namespace — a plain `call` never resolves to one, and a function may share a primitive's name.
 - A `cast`'s right side is a `type`, not an expression: `x as i8 + 1` is `(x as i8) + 1` and `x + 1 as i32` is `x + (1 as i32)` (`expressions.md#precedence`). The conversion rules — which types may cast to which, and what wrapping means — are `types.md#casts`.
 - `*` and `&` are prefix in unary position and binary (`*` multiply, `&` bitwise-and) wherever a binary operator is expected — the position decides. `*p` reads the cell `p` points at, `&x` is the address of the variable or global `x` (`expressions.md#typing-rules`); `*` in front of a `=`/compound-assign makes a **store through a pointer** — `*p = v;` — a statement form, see `statements.md#statements`.
-- `ptr T` is the pointer-to-`T` type (`types.md#types`): `ptr i32`, `ptr ptr i32`. `ptr` is **contextual**, like `string` — it is a type only in type position and remains an ordinary identifier everywhere else (`#reserved-words`). A pointer is one cell wide whatever it points at (`JIR.md#types`).
+- `ptr T` is the pointer-to-`T` type (`types.md#types`): `ptr i32`, `ptr ptr i32`. `ptr` is **contextual** — it is a type only in type position and remains an ordinary identifier everywhere else (`#reserved-words`). A pointer is one cell wide whatever it points at (`JIR.md#types`).
 - A call to a **template** (`statements.md#templates`) deduces its type arguments from the argument types; v1 has **no explicit instantiation syntax** — `abs<u8>(x)` is not written, because `::` is not a token and `<`/`>` compose at parse, so free-function type arguments remain deduction-only. A `type-param` binds its name as a `type-variable` for the declaration's signature and body only.
 
 ## Namespaces
@@ -201,7 +201,7 @@ Every keyword is reserved: it cannot be used as an `IDENT` (declaration or refer
 
 Type names, `true`, and `false` are reserved because they carry their meaning in type and literal position.
 
-`string`, `std`, `text`, … are ordinary identifiers, not reserved words: they may be used as names. `ptr` is the same kind of contextual name: it is a type in type position (`#grammar`) and an ordinary identifier elsewhere, so a variable may be called `ptr`. Writing `string` in *type* position is a forward-looking error (see `types.md#literals`). `std` is claimed at the root by the auto-imported library (`docs/std.md`), so a program declaring its own top-level `std` is a duplicate-declaration error. The capability names `Ordered`, `Negatable`, `Arithmetic`, `Clonable`, `Movable` are ordinary identifiers too — they mean something only after `extends`/`&` in a `type-param`, and a template's type-parameter names are ordinary outside the declaration (`statements.md#templates`). One name carries its meaning without being reserved: `main` is the entry point — a rule on the name, see `statements.md#functions`. It may not be given a declaration of its own, and it does not stop the tokenizer.
+`string`, `std`, `text`, … are ordinary identifiers, not reserved words: they may be used as names. `ptr` is the same kind of contextual name: it is a type in type position (`#grammar`) and an ordinary identifier elsewhere, so a variable may be called `ptr`. The standard library type for strings is `std.string` (see `types.md#literals`). `std` is claimed at the root by the auto-imported library (`docs/std.md`), so a program declaring its own top-level `std` is a duplicate-declaration error. The capability names `Ordered`, `Negatable`, `Arithmetic`, `Clonable`, `Movable` are ordinary identifiers too — they mean something only after `extends`/`&` in a `type-param`, and a template's type-parameter names are ordinary outside the declaration (`statements.md#templates`). One name carries its meaning without being reserved: `main` is the entry point — a rule on the name, see `statements.md#functions`. It may not be given a declaration of its own, and it does not stop the tokenizer.
 
 ## Semantics
 

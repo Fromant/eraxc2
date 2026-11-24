@@ -48,6 +48,7 @@ private:
     result cast_expression(std::optional<SemType> expected);
     result unary_expression(std::optional<SemType> expected);
     result primary(std::optional<SemType> expected, bool negated = false);
+    result string_literal(const Token& token);
     result postfix(Value value);
     result dereference(const Value& value, SourceLocation location);
     result object_literal(std::optional<SemType> expected);

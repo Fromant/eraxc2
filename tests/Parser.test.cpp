@@ -681,7 +681,7 @@ TEST_CASE("reserved words are not names") {
 TEST_CASE("float and string are not types yet") {
   CHECK(parse_error("fn main(): i32 { let x: i32 = 1.5; return x; }") == "float is not supported yet");
   CHECK(parse_error("fn main(): i32 { let x: string = \"hi\"; return 0; }") != "");
-  CHECK(parse_error("fn main(): i32 { let x: i32 = \"hi\"; return x; }") == "string is not supported yet");
+  CHECK(parse_error("fn main(): i32 { let x: i32 = \"hi\"; return x; }") == "string literals require std.string");
 }
 
 TEST_CASE("the tokenizer's contract still holds at the parser's edge") {

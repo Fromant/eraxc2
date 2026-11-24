@@ -32,7 +32,7 @@ cmake --build build-cov --target coverage             # builds, runs the suite, 
 - `stdlib/std.erx` — the standard library, pure erax, embedded in the driver at configure time and auto-imported before every program (`--tokenize` excepted). Pinned by `tests/Std.test.cpp`.
 - `src/interp/Interpreter.{hpp,cpp}` — the reference executor: one cell array, a frame pointer walking it, `fold` arithmetic, and the machine's own limits. Pinned by `tests/Interpreter.test.cpp`, which also runs `examples/` as the conformance corpus. Its results are what a backend is compared to.
 - `TODO.md` — **roadmap + `.jir` serialization/versioning, and all "not in v1" / future-work content.** Future work must live here, never in the spec docs.
-- `examples/helloworld.erx` — aspirational (uses `string`/`std.print`, which are not v1).
+- `examples/helloworld.erx` — runnable example of string literals and `std.print`.
 
 ## Doc conventions (hard rules from the session)
 

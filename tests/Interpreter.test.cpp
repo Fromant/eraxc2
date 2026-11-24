@@ -148,17 +148,6 @@ private:
     return outcome->code;
   }
 
-  /// Whether a file lowers at all, for an example that is expected not to: the
-  /// interpreter is never asked about a program that did not make it into IR.
-  bool lowers(std::string_view name) {
-    const std::string path = example_path(name);
-    auto tokens = Tokenizer {}.tokenize(read_file(path), path);
-    if (!tokens) {
-      return false;
-    }
-    return ProgramParser {*tokens}.parse().has_value();
-  }
-
 }  // namespace
 
 TEST_CASE("the entrypoint's return is the program's exit code") {
@@ -553,9 +542,6 @@ TEST_CASE("the shipped examples run") {
   const auto globals = run_example("globals.erx");
   REQUIRE(globals.has_value());
   CHECK(globals->globals == std::vector<Cell> {2});
-  // `helloworld.erx` is aspirational: `string` is not in v1, so it never
-  // lowers and the interpreter is never asked about it.
-  CHECK_FALSE(lowers("helloworld.erx"));
 }
 
 TEST_CASE("a global initializer can branch toward its own value") {

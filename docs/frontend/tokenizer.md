@@ -265,9 +265,9 @@ $ echo '0b12' | ./build/eraxc
 
 fn main(): i32 {
 
-    let text: string = "Hello, \"world\"!\nOn a new line";
+    let text: std.string = "Hello, \"world\"!\nOn a new line";
 
-    std.print(text);
+    std.print(ref text);
 
     return 0;
 }
@@ -286,22 +286,25 @@ identifier 'i32' examples/helloworld.erx:4:12
 identifier 'let' examples/helloworld.erx:6:5
 identifier 'text' examples/helloworld.erx:6:9
 ':' ':' examples/helloworld.erx:6:13
-identifier 'string' examples/helloworld.erx:6:15
-operator '=' examples/helloworld.erx:6:22
-string 'Hello, \"world\"!\nOn a new line' examples/helloworld.erx:6:24
-';' ';' examples/helloworld.erx:6:58
+identifier 'std' examples/helloworld.erx:6:15
+'.' '.' examples/helloworld.erx:6:18
+identifier 'string' examples/helloworld.erx:6:19
+operator '=' examples/helloworld.erx:6:26
+string 'Hello, \"world\"!\nOn a new line' examples/helloworld.erx:6:28
+';' ';' examples/helloworld.erx:6:62
 identifier 'std' examples/helloworld.erx:8:5
 '.' '.' examples/helloworld.erx:8:8
 identifier 'print' examples/helloworld.erx:8:9
 '(' '(' examples/helloworld.erx:8:14
-identifier 'text' examples/helloworld.erx:8:15
-')' ')' examples/helloworld.erx:8:19
-';' ';' examples/helloworld.erx:8:20
+identifier 'ref' examples/helloworld.erx:8:15
+identifier 'text' examples/helloworld.erx:8:19
+')' ')' examples/helloworld.erx:8:23
+';' ';' examples/helloworld.erx:8:24
 identifier 'return' examples/helloworld.erx:10:5
 number '0' examples/helloworld.erx:10:12
 ';' ';' examples/helloworld.erx:10:13
 '}' '}' examples/helloworld.erx:11:1
-end of file '' examples/helloworld.erx:11:2
+end of file '' examples/helloworld.erx:12:1
 ```
 
 Note the string token on line 6: the quotes are gone, `\"` and `\n` are kept raw, and the position points at the opening quote.

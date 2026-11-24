@@ -92,6 +92,35 @@ an executor's pointer encoding (`primitive.md#offset`).
 
 The owning collections use `alloc<T>(count)` and typed freeing. Their capacities count elements.
 
+### `std.string`
+
+`std.string` owns a `std.vector<char>`. Its length, positions, and capacity
+count bytes, including embedded NUL. It accepts arbitrary bytes and does not
+validate UTF-8. Each string literal creates an independent owner.
+
+| Method | Behavior |
+| ------ | -------- |
+| `new()` | Creates an empty string |
+| `length()`, `empty()` | Return the byte count and whether it is zero |
+| `at(index: u64)` | Returns the byte at the zero-based index as `char` |
+| `set(index: u64, value: char)` | Replaces the byte at the index |
+| `push(value: char)`, `pop()` | Append a byte or remove and return the last byte |
+| `clear()`, `reserve(capacity: u64)` | Remove all bytes or ensure at least the requested capacity |
+| `append(other: ref string)` | Appends the bytes of another string. Self-append doubles the original contents |
+| `concat(other: ref string)` | Returns a new string containing both sequences in order |
+| `equals(other: ref string)` | Tests byte-for-byte equality |
+| `slice(start: u64, end: u64)` | Copies the half-open byte range `[start, end)` into a new string |
+| `clone()` | Returns a copy with independent storage |
+| `write()` | Writes every byte to stdout |
+
+`set`, `push`, `pop`, `clear`, `reserve` and `append` require mutable
+access. Out-of-bounds indexing, an invalid slice range, and popping an empty
+string fail `std.assert` with code 134. String copies use the generated
+structural clone of the backing vector.
+
+`std.print("text")`, `std.print(ref text)`, and `text.write()` write the
+bytes without adding a newline. Use `std.print()` to add a newline.
+
 ## Result
 
 `std.Result<T, E>.ok(value)` and `std.Result<T, E>.err(error)` create an owned

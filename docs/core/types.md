@@ -34,7 +34,7 @@ on its own or initialize a safe reference.
 - `-` on a literal is read with the sign in view, so the negative half of a signed type is spelled that way: `-128i8` is `i8min` and `-200` does not fit an `i8`.
 - `-` is **not defined on an unsigned type**, which has no negative side: `let x: u8 = -1;` is a compile error. `~` is the same on both signednesses and stays.
 - Float literals (`3.14`, `1e10`, `1.5e-3`) lex as `Number` but have no type in v1; using one is a compile error (`float is not supported yet`).
-- Character literals are `char`. String literals lex okay but have no type in v1: using one, or writing `string` where a type is expected, is a compile error (`string is not supported yet`). `string` itself is not a reserved word — see the keyword list in `language.md#reserved-words`.
+- Character literals are `char`. Double-quoted literals have type `std.string` from the root standard library. Each evaluation produces an owned string and requires runtime allocation, so a string literal is not a constant expression. The bare name `string` is not an alias for `std.string`.
 - `true` / `false` are `bool` constants.
 
 ## No implicit conversions

@@ -188,6 +188,10 @@ namespace erax::frontend {
       std::uint64_t value = 0;
       for (std::size_t index = 2; index < raw.size(); ++index) {
         const char c = raw[index];
+        if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F'))) {
+          return std::unexpected("expected " + std::to_string(digits) + " hexadecimal digits after \\" +
+                                 std::string {escape});
+        }
         value = value * 16 +
             (c <= '9' ? static_cast<std::uint64_t>(c - '0') : static_cast<std::uint64_t>(c | 0x20) - 'a' + 10);
       }
@@ -1203,6 +1207,84 @@ namespace erax::frontend {
     return result;
   }
 
+  ExpressionParser::result ExpressionParser::string_literal(const Token& token) {
+    auto* record = context().find_root_record("std.string");
+    if (!record) {
+      return std::unexpected(at("string literals require std.string", token.location));
+    }
+    if (const_mode_) {
+      return std::unexpected(at("a string literal requires runtime allocation", token.location));
+    }
+    const SemType type = SemType::record_type(record);
+    const SemType receiver = SemType::reference(type, true);
+    const auto method = [&](const char* name, const std::vector<SemType>& params,
+                            SemType return_type) -> const FunctionInfo* {
+      if (auto group = record->methods.find(name); group != record->methods.end()) {
+        for (const auto& entry : group->second) {
+          if (entry.is_public && entry.function.params == params && entry.function.return_type == return_type) {
+            return &entry.function;
+          }
+        }
+      }
+      return nullptr;
+    };
+    const auto* factory = method("new", {}, type);
+    const auto* reserve = method("reserve", {receiver, SemType::U64}, SemType::Void);
+    const auto* push = method("push", {receiver, SemType::Char}, SemType::Void);
+    if (!factory || !reserve || !push) {
+      return std::unexpected(at("string literals require std.string.new, reserve and push", token.location));
+    }
+
+    std::vector<std::uint64_t> bytes;
+    std::string_view raw = token.text;
+    while (!raw.empty()) {
+      if (raw.front() != '\\') {
+        bytes.push_back(static_cast<unsigned char>(raw.front()));
+        raw.remove_prefix(1);
+        continue;
+      }
+      const char escape = raw[1];  // The tokenizer checks that the escape has at least one hex digit.
+      const std::size_t size = escape == 'x' ? 4 : escape == 'u' ? 6 : 2;
+      auto code = parse_char(raw.substr(0, size));
+      if (!code) {
+        return std::unexpected(at(code.error(), token.location));
+      }
+      raw.remove_prefix(size);
+      if (escape != 'u' || *code < 0x80) {
+        bytes.push_back(*code);
+      } else if (*code < 0x800) {
+        bytes.push_back(0xc0 | (*code >> 6));
+        bytes.push_back(0x80 | (*code & 0x3f));
+      } else {
+        if (*code >= 0xd800 && *code <= 0xdfff) {
+          return std::unexpected(at("a Unicode escape must name a non-surrogate code point", token.location));
+        }
+        bytes.push_back(0xe0 | (*code >> 12));
+        bytes.push_back(0x80 | ((*code >> 6) & 0x3f));
+        bytes.push_back(0x80 | (*code & 0x3f));
+      }
+    }
+
+    auto& builder = context().builder;
+    const auto slot = Operand::vreg(lower(type), builder.alloc(lower(type)));
+    builder.emit(Op::Call, {slot, Operand::function(lower(type), factory->id)});
+    Value value {type, slot};
+    context().track_temporary(value);
+    if (!bytes.empty()) {
+      const auto address = Operand::vreg(lower(receiver), builder.alloc(lower(receiver)));
+      builder.emit(Op::Addr, {address, slot});
+      builder.emit(Op::Call,
+                   {Operand::empty(), Operand::function(Type::Void, reserve->id), address,
+                    Operand::instant(Type::U64, bytes.size())});
+      for (auto byte : bytes) {
+        builder.emit(Op::Call,
+                     {Operand::empty(), Operand::function(Type::Void, push->id), address,
+                      Operand::instant(lower(SemType::Char), byte)});
+      }
+    }
+    return value;
+  }
+
   ExpressionParser::result ExpressionParser::primary(std::optional<SemType> expected, bool negated) {
     TokenCursor& cursor = context().cursor;
     const SourceLocation location = cursor.location();
@@ -1226,7 +1308,7 @@ namespace erax::frontend {
         const ConstInt constant = ConstInt::of(static_cast<std::int64_t>(*code), Type::U8);
         return Value {SemType::Char, Operand::instant(Type::U8, constant.bits), constant};
       }
-      case TokenType::String: return std::unexpected(at("string is not supported yet", location));
+      case TokenType::String: cursor.take(); return string_literal(token);
       case TokenType::Identifier: break;
       case TokenType::LParen: {
         cursor.take();

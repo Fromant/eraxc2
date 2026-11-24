@@ -3,9 +3,9 @@
 
 fn main(): i32 {
 
-    let text: string = "Hello, \"world\"!\nOn a new line";
+    let text: std.string = "Hello, \"world\"!\nOn a new line";
 
-    std.print(text);
+    std.print(ref text);
 
     return 0;
 }

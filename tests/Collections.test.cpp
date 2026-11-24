@@ -44,6 +44,64 @@ namespace {
   )";
 }
 
+TEST_CASE("the shipped hello world example prints a string through std") {
+  std::ifstream input {std::string(ERAX_EXAMPLES_DIR) + "/helloworld.erx", std::ios::binary};
+  REQUIRE(input.good());
+  std::ostringstream source;
+  source << input.rdbuf();
+  CHECK(run_collections(source.str()).output == "Hello, \"world\"!\nOn a new line");
+}
+
+TEST_CASE("std strings own mutable byte sequences with independent copies") {
+  auto result = run_collections(R"erx(
+    fn main(): i32 {
+      let mut text = "ab";
+      const copy = text.clone();
+      text.set(0, 'A');
+      text.append(ref text);
+      std.assert(text.length() == 4 && text.pop() == 'b');
+      std.assert(text.at(2) == 'A' && copy.at(0) == 'a');
+      const part = text.slice(1, 3);
+      const joined = part.concat(ref copy);
+      let mut expected = std.string.new();
+      expected.reserve(4);
+      expected.append(ref part);
+      expected.append(ref copy);
+      std.assert(joined.equals(ref expected) && !joined.equals(ref copy));
+      text.clear();
+      std.assert(text.empty() && "".empty() && text.slice(0, 0).empty());
+      std.print(ref joined);
+      std.print("!");
+      return 0;
+    }
+  )erx");
+  CHECK(result.code == 0);
+  CHECK(result.output == "bAab!");
+}
+
+TEST_CASE("string literals preserve zero bytes and encode Unicode escapes as UTF-8") {
+  auto result = run_collections(R"erx(
+    fn main(): i32 {
+      const text = "A\0\xFF\u00E9\u20AC";
+      std.assert(text.length() == 8);
+      text.write();
+      return 0;
+    }
+  )erx");
+  CHECK(result.code == 0);
+  CHECK(result.output == std::string("A\0\xff\xc3\xa9\xe2\x82\xac", 8));
+
+  auto malformed = parse_collections(R"erx(fn main(): i32 { std.print("\x1!"); return 0; })erx");
+  REQUIRE_FALSE(malformed.has_value());
+  CHECK(malformed.error().message == "expected 2 hexadecimal digits after \\x");
+}
+
+TEST_CASE("std string bounds failures use the assertion abort contract") {
+  CHECK(run_collections(R"(fn main(): i32 { "a".at(1); return 0; })").code == 134);
+  CHECK(run_collections(R"(fn main(): i32 { let mut s = ""; s.set(0, 'a'); return 0; })").code == 134);
+  CHECK(run_collections(R"(fn main(): i32 { "a".slice(1, 0); return 0; })").code == 134);
+}
+
 TEST_CASE("the shipped RAII example is a collection conformance program") {
   std::ifstream input {std::string(ERAX_EXAMPLES_DIR) + "/raii.erx", std::ios::binary};
   REQUIRE(input.good());
