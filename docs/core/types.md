@@ -18,6 +18,11 @@ Mapping to the IR: `bool` lowers to `i8` and `char` to `u8` (a `0–255` byte, s
 
 ## Literals
 
+`null` denotes the zero raw pointer. Its type comes from an explicit pointer
+context such as an annotation, assignment, a typed parameter, a return type, or
+the left operand of `p == null` or `p != null`. It cannot infer a pointer type
+on its own or initialize a safe reference.
+
 - Integer literals (decimal, `0x`/`0X`, `0b`/`0B`, `0o`/`0O`, `_` separators) have an integer type.
 - A literal may carry a **type suffix** naming that type: `5i64`, `0xFFu8`, `1_000i32`. The suffix set is the integer type names — `i8` `u8` `i16` `u16` `i32` `u32` `i64` `u64` — and nothing else; `char` and `bool` are not suffixes (`docs/frontend/tokenizer.md#numbers`).
 - A **lone** literal with no suffix takes the type of the position it fills: the declared type of `let`, the lvalue type of `=`, a parameter type in a call, the return type of a function. Its value must fit that type, so `let x: i8 = 127;` is fine and `let x: i8 = 128;` is not. A call whose name is an overload set has no single parameter to hand a lone literal before resolution: such an argument is an `i32` unless suffixed, and the overload set must match it (`expressions.md#typing-rules`).

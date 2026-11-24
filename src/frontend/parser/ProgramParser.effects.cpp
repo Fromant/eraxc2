@@ -34,8 +34,10 @@ namespace erax::frontend {
         if (index + 1 >= tokens.size()) {
           break;
         }
+        auto scan = context_.cursor;
+        scan.seek(index);
         if ((token.text == "free" && tokens[index + 1].type == TokenType::LParen) ||
-            (token.text == "move" && tokens[index + 1].text == "*")) {
+            scan.moves_from_indirect_storage()) {
           effect.direct = true;
         }
         if (token.text == "*" && index + 2 < tokens.size() && tokens[index + 2].text == "=") {

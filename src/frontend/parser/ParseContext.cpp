@@ -37,6 +37,7 @@ namespace erax::frontend {
         {"break", Keyword::Break},
         {"continue", Keyword::Continue},
         {"return", Keyword::Return},
+        {"null", Keyword::Null},
         {"true", Keyword::True},
         {"false", Keyword::False},
         {"i8", Keyword::I8},
@@ -308,7 +309,42 @@ namespace erax::frontend {
     } else if (index < tokens_->size()) {
       ++index;
     }
+    while (index < tokens_->size()) {
+      if ((*tokens_)[index].type == TokenType::LBracket) {
+        std::size_t depth = 1;
+        for (++index; index < tokens_->size() && depth; ++index) {
+          if ((*tokens_)[index].type == TokenType::LBracket) {
+            ++depth;
+          }
+          if ((*tokens_)[index].type == TokenType::RBracket) {
+            --depth;
+          }
+        }
+      } else if (index + 1 < tokens_->size() && (*tokens_)[index].type == TokenType::Dot &&
+                 (*tokens_)[index + 1].type == TokenType::Identifier) {
+        index += 2;
+        if (index < tokens_->size() && (*tokens_)[index].type == TokenType::LParen) {
+          index = past_group(index);
+        }
+      } else {
+        break;
+      }
+    }
     return index;
+  }
+
+  bool TokenCursor::moves_from_indirect_storage() const noexcept {
+    if (!at_keyword(Keyword::Move)) {
+      return false;
+    }
+    const auto end = past_operand(index_ + 1);
+    for (auto index = index_ + 1; index < end; ++index) {
+      const auto& token = (*tokens_)[index];
+      if (token.type == TokenType::LBracket || (token.type == TokenType::Operator && token.text == "*")) {
+        return true;
+      }
+    }
+    return false;
   }
 
   bool TokenCursor::operator_follows(std::span<const std::string_view> operators) const {

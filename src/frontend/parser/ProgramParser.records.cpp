@@ -273,7 +273,7 @@ namespace erax::frontend {
           if (scan.at(TokenType::RBrace)) {
             --depth;
           }
-          if (scan.at_keyword(Keyword::Move) && scan.peek().type == TokenType::Operator && scan.peek().text == "*") {
+          if (scan.moves_from_indirect_storage()) {
             method.invalidates_references = true;
           }
           if (scan.at_keyword(Keyword::Ref) && scan.peek().text == "mut" && scan.peek(2).text == "this") {

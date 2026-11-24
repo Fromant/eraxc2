@@ -346,7 +346,7 @@ namespace erax::frontend {
     std::optional<SemType> first_expected;
     if (thread_expected && expected && is_integer(*expected)) {
       first_expected = expected;  // Thread only integer types for arithmetic/bitwise/shift
-    } else if (lone && (!thread_expected || (expected && expected->is_record()))) {
+    } else if (lone && (!thread_expected || (expected && (expected->is_record() || expected->is_pointer())))) {
       first_expected = expected;  // Thread for comparisons/logical only when lone
     } else {
       first_expected = std::nullopt;
@@ -729,25 +729,7 @@ namespace erax::frontend {
       if (!operand) {
         return operand;
       }
-      const Value value = *operand;
-      if (!value.type.is_pointer() && !value.type.is_reference()) {
-        return std::unexpected(at("'*' needs a pointer, but got " + std::string {to_string(value.type)}, location));
-      }
-      SemType pointee = *value.type.pointee;
-      if (value.type.is_reference() && !value.type.mutable_reference && pointee.is_reference() &&
-          pointee.mutable_reference) {
-        pointee = SemType::reference(*pointee.pointee, false);
-      }
-      const Type lowered = lower(pointee);
-      const std::uint64_t destination = context().builder.alloc(lowered);
-      context().builder.emit(Op::Load, {Operand::vreg(lowered, destination), value.as_operand()});
-      Value result {pointee, Operand::vreg(lowered, destination), std::nullopt, true};
-      result.place_address = value.as_operand();
-      result.object_mutable = value.type.is_pointer() || value.type.mutable_reference;
-      result.raw_storage = value.type.is_pointer();
-      result.receiver_projection = value.receiver_projection && !pointee.is_reference();
-      result.origins = value.origins;
-      return result;
+      return dereference(*operand, location);
     }
 
     std::string_view op;
@@ -1200,6 +1182,27 @@ namespace erax::frontend {
     return result;
   }
 
+  ExpressionParser::result ExpressionParser::dereference(const Value& value, SourceLocation location) {
+    if (!value.type.is_pointer() && !value.type.is_reference()) {
+      return std::unexpected(at("'*' needs a pointer, but got " + std::string {to_string(value.type)}, location));
+    }
+    SemType pointee = *value.type.pointee;
+    if (value.type.is_reference() && !value.type.mutable_reference && pointee.is_reference() &&
+        pointee.mutable_reference) {
+      pointee = SemType::reference(*pointee.pointee, false);
+    }
+    const Type lowered = lower(pointee);
+    const std::uint64_t destination = context().builder.alloc(lowered);
+    context().builder.emit(Op::Load, {Operand::vreg(lowered, destination), value.as_operand()});
+    Value result {pointee, Operand::vreg(lowered, destination), std::nullopt, true};
+    result.place_address = value.as_operand();
+    result.object_mutable = value.type.is_pointer() || value.type.mutable_reference;
+    result.raw_storage = value.type.is_pointer();
+    result.receiver_projection = value.receiver_projection && !pointee.is_reference();
+    result.origins = value.origins;
+    return result;
+  }
+
   ExpressionParser::result ExpressionParser::primary(std::optional<SemType> expected, bool negated) {
     TokenCursor& cursor = context().cursor;
     const SourceLocation location = cursor.location();
@@ -1242,6 +1245,14 @@ namespace erax::frontend {
     // An identifier is a name: a primitive call, a call, a local, or a global.
     const std::string name = token.text;
     const Keyword keyword = keyword_of(name);
+    if (keyword == Keyword::Null) {
+      cursor.take();
+      if (!expected || !expected->is_pointer()) {
+        return std::unexpected(at("null requires a contextual raw pointer type", location));
+      }
+      const auto type = lower(*expected);
+      return Value {*expected, Operand::instant(type, 0), ConstInt::of(0, type)};
+    }
     if (keyword == Keyword::True || keyword == Keyword::False) {
       cursor.take();
       // A `bool` is a value of its own type: the expected type does not reach it,

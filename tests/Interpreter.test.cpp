@@ -992,3 +992,21 @@ TEST_CASE("typed allocation counts elements and rejects an oversized count") {
   REQUIRE_FALSE(result.has_value());
   CHECK(std::get<Trapped>(result.error()).trap == Trap::OutOfMemory);
 }
+
+TEST_CASE("raw indexing works as a read, store, and move with contextual null") {
+  CHECK(code_of(R"(
+    fn main(): i32 {
+      const empty: ptr i32 = null;
+      if (empty != null) { return 0; }
+      const values = alloc<i32>(2);
+      values[1] = 40;
+      values[1] += 2;
+      const answer = move values[1];
+      free(values);
+      return answer;
+    }
+  )") == 42);
+  auto result = execute("fn main(): i32 { const p = alloc<i32>(1); p[1] = 42; return 0; }");
+  REQUIRE_FALSE(result.has_value());
+  CHECK(std::get<Trapped>(result.error()).trap == Trap::InvalidPointer);
+}

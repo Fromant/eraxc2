@@ -154,20 +154,20 @@ namespace std {
         }
 
         public fn get(): ref mut? T {
-            assert(this.storage != 0 as ptr T);
+            assert(this.storage != null);
             return ref mut? *this.storage;
         }
 
         public mut fn release(): T {
-            assert(this.storage != 0 as ptr T);
+            assert(this.storage != null);
             const value: T = move *this.storage;
             free(this.storage);
-            this.storage = 0 as ptr T;
+            this.storage = null;
             return move value;
         }
 
         destructor {
-            if (this.storage != 0 as ptr T) {
+            if (this.storage != null) {
                 const value: T = move *this.storage;
                 free(this.storage);
             }
@@ -187,38 +187,38 @@ namespace std {
         public static fn ok(value: T): Result<T, E> {
             const slot = alloc<T>(1);
             *slot = move value;
-            return Result<T, E>.new(true, slot, 0 as ptr E);
+            return Result<T, E>.new(true, slot, null);
         }
 
         public static fn err(error: E): Result<T, E> {
             const slot = alloc<E>(1);
             *slot = move error;
-            return Result<T, E>.new(false, 0 as ptr T, slot);
+            return Result<T, E>.new(false, null, slot);
         }
 
         public fn is_ok(): bool { return this.success; }
 
         public mut fn take_value(): T {
-            assert(this.value_slot != 0 as ptr T);
+            assert(this.value_slot != null);
             const value = move *this.value_slot;
             free(this.value_slot);
-            this.value_slot = 0 as ptr T;
+            this.value_slot = null;
             return move value;
         }
 
         public mut fn take_error(): E {
-            assert(this.error_slot != 0 as ptr E);
+            assert(this.error_slot != null);
             const error = move *this.error_slot;
             free(this.error_slot);
-            this.error_slot = 0 as ptr E;
+            this.error_slot = null;
             return move error;
         }
 
         destructor {
-            if (this.value_slot != 0 as ptr T) {
+            if (this.value_slot != null) {
                 this.take_value();
             }
-            if (this.error_slot != 0 as ptr E) {
+            if (this.error_slot != null) {
                 this.take_error();
             }
         }
@@ -232,7 +232,7 @@ namespace std {
         capacity_count: u64;
 
         public new(): vector<T> {
-            return { storage: 0 as ptr T, count: 0u64, capacity_count: 0u64 };
+            return { storage: null, count: 0u64, capacity_count: 0u64 };
         }
 
         public fn length(): u64 {
@@ -253,9 +253,7 @@ namespace std {
             }
             const replacement = alloc<T>(capacity);
             for (let i: u64 = 0; i < this.count; i += 1) {
-                const source = this.storage + i;
-                const destination = replacement + i;
-                *destination = move *source;
+                replacement[i] = move this.storage[i];
             }
             free(this.storage);
             this.storage = replacement;
@@ -273,29 +271,25 @@ namespace std {
                 }
                 this.reserve(capacity);
             }
-            const slot = this.storage + this.count;
-            *slot = move value;
+            this.storage[this.count] = move value;
             this.count += 1;
         }
 
         public fn at(index: u64): ref mut? T {
             assert(index < this.count);
-            const slot = this.storage + index;
-            return ref mut? *slot;
+            return ref mut? this.storage[index];
         }
 
         public mut fn pop(): T {
             assert(this.count != 0);
             this.count -= 1;
-            const slot = this.storage + this.count;
-            return move *slot;
+            return move this.storage[this.count];
         }
 
         public mut fn clear() {
             while (this.count != 0) {
                 this.count -= 1;
-                const slot = this.storage + this.count;
-                const value: T = move *slot;
+                const value: T = move this.storage[this.count];
             }
         }
 
@@ -303,8 +297,7 @@ namespace std {
             let mut result = vector<T>.new();
             result.reserve(this.count);
             for (let i: u64 = 0; i < this.count; i += 1) {
-                const source = this.storage + i;
-                result.push(*source);
+                result.push(this.storage[i]);
             }
             return move result;
         }

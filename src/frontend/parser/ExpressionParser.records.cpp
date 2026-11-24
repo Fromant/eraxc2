@@ -214,7 +214,35 @@ namespace erax::frontend {
   ExpressionParser::result ExpressionParser::postfix(Value value) {
     auto& ctx = context();
     auto& cursor = ctx.cursor;
-    while (cursor.at(TokenType::Dot) && cursor.peek().type == TokenType::Identifier) {
+    while (cursor.at(TokenType::LBracket) ||
+           (cursor.at(TokenType::Dot) && cursor.peek().type == TokenType::Identifier)) {
+      if (cursor.at(TokenType::LBracket)) {
+        const auto location = cursor.take().location;
+        if (!value.type.is_pointer()) {
+          return std::unexpected(record_error("indexing requires a raw pointer", location));
+        }
+        auto base = ctx.copy_value(value, location, true);
+        if (!base) {
+          return base;
+        }
+        auto index = expression(SemType::U64);
+        if (!index) {
+          return index;
+        }
+        if (auto close = expect(cursor, TokenType::RBracket); !close) {
+          return std::unexpected(close.error());
+        }
+        auto address = combine("+", *base, *index, location);
+        if (!address) {
+          return address;
+        }
+        auto cell = dereference(*address, location);
+        if (!cell) {
+          return cell;
+        }
+        value = *cell;
+        continue;
+      }
       const auto location = cursor.take().location;
       while (value.type.is_reference()) {
         if (auto valid = ctx.validate_origins(value, location); !valid) {

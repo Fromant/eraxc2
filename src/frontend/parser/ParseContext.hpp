@@ -42,6 +42,7 @@ namespace erax::frontend {
     Break,
     Continue,
     Return,
+    Null,
     True,
     False,
     I8,
@@ -224,6 +225,7 @@ public:
 
     /// The index just past the operand starting at \p index: prefix operators,
     /// then a `( … )` group, a name, or a call's arguments after that name.
+    bool moves_from_indirect_storage() const noexcept;
     std::size_t past_operand(std::size_t index) const noexcept;
 
     /// The index just past the `( … )` group that starts at \p index.

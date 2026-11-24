@@ -110,11 +110,7 @@ namespace erax::frontend {
     /// qualified target (`a.b.g = …`) is stepped over first, segment by segment.
     bool at_assignment(const TokenCursor& cursor) noexcept {
       const std::vector<Token>& tokens = cursor.tokens();
-      std::size_t index = cursor.index() + 1;
-      while (index + 1 < tokens.size() && tokens[index].type == TokenType::Dot &&
-             tokens[index + 1].type == TokenType::Identifier) {
-        index += 2;
-      }
+      const auto index = cursor.past_operand(cursor.index());
       if (index >= tokens.size() || tokens[index].type != TokenType::Operator) {
         return false;
       }
@@ -1076,7 +1072,7 @@ namespace erax::frontend {
       previous.local_id = target.local->flow_id;
       previous.live_flag = target.local->live_flag;
     }
-    if (target.type.is_record()) {
+    if (target.type.is_record() && !(target.place && target.place->raw_storage)) {
       if (target.indirect) {
         context_.invalidate_interior(previous);
       } else {
@@ -1319,7 +1315,8 @@ namespace erax::frontend {
       parts.push_back(*segment);
     }
     std::expected<LValue, ParseError> target;
-    if (parts.size() > 1 && context_.find_local(parts.front())) {
+    if (cursor.at(TokenType::LBracket) || cursor.at(TokenType::LParen) ||
+        (parts.size() > 1 && context_.find_local(parts.front()))) {
       cursor = saved_cursor;
       auto place = expressions_.expression(std::nullopt);
       if (!place) {

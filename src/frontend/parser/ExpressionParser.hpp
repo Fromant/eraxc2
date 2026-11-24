@@ -49,6 +49,7 @@ private:
     result unary_expression(std::optional<SemType> expected);
     result primary(std::optional<SemType> expected, bool negated = false);
     result postfix(Value value);
+    result dereference(const Value& value, SourceLocation location);
     result object_literal(std::optional<SemType> expected);
     result record_call(RecordInfo& record, const std::string& name, SourceLocation location,
                        std::optional<Value> receiver = std::nullopt);

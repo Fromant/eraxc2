@@ -91,13 +91,13 @@ multiplicative = cast { ( "*" | "/" | "%" ) cast } ;
 cast           = unary { "as" type } ;
 unary          = ( "*" | "&" | "-" | "!" | "~" | "move" ) unary
                | "ref" [ "mut" [ "?" ] ] unary | postfix ;
-postfix        = ( primary | call | type-call ) { "." IDENT [ "(" [ expr { "," expr } ] ")" ] } ;
+postfix        = ( primary | call | type-call ) { "." IDENT [ "(" [ expr { "," expr } ] ")" ] | "[" expr "]" } ;
 type-call      = named-type "." IDENT "(" [ expr { "," expr } ] ")" ;
 call           = qualified-name "(" [ expr { "," expr } ] ")" ;
 primitive-call = "primitive" IDENT "(" [ expr { "," expr } ] ")" ;
 qualified-name = IDENT { "." IDENT } ;
 allocation     = "alloc" "<" type ">" "(" expr ")" ;
-primary        = allocation | INT | CHAR | "true" | "false" | qualified-name | primitive-call | object-literal | "(" expr ")" ;
+primary        = allocation | INT | CHAR | "true" | "false" | "null" | qualified-name | primitive-call | object-literal | "(" expr ")" ;
 
 lvalue         = "*" expr | postfix ;
 const-expr     = expr limited to literals, the unary `-`/`!`/`~`, arithmetic and
@@ -110,7 +110,7 @@ Notes:
 - Every non-void `primary` `IDENT` is a **read** of a variable or global. An `IDENT` naming a parameter is also a read.
 - A `condition` is the grammar shape of every test (`if`, `while`, `do`'s trailing `while`, and `for`'s cond): an `expr` whose type must be `bool`. Which expressions are `bool` is a typing rule in `expressions.md`, so the grammar only pins the shape here.
 - A call names its callee with a `qualified-name` followed by `(`: the leading segments resolve to a namespace and the last names a function or template inside it. Structures also provide type-qualified factories and receiverless methods, and object expressions provide instance methods. Thus `std.print(x)` calls the `print` in `std`, and a bare `print(x)` calls the `print` visible from the current namespace (`#namespaces`, `expressions.md#names`).
-- `[` `]` lex but are not expression indexing syntax; collections use their declared methods.
+- Bracket indexing applies to raw pointers. Collections expose access through their declared methods.
 - Scalar global initializers must be constant-foldable and contain no calls. Record globals may call factories/functions and initialize in declaration order. Globals cannot contain safe references. See `statements.md#globals`.
 - Every program is compiled with `stdlib/std.erx` parsed first (auto-import), so std's declarations are part of the program and need no import of their own (`docs/std.md`).
 - Object literals are checked additionally: they assemble exactly the factory's own record type and are legal only inside that factory. See `statements.md#structures`.
@@ -195,6 +195,7 @@ Every keyword is reserved: it cannot be used as an `IDENT` (declaration or refer
 | `as` | cast a value to another type |
 | `extends` | a type parameter's capability bound |
 | `true` | `bool` constant |
+| `null` | Contextual raw pointer literal |
 | `false` | `bool` constant |
 | `i8` `u8` `i16` `u16` `i32` `u32` `i64` `u64` `bool` `char` | type names |
 
@@ -228,6 +229,7 @@ The language lowers 1:1 to JIR:
 | `ptr T` | `ptr T` (a pointer is one word, the pointee lowered) |
 | `ref T` / `ref mut T` | a pointer to the lowered target cell; safety is checked before lowering |
 | structure value | one owned heap handle; fields occupy one cell each, nested owned records use handles |
+| `p[index]` | `OFFSET` with `LOAD` or `STORE` |
 | `p + index` | `OFFSET`, checked within the same allocation |
 | `alloc<T>(count)` | `PRIM alloc_cells` with a typed result |
 | structure member | `OFFSET` plus typed `LOAD` / `STORE` |
