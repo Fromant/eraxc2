@@ -227,6 +227,7 @@ The language lowers 1:1 to JIR:
 | `ptr T` | `ptr T` (a pointer is one word, the pointee lowered) |
 | `ref T` / `ref mut T` | a pointer to the lowered target cell; safety is checked before lowering |
 | structure value | one owned heap handle; fields occupy one cell each, nested owned records use handles |
+| `p + index` | `OFFSET`, checked within the same allocation |
 | structure member | `OFFSET` plus typed `LOAD` / `STORE` |
 | factory / method / destructor | ordinary functions and `CALL`; cleanup uses CFG edges |
 | local / param | a vreg at a frame offset |

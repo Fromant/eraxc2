@@ -381,7 +381,8 @@ namespace erax::frontend {
       }
       // Each operand takes the type of the operand before it, so `x + 1` types the
       // `1` as whatever `x` is.
-      auto parsed = (this->*operand)(left.type);
+      const auto right_type = op == "+" && left.type.is_pointer() ? SemType::U64 : left.type;
+      auto parsed = (this->*operand)(right_type);
       if (!parsed) {
         return parsed;
       }
@@ -411,6 +412,20 @@ namespace erax::frontend {
 
     if (left.type == SemType::Void || right.type == SemType::Void) {
       return std::unexpected(at(quoted + " cannot be applied to a call that returns nothing", location));
+    }
+    if (op == "+" && left.type.is_pointer()) {
+      if (right.type != SemType::U64) {
+        return std::unexpected(at("pointer offset requires u64", location));
+      }
+      if (const_mode_) {
+        return std::unexpected(at("pointer offset is not a constant expression", location));
+      }
+      const auto type = lower(left.type);
+      const auto destination = Operand::vreg(type, context().builder.alloc(type));
+      context().builder.emit(Op::Offset, {destination, left.as_operand(), right.as_operand()});
+      Value result {left.type, destination};
+      result.origins = left.origins;
+      return result;
     }
     if (left.type != right.type) {
       return std::unexpected(at(quoted + " needs two operands of the same type, but got " +

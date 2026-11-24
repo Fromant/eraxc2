@@ -229,12 +229,12 @@ namespace std {
     // Every source value occupies one storage cell, including a record handle.
     // Raw relocation transfers each initialized element; it never clones it.
     struct vector<T> {
-        storage: ptr u8;
+        storage: ptr T;
         count: u64;
         capacity_count: u64;
 
         public new(): vector<T> {
-            return { storage: 0 as ptr u8, count: 0u64, capacity_count: 0u64 };
+            return { storage: 0 as ptr T, count: 0u64, capacity_count: 0u64 };
         }
 
         public fn length(): u64 {
@@ -255,15 +255,15 @@ namespace std {
             }
             // Multiplication must not wrap before the allocator sees the size.
             assert(capacity <= 2305843009213693951u64);
-            const replacement = primitive alloc(capacity * 8);
+            const replacement = primitive alloc(capacity * 8) as ptr T;
             let i: u64 = 0;
             while (i < this.count) {
-                const source = primitive offset(this.storage, i) as ptr T;
-                const destination = primitive offset(replacement, i) as ptr T;
+                const source = this.storage + i;
+                const destination = replacement + i;
                 *destination = move *source;
                 i += 1;
             }
-            primitive free(this.storage);
+            primitive free(this.storage as ptr u8);
             this.storage = replacement;
             this.capacity_count = capacity;
         }
@@ -281,28 +281,28 @@ namespace std {
                 }
                 this.reserve(capacity);
             }
-            const slot = primitive offset(this.storage, this.count) as ptr T;
+            const slot = this.storage + this.count;
             *slot = move value;
             this.count += 1;
         }
 
         public fn at(index: u64): ref mut? T {
             assert(index < this.count);
-            const slot = primitive offset(this.storage, index) as ptr T;
+            const slot = this.storage + index;
             return ref mut? *slot;
         }
 
         public mut fn pop(): T {
             assert(this.count != 0);
             this.count -= 1;
-            const slot = primitive offset(this.storage, this.count) as ptr T;
+            const slot = this.storage + this.count;
             return move *slot;
         }
 
         public mut fn clear() {
             while (this.count != 0) {
                 this.count -= 1;
-                const slot = primitive offset(this.storage, this.count) as ptr T;
+                const slot = this.storage + this.count;
                 const value: T = move *slot;
             }
         }
@@ -312,7 +312,7 @@ namespace std {
             result.reserve(this.count);
             let i: u64 = 0;
             while (i < this.count) {
-                const source = primitive offset(this.storage, i) as ptr T;
+                const source = this.storage + i;
                 result.push(*source);
                 i += 1;
             }
@@ -321,7 +321,7 @@ namespace std {
 
         destructor {
             this.clear();
-            primitive free(this.storage);
+            primitive free(this.storage as ptr u8);
         }
     }
 

@@ -959,3 +959,19 @@ TEST_CASE("earlier primitive and binary operands are read before later side effe
   CHECK(code_of("let g: i32 = 1; fn change(): i32 { g = 2; return 0; } "
                 "fn main(): i32 { return g + change(); }") == 1);
 }
+
+TEST_CASE("source pointer addition preserves the type and checks allocation bounds") {
+  CHECK(code_of(R"(
+    fn main(): i32 {
+      const storage = primitive alloc(16) as ptr i32;
+      const second: ptr i32 = storage + 1;
+      *second = 42;
+      const answer = *(storage + 1);
+      primitive free(storage as ptr u8);
+      return answer;
+    }
+  )") == 42);
+  auto result = execute("fn main(): i32 { const p = primitive alloc(8); p + 1; return 0; }");
+  REQUIRE_FALSE(result.has_value());
+  CHECK(std::get<Trapped>(result.error()).trap == Trap::InvalidPointer);
+}
