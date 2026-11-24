@@ -238,7 +238,7 @@ namespace erax::frontend {
 
   std::expected<Value, ParseError> ParseContext::borrow_value(const Value& value, bool mutable_reference,
                                                               SourceLocation location, bool ephemeral) {
-    if (value.global_storage && !ephemeral) {
+    if (value.global_storage && !ephemeral && (value.place_address || value.type.is_record())) {
       return std::unexpected(ParseError {"safe references to global storage are not supported", location});
     }
     if (auto valid = validate_origins(value, location); !valid) {

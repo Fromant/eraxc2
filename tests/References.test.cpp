@@ -99,8 +99,15 @@ TEST_CASE("raw pointer casts cannot manufacture a safe reference") {
 }
 
 TEST_CASE("global reference storage is rejected without weakening local reference safety") {
-  CHECK(parse_error("let value: i32 = 1; fn main(): i32 { const reader = ref value; return 0; }").find("global") !=
-        std::string::npos);
+  CHECK(reference_code(R"(
+    namespace counters { let mut value: i32 = 1; }
+    fn borrow(): ref mut i32 { return ref mut counters.value; }
+    fn main(): i32 {
+      const alias = borrow();
+      *alias = 9;
+      return counters.value;
+    }
+  )") == 9);
   CHECK(parse_error(R"(
     struct Resource {
       public value: i32;

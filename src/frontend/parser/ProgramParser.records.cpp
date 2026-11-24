@@ -217,8 +217,13 @@ namespace erax::frontend {
           return finish(std::unexpected(result_type.error()));
         }
         method.function.return_type = *result_type;
-        if (factory && *result_type != SemType::record_type(&record)) {
-          return finish(std::unexpected(ParseError {"a factory must return its structure type", found.location}));
+        const auto own_type = SemType::record_type(&record);
+        const bool fallible = result_type->is_record() && result_type->record->template_origin &&
+            result_type->record->template_origin->name == "std.Result" && result_type->record->type_args.size() == 2 &&
+            result_type->record->type_args.front() == own_type;
+        if (factory && *result_type != own_type && !fallible) {
+          return finish(std::unexpected(
+              ParseError {"a factory must return its structure type or std.Result of that type", found.location}));
         }
         for (std::size_t i = 0; i < method.param_names.size(); ++i) {
           if (method.param_names[i] == "this" &&

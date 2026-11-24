@@ -181,6 +181,56 @@ namespace std {
         }
     }
 
+    // Exactly one slot is active until its payload is taken.
+    struct Result<T, E> {
+        success: bool;
+        value_slot: ptr T;
+        error_slot: ptr E;
+
+        new(success: bool, value_slot: ptr T, error_slot: ptr E): Result<T, E> {
+            return { success: success, value_slot: value_slot, error_slot: error_slot };
+        }
+
+        public fn ok(value: T): Result<T, E> {
+            const slot = primitive alloc(8) as ptr T;
+            *slot = move value;
+            return Result<T, E>.new(true, slot, 0 as ptr E);
+        }
+
+        public fn err(error: E): Result<T, E> {
+            const slot = primitive alloc(8) as ptr E;
+            *slot = move error;
+            return Result<T, E>.new(false, 0 as ptr T, slot);
+        }
+
+        public fn is_ok(this: ref Result<T, E>): bool { return this.success; }
+
+        public fn take_value(this: ref mut Result<T, E>): T {
+            assert(this.value_slot != 0 as ptr T);
+            const value = move *this.value_slot;
+            primitive free(this.value_slot as ptr u8);
+            this.value_slot = 0 as ptr T;
+            return move value;
+        }
+
+        public fn take_error(this: ref mut Result<T, E>): E {
+            assert(this.error_slot != 0 as ptr E);
+            const error = move *this.error_slot;
+            primitive free(this.error_slot as ptr u8);
+            this.error_slot = 0 as ptr E;
+            return move error;
+        }
+
+        destructor {
+            if (this.value_slot != 0 as ptr T) {
+                this.take_value();
+            }
+            if (this.error_slot != 0 as ptr E) {
+                this.take_error();
+            }
+        }
+    }
+
     // Every source value occupies one storage cell, including a record handle.
     // Raw relocation transfers each initialized element; it never clones it.
     struct vector<T> {

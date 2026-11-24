@@ -91,3 +91,12 @@ The implementation stores one source value per 64-bit machine cell, including
 record handles. It uses `primitive offset` to address slots and explicit raw
 storage moves to transfer initialized values. It does not perform arithmetic on
 an executor's pointer encoding (`primitive.md#offset`).
+
+## Result
+
+`std.Result<T, E>.ok(value)` and `std.Result<T, E>.err(error)` create an owned
+result with one active payload. `is_ok()` reports the original branch.
+`take_value()` and `take_error()` require mutable access and transfer the
+corresponding payload once. Calling either accessor for the wrong branch or
+after taking the payload aborts. Destruction releases any payload still held.
+Results support `move`. They have no `Clonable` implementation.

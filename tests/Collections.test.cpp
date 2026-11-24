@@ -284,3 +284,36 @@ TEST_CASE("std collection bounds failures use the assertion abort contract") {
   CHECK(run_collections("fn main(): i32 { const mut values = std.vector<i32>.new(); values.pop(); return 0; }").code ==
         134);
 }
+
+TEST_CASE("fallible factories transfer success and clean up ordinary error returns") {
+  const auto result = run_collections(R"(
+    let drops: i32 = 0;
+    struct Item {
+      value: i32;
+      public new(n: i32): std.Result<Item, i32> {
+        const prepared = Item.prepare();
+        if (n < 0) { return std.Result<Item, i32>.err(n); }
+        return std.Result<Item, i32>.ok({ value: n });
+      }
+      new(): Item { return { value: 0 }; }
+      fn prepare(): Item { return Item.new(); }
+      public fn get(this: ref Item): i32 { return this.value; }
+      destructor { drops += 1; }
+    }
+    fn main(): i32 {
+      const mut failed = Item.new(-3);
+      if (failed.is_ok() || drops != 1) { return 1; }
+      if (failed.take_error() != -3) { return 2; }
+      {
+        const mut success = Item.new(7);
+        if (!success.is_ok()) { return 3; }
+        const item = success.take_value();
+        if (item.get() != 7) { return 4; }
+      }
+      { const ignored = Item.new(8); }
+      return drops - 5;
+    }
+  )");
+  CHECK(result.code == 0);
+  CHECK(result.globals[0] == 5);
+}
