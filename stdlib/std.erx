@@ -141,7 +141,7 @@ namespace std {
     // block's contract is the primitive's — zeroed, rounded up to whole cells, at
     // least one — and `free` of the null pointer does nothing.
     fn alloc(bytes: u64): ptr u8 { return primitive alloc(bytes); }
-    fn free(p: ptr u8) { primitive free(p); }
+    fn free<T>(p: ptr T) { primitive free(p); }
 
 
     // One owned T, stored in one raw cell. The slot owns the value until a
@@ -150,7 +150,7 @@ namespace std {
         storage: ptr T;
 
         public new(value: T): unique<T> {
-            const slot = primitive alloc(8) as ptr T;
+            const slot = alloc<T>(1);
             *slot = move value;
             return { storage: slot };
         }
@@ -163,7 +163,7 @@ namespace std {
         public mut fn release(): T {
             assert(this.storage != 0 as ptr T);
             const value: T = move *this.storage;
-            primitive free(this.storage as ptr u8);
+            free(this.storage);
             this.storage = 0 as ptr T;
             return move value;
         }
@@ -171,7 +171,7 @@ namespace std {
         destructor {
             if (this.storage != 0 as ptr T) {
                 const value: T = move *this.storage;
-                primitive free(this.storage as ptr u8);
+                free(this.storage);
             }
         }
     }
@@ -187,13 +187,13 @@ namespace std {
         }
 
         public static fn ok(value: T): Result<T, E> {
-            const slot = primitive alloc(8) as ptr T;
+            const slot = alloc<T>(1);
             *slot = move value;
             return Result<T, E>.new(true, slot, 0 as ptr E);
         }
 
         public static fn err(error: E): Result<T, E> {
-            const slot = primitive alloc(8) as ptr E;
+            const slot = alloc<E>(1);
             *slot = move error;
             return Result<T, E>.new(false, 0 as ptr T, slot);
         }
@@ -203,7 +203,7 @@ namespace std {
         public mut fn take_value(): T {
             assert(this.value_slot != 0 as ptr T);
             const value = move *this.value_slot;
-            primitive free(this.value_slot as ptr u8);
+            free(this.value_slot);
             this.value_slot = 0 as ptr T;
             return move value;
         }
@@ -211,7 +211,7 @@ namespace std {
         public mut fn take_error(): E {
             assert(this.error_slot != 0 as ptr E);
             const error = move *this.error_slot;
-            primitive free(this.error_slot as ptr u8);
+            free(this.error_slot);
             this.error_slot = 0 as ptr E;
             return move error;
         }
@@ -253,9 +253,7 @@ namespace std {
             if (capacity <= this.capacity_count) {
                 return;
             }
-            // Multiplication must not wrap before the allocator sees the size.
-            assert(capacity <= 2305843009213693951u64);
-            const replacement = primitive alloc(capacity * 8) as ptr T;
+            const replacement = alloc<T>(capacity);
             let i: u64 = 0;
             while (i < this.count) {
                 const source = this.storage + i;
@@ -263,21 +261,19 @@ namespace std {
                 *destination = move *source;
                 i += 1;
             }
-            primitive free(this.storage as ptr u8);
+            free(this.storage);
             this.storage = replacement;
             this.capacity_count = capacity;
         }
 
         public mut fn push(value: T) {
             if (this.count == this.capacity_count) {
-                let capacity: u64 = 4;
+                const initial_capacity: u64 = 4;
+                const growth_factor: u64 = 2;
+                let capacity = initial_capacity;
                 if (this.capacity_count != 0) {
-                    assert(this.capacity_count < 2305843009213693951u64);
-                    if (this.capacity_count <= 1152921504606846975u64) {
-                        capacity = this.capacity_count * 2;
-                    } else {
-                        capacity = 2305843009213693951u64;
-                    }
+                    capacity = this.capacity_count * growth_factor;
+                    assert(capacity > this.capacity_count);
                 }
                 this.reserve(capacity);
             }
@@ -321,7 +317,7 @@ namespace std {
 
         destructor {
             this.clear();
-            primitive free(this.storage as ptr u8);
+            free(this.storage);
         }
     }
 

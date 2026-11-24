@@ -380,7 +380,8 @@ namespace erax::interp {
           case Prim::ReadChar: return read_char(command, frame);
           case Prim::Exit: return exit_(command, frame);
           case Prim::Abort: return abort_();
-          case Prim::Alloc: return alloc_(command, frame);
+          case Prim::Alloc: return alloc_(command, frame, false);
+          case Prim::AllocCells: return alloc_(command, frame, true);
           case Prim::Free: return free_(command, frame);
           case Prim::Offset: return offset_(command, frame);
         }
@@ -448,12 +449,17 @@ namespace erax::interp {
 
       /// `PRIM alloc dst size`: \p size bytes from the heap, rounded up to whole
       /// cells (at least one). The result is a `ptr u8` into the heap region.
-      bool alloc_(const Command& command, Frame frame) {
-        const Cell bytes = read(command.args[1], frame);
+      bool alloc_(const Command& command, Frame frame, bool count_cells) {
+        const Cell count = read(command.args[1], frame);
         if (died()) {
           return false;
         }
-        const Cell cells = bytes / 8 + (bytes % 8 != 0 ? 1 : 0);
+        constexpr auto cell_bytes = sizeof(Cell);
+        const Cell cells = count_cells ? count : count / cell_bytes + (count % cell_bytes != 0);
+        if (cells > limits_.max_cells) {
+          trap(Trap::OutOfMemory, site_of(frame));
+          return false;
+        }
         const Cell address = allocate(cells == 0 ? 1 : static_cast<std::size_t>(cells), site_of(frame));
         if (died()) {
           return false;

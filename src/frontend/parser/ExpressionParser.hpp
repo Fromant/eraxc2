@@ -101,6 +101,7 @@ private:
     /// A `primitive name(…)` call: \p name is looked up in the closed catalog
     /// (`docs/primitive.md#catalog`), the arguments are checked against its
     /// signature, and it lowers to one `PRIM` carrying the primitive's id.
+    result typed_allocation(SourceLocation location);
     result primitive_call(const std::string& name, SourceLocation location);
 
     ParseContext& context() noexcept {

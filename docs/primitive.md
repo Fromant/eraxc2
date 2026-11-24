@@ -33,8 +33,16 @@ Ids are fixed: the table order is the contract (the serialized IR names a primit
 | 5  | `alloc`     | `(bytes: u64) → ptr u8`   |
 | 6  | `free`      | `(p: ptr u8) → void`      |
 | 7  | `offset`    | `(p: ptr u8, index: u64) → ptr u8` |
+| 8  | `alloc_cells` | `(count: u64) → ptr u8` |
 
 ## Contracts
+
+### `alloc_cells`
+
+The cell allocator takes a `u64` count and returns `ptr u8` at the IR boundary.
+It reserves at least one zeroed cell, like `alloc`, and traps if the count would
+exceed the heap limit. The frontend uses it for `alloc<T>(count)` and retags
+the result to the lowered pointer type.
 
 ### `print`
 

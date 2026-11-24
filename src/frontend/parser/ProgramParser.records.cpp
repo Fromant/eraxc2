@@ -292,7 +292,7 @@ namespace erax::frontend {
               !method.function.params.empty() && method.function.params[0].mutable_reference) {
             method.invalidates_references = true;
           }
-          if (scan.at_keyword(Keyword::Primitive) && scan.peek().text == "free") {
+          if (scan.current().text == "free" && scan.peek().type == TokenType::LParen) {
             method.invalidates_references = true;
           }
           scan.take();
@@ -585,9 +585,8 @@ namespace erax::frontend {
     builder.emit(Op::Load, {object, Operand::vreg(reference, 0)});
     const Type byte_pointer = Type::pointer(Type::U8);
     const auto allocated = Operand::vreg(byte_pointer, builder.alloc(byte_pointer));
-    builder.emit(Op::Primitive,
-                 {allocated, Operand::instant(Type::U64, std::max<std::size_t>(1, record.fields.size()) * 8)},
-                 static_cast<std::uint32_t>(primitives::Prim::Alloc));
+    builder.emit(Op::Primitive, {allocated, Operand::instant(Type::U64, record.fields.size())},
+                 static_cast<std::uint32_t>(primitives::Prim::AllocCells));
     const auto result = Operand::vreg(record_type, builder.alloc(record_type));
     builder.emit(Op::Cast, {result, allocated});
     for (std::size_t index = 0; index < record.fields.size(); ++index) {

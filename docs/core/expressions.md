@@ -50,6 +50,12 @@ Lowest to highest (binary operators on the same line are left-associative; unary
 
 `move` is a unary expression at the same precedence as `*`, `&`, `-`, `!`, and `~`. Its operand must name an initialized local or parameter, or explicitly dereference raw initialized storage (`move *pointer`). Safe partial field moves are rejected. Its result has the same type, is not addressable, and carries a value rather than a new binding. The source is consumed; the result can initialize a binding, be passed to a function, or be returned. `statements.md#bindings-and-moves` defines flow and reinitialization. It is not a constant expression.
 
+## Typed raw allocation
+
+`alloc<T>(count)` returns `ptr T` to raw storage for `count` elements. The count has type `u64`. Each element occupies one storage cell. The allocator zeroes the cells and reserves at least one cell even for count zero. No value of type `T` is constructed by allocation. An allocation exceeding the machine limit traps before any narrowing of the count.
+
+`free(pointer)` releases the allocation by its base address when no ordinary declaration shadows the built-in. It accepts any `ptr T`. A null pointer is accepted. The caller must destroy any live owned values before freeing the storage. `primitive free(pointer)` accepts the same source types. Allocation and freeing cannot appear in a constant expression.
+
 ## Structure and reference expressions
 
 `value.field` reads an accessible field and also denotes its storage place for assignment or borrowing. Fields and instance methods automatically follow reference receivers. `Type.new(...)` and receiverless methods use the named structure type; a generic type is explicit, as in `std.vector<i32>.new()`. A method call supplies its implicit `this` argument automatically, while ordinary function arguments still require explicit `ref` or `move`.

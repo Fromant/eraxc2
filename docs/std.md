@@ -21,7 +21,7 @@ Each name below is reached qualified — `std.print`, `std.min`, `std.assert` �
 - **Char** — `is_digit`, `is_alpha`, `is_alnum`, `is_upper`, `is_lower` (`→ bool`, ASCII), `to_digit` (`→ i32`, `-1` when not a digit), `to_upper`, `to_lower` (`→ char`, unchanged when not a letter).
 - **Math** — `abs<T extends Ordered & Negatable>`, `min<T extends Ordered>`, `max<T extends Ordered>`, `pow<T extends Ordered & Arithmetic>` (exponentiation by squaring, wraps), `gcd<T extends Arithmetic>` (Euclid, `gcd(0, 0) = 0`). Arithmetic wraps exactly as the language says.
 - **`assert(cond: bool)`** — `primitive abort()`s when `cond` is false; it writes no message itself, so print context first if you want any.
-- **Heap** — `alloc(bytes: u64) → ptr u8` and `free(p: ptr u8)`: thin wraps over the `alloc`/`free` primitives (`docs/primitive.md#alloc`), so a program reaches the allocator as `std.alloc` / `std.free` like every other std name. The block's contract — zeroed, at least `ceil(bytes / 8)` whole cells — is the primitive's.
+- **Heap** — `alloc(bytes: u64) → ptr u8` and `free<T>(p: ptr T)`: thin wraps over the `alloc`/`free` primitives (`docs/primitive.md#alloc`), so a program reaches the allocator as `std.alloc` / `std.free` like every other std name. The block's contract — zeroed, at least `ceil(bytes / 8)` whole cells — is the primitive's.
 
 ## Ownership and collections
 
@@ -89,6 +89,8 @@ The implementation stores one source value per 64-bit machine cell, including
 record handles. It uses `primitive offset` to address slots and explicit raw
 storage moves to transfer initialized values. It does not perform arithmetic on
 an executor's pointer encoding (`primitive.md#offset`).
+
+The owning collections use `alloc<T>(count)` and typed freeing. Their capacities count elements.
 
 ## Result
 

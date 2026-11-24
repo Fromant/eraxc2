@@ -975,3 +975,20 @@ TEST_CASE("source pointer addition preserves the type and checks allocation boun
   REQUIRE_FALSE(result.has_value());
   CHECK(std::get<Trapped>(result.error()).trap == Trap::InvalidPointer);
 }
+
+TEST_CASE("typed allocation counts elements and rejects an oversized count") {
+  CHECK(code_of(R"(
+    fn main(): i32 {
+      const cells: ptr i32 = alloc<i32>(2);
+      const last = cells + 1;
+      const initial = *last;
+      *last = 42;
+      const answer = *last;
+      free(cells);
+      return answer + initial;
+    }
+  )") == 42);
+  auto result = execute("fn main(): i32 { alloc<i32>(18446744073709551615u64); return 0; }", Limits {4096, 16});
+  REQUIRE_FALSE(result.has_value());
+  CHECK(std::get<Trapped>(result.error()).trap == Trap::OutOfMemory);
+}

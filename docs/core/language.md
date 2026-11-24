@@ -96,7 +96,8 @@ type-call      = named-type "." IDENT "(" [ expr { "," expr } ] ")" ;
 call           = qualified-name "(" [ expr { "," expr } ] ")" ;
 primitive-call = "primitive" IDENT "(" [ expr { "," expr } ] ")" ;
 qualified-name = IDENT { "." IDENT } ;
-primary        = INT | CHAR | "true" | "false" | qualified-name | primitive-call | object-literal | "(" expr ")" ;
+allocation     = "alloc" "<" type ">" "(" expr ")" ;
+primary        = allocation | INT | CHAR | "true" | "false" | qualified-name | primitive-call | object-literal | "(" expr ")" ;
 
 lvalue         = "*" expr | postfix ;
 const-expr     = expr limited to literals, the unary `-`/`!`/`~`, arithmetic and
@@ -228,6 +229,7 @@ The language lowers 1:1 to JIR:
 | `ref T` / `ref mut T` | a pointer to the lowered target cell; safety is checked before lowering |
 | structure value | one owned heap handle; fields occupy one cell each, nested owned records use handles |
 | `p + index` | `OFFSET`, checked within the same allocation |
+| `alloc<T>(count)` | `PRIM alloc_cells` with a typed result |
 | structure member | `OFFSET` plus typed `LOAD` / `STORE` |
 | factory / method / destructor | ordinary functions and `CALL`; cleanup uses CFG edges |
 | local / param | a vreg at a frame offset |

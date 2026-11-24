@@ -46,6 +46,7 @@ namespace erax::primitives {
     Alloc = 5,
     Free = 6,
     Offset = 7,
+    AllocCells = 8,
   };
 
   /// How many parameters a signature can hold. The widest primitive today takes

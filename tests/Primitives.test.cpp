@@ -28,13 +28,14 @@ namespace {
 
 TEST_CASE("the catalog is the primitives of primitive.md, in id order") {
   CHECK(names() ==
-        std::vector<std::string> {"print", "print_char", "read_char", "exit", "abort", "alloc", "free", "offset"});
+        std::vector<std::string> {"print", "print_char", "read_char", "exit", "abort", "alloc", "free", "offset",
+                                  "alloc_cells"});
   // The index is the id: a primitive is never renumbered.
   for (std::size_t id = 0; id < catalog().size(); ++id) {
     REQUIRE(by_id(static_cast<std::uint32_t>(id)) != nullptr);
     CHECK(by_id(static_cast<std::uint32_t>(id))->id == static_cast<Prim>(id));
   }
-  CHECK(by_id(8) == nullptr);
+  CHECK(by_id(9) == nullptr);
   CHECK(by_id(0xFFFFFFFFu) == nullptr);
 }
 

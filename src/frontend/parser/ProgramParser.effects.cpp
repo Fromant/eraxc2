@@ -34,7 +34,7 @@ namespace erax::frontend {
         if (index + 1 >= tokens.size()) {
           break;
         }
-        if ((token.text == "primitive" && tokens[index + 1].text == "free") ||
+        if ((token.text == "free" && tokens[index + 1].type == TokenType::LParen) ||
             (token.text == "move" && tokens[index + 1].text == "*")) {
           effect.direct = true;
         }

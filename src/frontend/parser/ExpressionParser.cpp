@@ -1084,6 +1084,38 @@ namespace erax::frontend {
     return std::nullopt;
   }
 
+  ExpressionParser::result ExpressionParser::typed_allocation(SourceLocation location) {
+    auto& ctx = context();
+    if (const_mode_) {
+      return std::unexpected(at("allocation is not a constant expression", location));
+    }
+    auto types = ctx.read_type_arguments(ctx.cursor);
+    if (!types) {
+      return std::unexpected(types.error());
+    }
+    if (types->size() != 1 || types->front() == SemType::Void) {
+      return std::unexpected(at("alloc requires one non-void element type", location));
+    }
+    if (auto open = expect(ctx.cursor, TokenType::LParen); !open) {
+      return std::unexpected(open.error());
+    }
+    auto count = expression(SemType::U64);
+    if (!count) {
+      return count;
+    }
+    if (count->type != SemType::U64) {
+      return std::unexpected(at("alloc count must have type u64", location));
+    }
+    if (auto close = expect(ctx.cursor, TokenType::RParen); !close) {
+      return std::unexpected(close.error());
+    }
+    const auto raw_type = primitives::lower(primitives::SigType::Ptr);
+    const auto raw = Operand::vreg(raw_type, ctx.builder.alloc(raw_type));
+    ctx.builder.emit(Op::Primitive, {raw, count->as_operand()},
+                     static_cast<std::uint32_t>(primitives::Prim::AllocCells));
+    return cast_to(Value {SemType::pointer(SemType::U8), raw}, SemType::pointer(types->front()), location);
+  }
+
   ExpressionParser::result ExpressionParser::primitive_call(const std::string& name, SourceLocation location) {
     if (const_mode_) {
       return std::unexpected(at("a constant expression may not call a primitive", location));
@@ -1100,7 +1132,8 @@ namespace erax::frontend {
         // A fixed parameter types its argument the way a call's does, so a lone
         // literal takes the parameter's type; a variadic value has none to take
         // and is left untyped, exactly as an argument past the last parameter is.
-        const std::optional<SemType> expected = args.size() < signature->param_count ?
+        const std::optional<SemType> expected =
+            signature->id != primitives::Prim::Free && args.size() < signature->param_count ?
             std::optional<SemType> {sem_of(signature->params[args.size()])} :
             std::nullopt;
         auto argument = expression(expected);
@@ -1121,6 +1154,15 @@ namespace erax::frontend {
         }
         if (argument->type.is_pointer()) {
           pointer_origins.insert(pointer_origins.end(), argument->origins.begin(), argument->origins.end());
+        }
+        if (signature->id == primitives::Prim::Free && args.empty()) {
+          if (!argument->type.is_pointer()) {
+            return std::unexpected(at("free requires a raw pointer", location));
+          }
+          argument = cast_to(*argument, SemType::pointer(SemType::U8), location);
+          if (!argument) {
+            return argument;
+          }
         }
         auto snapshot = context().copy_value(*argument, location, true);
         if (!snapshot) {
@@ -1248,6 +1290,11 @@ namespace erax::frontend {
       }
       return value;
     }
+    if (name == "alloc" && cursor.peek().type == TokenType::Operator && cursor.peek().text == "<" &&
+        !context().find_global(name)) {
+      cursor.take();
+      return typed_allocation(location);
+    }
     {
       auto scan = cursor;
       auto named = context().read_type(scan);
@@ -1314,6 +1361,11 @@ namespace erax::frontend {
     const TemplateInfo* tmpl = ns != nullptr ? context().find_template_in(*ns, leaf) : context().find_template(leaf);
 
     if (cursor.at(TokenType::LParen)) {
+      if (parts.size() == 1 && leaf == "free" && candidates == nullptr && tmpl == nullptr &&
+          !context().find_global(leaf)) {
+        cursor.take();
+        return primitive_call("free", location);
+      }
       if (candidates == nullptr && tmpl == nullptr) {
         return std::unexpected(at("call to undeclared function '" + qualified + "'", location));
       }

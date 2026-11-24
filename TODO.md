@@ -87,7 +87,7 @@ The driver contract for both is **flag = backend** (decided): `eraxc file.erx` r
 
 ## Serialization (`TODO.md` owns the format versioning)
 
-`.jir` = magic + `u32` version + deterministic little-endian encoding of `Program` (commands as op + operand list; arity from the op table; a `PRIM` carries the primitive's catalog `u32` id). The op table **and the primitive catalog** are frozen by the format — a new op or primitive is a version bump. The pointer phase added `LOAD`/`STORE`/`ADDR`, the `ptr T` type, and `alloc`/`free`; the ownership phase appended `OFFSET` and the `offset` primitive (id 7), preserving existing ids; when serialization lands it must carry a version past the one the five-primitive, nineteen-op set was frozen at.
+`.jir` = magic + `u32` version + deterministic little-endian encoding of `Program` (commands as op + operand list; arity from the op table; a `PRIM` carries the primitive's catalog `u32` id). The op table **and the primitive catalog** are frozen by the format — a new op or primitive is a version bump. The pointer phase added `LOAD`/`STORE`/`ADDR`, the `ptr T` type, and `alloc`/`free`; the ownership phase appended `OFFSET` and the `offset` primitive (id 7). Typed allocation appended `alloc_cells` (id 8), preserving existing ids; when serialization lands it must carry a version past the one the five-primitive, nineteen-op set was frozen at.
 
 ## Conformance
 

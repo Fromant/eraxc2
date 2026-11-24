@@ -85,8 +85,8 @@ namespace erax::frontend {
     }
     const auto bytes_pointer = Type::pointer(Type::U8);
     const auto storage = Operand::vreg(bytes_pointer, ctx.builder.alloc(bytes_pointer));
-    ctx.builder.emit(Op::Primitive, {storage, Operand::instant(Type::U64, std::max<std::size_t>(1, fields.size()) * 8)},
-                     static_cast<std::uint32_t>(primitives::Prim::Alloc));
+    ctx.builder.emit(Op::Primitive, {storage, Operand::instant(Type::U64, fields.size())},
+                     static_cast<std::uint32_t>(primitives::Prim::AllocCells));
     const auto destination = Operand::vreg(lower(*expected), ctx.builder.alloc(lower(*expected)));
     ctx.builder.emit(Op::Cast, {destination, storage});
     Value result {*expected, destination};
