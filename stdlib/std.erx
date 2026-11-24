@@ -136,10 +136,8 @@ namespace std {
         }
     }
 
-    // Heap: the allocator pair (`docs/primitive.md#alloc`) wrapped so a program
-    // reaches it as `std.alloc` / `std.free` beside every other std name. The
-    // block's contract is the primitive's — zeroed, rounded up to whole cells, at
-    // least one — and `free` of the null pointer does nothing.
+    // std.alloc takes bytes. Use alloc<T>(count) to allocate by element count.
+    // Both forms delegate heap limit checks to the executor.
     fn alloc(bytes: u64): ptr u8 { return primitive alloc(bytes); }
     fn free<T>(p: ptr T) { primitive free(p); }
 
