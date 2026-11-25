@@ -7,9 +7,11 @@
 #include <iterator>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "StdSource.hpp"
+#include "frontend/ModuleLoader.hpp"
 #include "frontend/parser/ProgramParser.hpp"
 #include "frontend/tokenizer/Tokenizer.hpp"
 #include "interp/Interpreter.hpp"
@@ -170,22 +172,19 @@ int main(int argc, char* argv[]) {
     return EXIT_SUCCESS;
   }
 
-  // Auto-import: std is parsed before the file it was given, so its declarations
-  // (in `namespace std`) are part of the program and every program may call them
+  // Auto-import: std is parsed before the source modules, so its declarations
+  // (in `namespace std`) are part of the program and every module may call them
   // (`docs/std.md`). Its tokens carry the name `std.erx`, so an error inside the
   // library says so.
   auto imported = Tokenizer {}.tokenize(erax::std_source, "std.erx");
   if (!imported) {
     return report(imported.error());
   }
-  std::vector<Token> all;
-  all.reserve(imported->size() + tokens->size());
-  // The trailing end-of-file of each half would stop the parser in the middle,
-  // so only std's copy goes; the user's ends the stream.
-  all.insert(all.end(), imported->begin(), std::prev(imported->end()));
-  all.insert(all.end(), tokens->begin(), tokens->end());
-
-  auto program = ProgramParser {all}.parse();
+  auto modules = erax::frontend::load_modules(path, *tokens, std::move(*imported));
+  if (!modules) {
+    return report(modules.error());
+  }
+  auto program = ProgramParser {modules->tokens, std::move(modules->imports)}.parse();
   if (!program) {
     return report(program.error());
   }

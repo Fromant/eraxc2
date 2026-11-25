@@ -124,7 +124,7 @@ A **constant expression** is one the parser can evaluate while reading it: liter
 
 A scalar global's initializer *must* be a constant expression; record globals use the initialization rules in `statements.md#globals`. A `let` initializer need not be, but whatever part of it is constant is still folded.
 
-Reading an earlier scalar global in a constant initializer is constant by bare or by qualified name alike — `g` and `n.g` are the same kind of read (`expressions.md#names`), both folded where the initializer is, and both limited to globals declared earlier in the file.
+Reading a visible scalar global in a constant initializer folds the same way through a bare name, a qualified name, or an import alias. The referenced global must initialize earlier according to the [module initialization order](language.md#modules).
 
 ### Why a constant is checked where a runtime value wraps
 

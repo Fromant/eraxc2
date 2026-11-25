@@ -20,7 +20,7 @@ cmake -S . -B build-cov -G Ninja -DERAX_COVERAGE=ON  # GCC/Clang + gcov only, se
 cmake --build build-cov --target coverage             # builds, runs the suite, writes build-cov/coverage.txt
 ```
 
-`ctest` is one wrapper around the Catch2 binary; to filter you must run `build\tests\erax_tests.exe` directly. `.clang-format` (Google-based, **2-space indent**, 120 cols) governs all C++ — run `clang-format -i` on files you touch; the whole tree is already formatted. There is no lint or typecheck config. `-Wall -Wextra` apply only to GNU/Clang builds. If a coverage reconfigure fails blaming the compiler, the `build-cov/` cache is stale — delete the dir and configure again.
+`ctest` runs the Catch2 binary and the module CLI test. Run `build\tests\erax_tests.exe` directly to filter Catch2 cases by name. `.clang-format` (Google-based, **2-space indent**, 120 cols) governs all C++ — run `clang-format -i` on files you touch; the whole tree is already formatted. There is no lint or typecheck config. `-Wall -Wextra` apply only to GNU/Clang builds. If a coverage reconfigure fails blaming the compiler, the `build-cov/` cache is stale — delete the dir and configure again.
 
 ## Layout
 

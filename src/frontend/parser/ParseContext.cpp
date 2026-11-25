@@ -29,6 +29,8 @@ namespace erax::frontend {
         {"private", Keyword::Private},
         {"destructor", Keyword::Destructor},
         {"namespace", Keyword::Namespace},
+        {"import", Keyword::Import},
+        {"export", Keyword::Export},
         {"if", Keyword::If},
         {"else", Keyword::Else},
         {"while", Keyword::While},
@@ -475,9 +477,8 @@ namespace erax::frontend {
 
   const GlobalInfo* ParseContext::find_global(const std::string& name) const noexcept {
     for (auto ns = namespace_stack_.rbegin(); ns != namespace_stack_.rend(); ++ns) {
-      const auto found = (*ns)->globals.find(name);
-      if (found != (*ns)->globals.end()) {
-        return &found->second;
+      if (auto* found = find_global_in(**ns, name)) {
+        return found;
       }
     }
     return nullptr;
@@ -489,9 +490,8 @@ namespace erax::frontend {
 
   const std::vector<FunctionInfo>* ParseContext::find_functions(const std::string& name) const noexcept {
     for (auto ns = namespace_stack_.rbegin(); ns != namespace_stack_.rend(); ++ns) {
-      const auto found = (*ns)->functions.find(name);
-      if (found != (*ns)->functions.end()) {
-        return &found->second;
+      if (auto* found = find_functions_in(**ns, name)) {
+        return found;
       }
     }
     return nullptr;
@@ -499,9 +499,8 @@ namespace erax::frontend {
 
   const TemplateInfo* ParseContext::find_template(const std::string& name) const noexcept {
     for (auto ns = namespace_stack_.rbegin(); ns != namespace_stack_.rend(); ++ns) {
-      const auto found = (*ns)->templates.find(name);
-      if (found != (*ns)->templates.end()) {
-        return &found->second;
+      if (auto* found = find_template_in(**ns, name)) {
+        return found;
       }
     }
     return nullptr;
@@ -521,20 +520,43 @@ namespace erax::frontend {
     return nullptr;
   }
 
+  namespace {
+    // Follow aliases to the original declaration and enforce export visibility
+    // when a lookup uses a namespace imported from another file.
+    std::pair<const NameSpace*, const std::string&> member_source(const NameSpace& scope, const std::string& name) {
+      if (scope.viewed_namespace) {
+        return {scope.viewed_namespace->exports.contains(name) ? scope.viewed_namespace : nullptr, name};
+      }
+      if (const auto binding = scope.imports.find(name); binding != scope.imports.end()) {
+        return {binding->second.source, binding->second.name};
+      }
+      return {&scope, name};
+    }
+
+    template<typename T>
+    const T* find_member(const NameSpace& scope, const std::string& name,
+                         const std::unordered_map<std::string, T> NameSpace::*members) {
+      const auto [source, key] = member_source(scope, name);
+      if (!source) {
+        return nullptr;
+      }
+      const auto& table = source->*members;
+      const auto found = table.find(key);
+      return found != table.end() ? &found->second : nullptr;
+    }
+  }
+
   const GlobalInfo* ParseContext::find_global_in(const NameSpace& ns, const std::string& name) const noexcept {
-    const auto found = ns.globals.find(name);
-    return found != ns.globals.end() ? &found->second : nullptr;
+    return find_member(ns, name, &NameSpace::globals);
   }
 
   const std::vector<FunctionInfo>* ParseContext::find_functions_in(const NameSpace& ns,
                                                                    const std::string& name) const noexcept {
-    const auto found = ns.functions.find(name);
-    return found != ns.functions.end() ? &found->second : nullptr;
+    return find_member(ns, name, &NameSpace::functions);
   }
 
   const TemplateInfo* ParseContext::find_template_in(const NameSpace& ns, const std::string& name) const noexcept {
-    const auto found = ns.templates.find(name);
-    return found != ns.templates.end() ? &found->second : nullptr;
+    return find_member(ns, name, &NameSpace::templates);
   }
 
   const FunctionInfo* ParseContext::find_function_in(const NameSpace& ns, const std::string& name,
@@ -552,12 +574,18 @@ namespace erax::frontend {
   }
 
   const NameSpace* ParseContext::find_namespace(const NameSpace& ns, const std::string& name) const noexcept {
-    const auto found = ns.namespaces.find(name);
-    return found != ns.namespaces.end() ? found->second.get() : nullptr;
+    const auto* found = find_member(ns, name, &NameSpace::namespaces);
+    if (!found) {
+      return nullptr;
+    }
+    return ns.viewed_namespace || ns.imports.contains(name) ? (*found)->public_view.get() : found->get();
   }
 
   const NameSpace* ParseContext::find_namespace(const std::string& name) const noexcept {
     for (auto ns = namespace_stack_.rbegin(); ns != namespace_stack_.rend(); ++ns) {
+      if (*ns == &root_namespace_ && in_file_scope() && name != "std") {
+        break;
+      }
       if (const NameSpace* found = find_namespace(**ns, name); found != nullptr) {
         return found;
       }
@@ -598,35 +626,39 @@ namespace erax::frontend {
     return find_function_in(current_namespace(), name, params);
   }
 
-  std::expected<NameSpace*, ParseError> ParseContext::resolve_namespace(const std::vector<std::string>& path,
-                                                                        SourceLocation location) const {
-    NameSpace* ns = nullptr;
+  std::expected<const NameSpace*, ParseError> ParseContext::resolve_namespace(const std::vector<std::string>& path,
+                                                                              SourceLocation location) const {
+    const NameSpace* ns = nullptr;
     std::string qualified;
     for (std::size_t index = 0; index < path.size(); ++index) {
       if (!qualified.empty()) {
         qualified += '.';
       }
       qualified += path[index];
-      if (index == 0) {
-        // The first segment searches outward from the current namespace, so a
-        // sibling namespace of the current one is reachable unqualified.
-        ns = nullptr;
-        for (auto candidate = namespace_stack_.rbegin(); candidate != namespace_stack_.rend(); ++candidate) {
-          const auto found = (*candidate)->namespaces.find(path[0]);
-          if (found != (*candidate)->namespaces.end()) {
-            ns = found->second.get();
-            break;
-          }
-        }
-      } else {
-        const auto found = ns->namespaces.find(path[index]);
-        ns = found != ns->namespaces.end() ? found->second.get() : nullptr;
-      }
+      ns = index == 0 ? find_namespace(path[index]) : find_namespace(*ns, path[index]);
       if (ns == nullptr) {
         return std::unexpected(ParseError {"unknown namespace '" + qualified + "'", location});
       }
     }
     return ns;
+  }
+
+  const NameSpace* ParseContext::find_module(const std::string& name) const noexcept {
+    const auto found = root_namespace_.namespaces.find(name);
+    return found != root_namespace_.namespaces.end() ? found->second.get() : nullptr;
+  }
+
+  bool ParseContext::in_file_scope() const noexcept {
+    const auto& path = current_namespace().path;
+    return !path.empty() && path.front().starts_with('/');
+  }
+
+  bool ParseContext::at_file_root() const noexcept {
+    return current_namespace().path.empty() || (in_file_scope() && current_namespace().path.size() == 1);
+  }
+
+  bool ParseContext::at_entry_root() const noexcept {
+    return at_file_root() && (!in_file_scope() || current_namespace().path.front() == "/0");
   }
 
   std::vector<std::string> ParseContext::set_namespace_path(const std::vector<std::string>& path) {
@@ -650,6 +682,8 @@ namespace erax::frontend {
     NameSpace& child = *current_namespace().namespaces.emplace(name, std::make_unique<NameSpace>()).first->second;
     child.path = current_namespace().path;
     child.path.push_back(name);
+    child.public_view = std::make_unique<NameSpace>();
+    child.public_view->viewed_namespace = &child;
     return &child;
   }
 
@@ -744,15 +778,51 @@ namespace erax::frontend {
     return found == record_names_.end() ? nullptr : found->second;
   }
 
+  RecordInfo* ParseContext::find_record_in(const NameSpace& ns, const std::string& name) const noexcept {
+    const auto [source, key] = member_source(ns, name);
+    if (!source) {
+      return nullptr;
+    }
+    std::string qualified;
+    for (const auto& segment : source->path) {
+      qualified += segment + '.';
+    }
+    return find_root_record(qualified + key);
+  }
+
   RecordInfo* ParseContext::find_record(const std::string& name) const noexcept {
-    for (std::size_t depth = current_namespace().path.size() + 1; depth > 0; --depth) {
-      std::string key;
-      for (std::size_t index = 0; index + 1 < depth; ++index) {
-        key += current_namespace().path[index] + '.';
+    const auto dot = name.find('.');
+    const auto first = name.substr(0, dot);
+    for (auto scope = namespace_stack_.rbegin(); scope != namespace_stack_.rend(); ++scope) {
+      if (*scope == &root_namespace_ && in_file_scope() && first != "std") {
+        break;
       }
-      key += name;
-      if (auto* found = find_root_record(key)) {
+      if (dot == std::string::npos) {
+        if (auto* found = find_record_in(**scope, name)) {
+          return found;
+        }
+        continue;
+      }
+      if ((*scope)->imports.contains(first)) {
+        const NameSpace* ns = find_namespace(**scope, first);
+        auto start = dot + 1;
+        while (ns) {
+          const auto next = name.find('.', start);
+          if (next == std::string::npos) {
+            return find_record_in(*ns, name.substr(start));
+          }
+          ns = find_namespace(*ns, name.substr(start, next - start));
+          start = next + 1;
+        }
+        return nullptr;
+      }
+      // Discovered structures can be referenced before their enclosing
+      // namespace has been visited by the declaration pass.
+      if (auto* found = find_record_in(**scope, name)) {
         return found;
+      }
+      if ((*scope)->namespaces.contains(first)) {
+        return nullptr;
       }
     }
     return nullptr;

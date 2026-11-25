@@ -229,7 +229,8 @@ namespace erax::frontend {
 
   }  // namespace
 
-  ProgramParser::ProgramParser(const std::vector<Token>& tokens) : context_(tokens), expressions_(context_) {
+  ProgramParser::ProgramParser(const std::vector<Token>& tokens, ModuleImports imports) :
+      imports_(std::move(imports)), context_(tokens), expressions_(context_) {
     context_.record_instantiator = [this](RecordInfo* record, std::vector<SemType> args, SourceLocation location) {
       return instantiate_record(record, std::move(args), location);
     };
@@ -308,6 +309,9 @@ namespace erax::frontend {
     while (!cursor.at_end()) {
       if (!top && cursor.at(TokenType::RBrace)) {
         return {};
+      }
+      if (cursor.at_keyword(Keyword::Export)) {
+        cursor.take();
       }
       step item;
       if (cursor.current().text == "struct") {
@@ -508,11 +512,37 @@ namespace erax::frontend {
       if (!top && cursor.at(TokenType::RBrace)) {
         return {};
       }
-      if (cursor.current().text == "struct") {
+      const bool exported = cursor.at_keyword(Keyword::Export);
+      if (exported) {
+        cursor.take();
+      }
+      const bool global = cursor.at_keyword(Keyword::Let) || cursor.at_keyword(Keyword::Const);
+      const bool declaration = global || cursor.at_keyword(Keyword::Struct) || cursor.at_keyword(Keyword::Fn) ||
+          cursor.at_keyword(Keyword::Namespace);
+      if (declaration) {
+        const Token& name =
+            cursor.peek(global && cursor.peek().type == TokenType::Identifier && cursor.peek().text == "mut" ? 2 : 1);
+        auto& scope = context_.current_namespace();
+        if (const auto binding = scope.imports.find(name.text); binding != scope.imports.end()) {
+          return std::unexpected(ParseError {
+              "'" + name.text + "' conflicts with import at " + binding->second.location.to_string(), name.location});
+        }
+        if (!scope.path.empty() && context_.at_file_root() && name.text == "std") {
+          return std::unexpected(ParseError {"'std' is already declared", name.location});
+        }
+        if (exported) {
+          scope.exports.insert(name.text);
+        }
+      } else if (exported) {
+        return std::unexpected(ParseError {"expected a declaration after 'export'", cursor.location()});
+      } else if (cursor.at_keyword(Keyword::Import)) {
+        return std::unexpected(ParseError {"imports must precede declarations at file scope", cursor.location()});
+      }
+      if (cursor.at_keyword(Keyword::Struct)) {
         if (auto declared = declare_record(cursor); !declared) {
           return std::unexpected(declared.error());
         }
-      } else if (cursor.at_keyword(Keyword::Let) || cursor.at_keyword(Keyword::Const)) {
+      } else if (global) {
         if (auto declared = declare_global(cursor); !declared) {
           return std::unexpected(declared.error());
         }
@@ -525,13 +555,36 @@ namespace erax::frontend {
           return std::unexpected(declared.error());
         }
       } else {
-        // Not an item. The main pass is what reports anything wrong with it;
-        // this pass only needs to step over it.
-        cursor.take();
+        return std::unexpected(
+            ParseError {"expected a global, a function, or a namespace declaration", cursor.location()});
       }
     }
     if (!top) {
       return std::unexpected(ParseError {"unterminated namespace body", cursor.location()});
+    }
+    return {};
+  }
+
+  ProgramParser::step ProgramParser::bind_imports(NameSpace& scope, const std::string& module) {
+    const auto imports = imports_.find(module);
+    if (imports == imports_.end()) {
+      return {};
+    }
+    for (const auto& import : imports->second) {
+      const auto* source = context_.find_module(import.module);
+      if (!source || !source->exports.contains(import.name)) {
+        return std::unexpected(ParseError {"module does not export '" + import.name + "'", import.location});
+      }
+      if (import.alias == "std") {
+        return std::unexpected(ParseError {"'std' is already declared", import.location});
+      }
+      const auto [binding, inserted] =
+          scope.imports.emplace(import.alias, ImportBinding {source, import.name, import.location});
+      if (!inserted) {
+        return std::unexpected(ParseError {
+            "duplicate import '" + import.alias + "'; first imported at " + binding->second.location.to_string(),
+            import.location});
+      }
     }
     return {};
   }
@@ -549,6 +602,9 @@ namespace erax::frontend {
     auto child = context_.declare_namespace(*name, start);
     if (!child) {
       return std::unexpected(child.error());
+    }
+    if (auto bound = bind_imports(**child, *name); !bound) {
+      return bound;
     }
     context_.push_namespace(**child);
     if (auto body = declarations_in(cursor, /*top=*/false); !body) {
@@ -611,14 +667,14 @@ namespace erax::frontend {
     // the concrete declaration is preferred over the template at a call.
     if (context_.find_global_in_current(found.name) != nullptr ||
         context_.find_namespace_in_current(found.name) != nullptr ||
-        context_.find_record(qualified_name(context_.current_namespace(), found.name)) != nullptr) {
+        context_.find_root_record(qualified_name(context_.current_namespace(), found.name)) != nullptr) {
       return std::unexpected(ParseError {"'" + found.name + "' is already declared", found.location});
     }
 
     if (!found.type_params.empty()) {
       // A template is not an overload; it is recorded beside the concrete
       // declarations and instantiated per call.
-      if (found.name == "main") {
+      if (found.name == "main" && (context_.at_entry_root() || !context_.at_file_root())) {
         return std::unexpected(ParseError {"the entry point must be 'fn main(): i32'", found.location});
       }
       if (context_.find_template_in_current(found.name) != nullptr) {
@@ -678,8 +734,8 @@ namespace erax::frontend {
     if (context_.find_function_in_current(found.name, params) != nullptr) {
       return std::unexpected(ParseError {"'" + found.name + "' is already declared", found.location});
     }
-    if (found.name == "main") {
-      if (!context_.current_namespace().path.empty() || !params.empty() || found.return_type.type != SemType::I32) {
+    if (found.name == "main" && (context_.at_entry_root() || !context_.at_file_root())) {
+      if (!context_.at_entry_root() || !params.empty() || found.return_type.type != SemType::I32) {
         return std::unexpected(ParseError {"the entry point must be 'fn main(): i32'", found.location});
       }
       has_entrypoint_ = true;
@@ -869,7 +925,7 @@ namespace erax::frontend {
       program_.functions.resize(id + 1);
     }
     program_.functions[id] = std::move(lowered);
-    if (found.name == "main") {
+    if (found.name == "main" && context_.at_entry_root()) {
       entrypoint_ = id;
     }
     return {};

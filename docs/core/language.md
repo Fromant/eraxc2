@@ -18,15 +18,18 @@ Source-level contract of the erax language: grammar, types, and semantics. The d
 - **Post-name annotations and local inference.** Parameters and globals name their types. A local may omit its annotation when it has an initializer; the initializer then determines the type.
 - **Assignment is a statement, not an expression.** `a = b = c` is forbidden, and an assignment has no value usable by an expression; compound forms like `a += 2` are the idiomatic mutation.
 - **Required `;`.** Every terminating statement ends in `;`. No automatic semicolon insertion.
-- A source file holds globals, functions, structures, and namespaces at top level. Everything else lives inside functions.
+- A source file starts with its imports, followed by globals, functions, structures, and namespaces.
 
 ## Grammar
 
 Terminals in quotes; `[]` optional, `{}` repeated, `|` choice. `INT`, `CHAR`, and `STRING` are integer, character, and string literals as lexed (see the tokenizer spec); an `INT` may carry a type suffix, which is part of the token (`5i64`, `0xFFu8`) — see `types.md#literals`.
 
 ```
-program        = { global | function | structure | namespace } ;
-namespace      = "namespace" IDENT "{" { global | function | structure | namespace } "}" ;
+program        = { import } { declaration } ;
+import         = "import" "{" import-name { "," import-name } [ "," ] "}" "from" STRING ";" ;
+import-name    = IDENT [ "as" IDENT ] ;
+declaration    = [ "export" ] ( global | function | structure | namespace ) ;
+namespace      = "namespace" IDENT "{" { declaration } "}" ;
 
 global         = binding [ "mut" ] IDENT ":" type "=" expr ";" ;
 binding        = "let" | "const" ;
@@ -101,8 +104,8 @@ primary        = allocation | INT | CHAR | STRING | "true" | "false" | "null" | 
 
 lvalue         = "*" expr | postfix ;
 const-expr     = expr limited to literals, the unary `-`/`!`/`~`, arithmetic and
-                 comparison operators, `as` casts, and references to globals
-                 declared earlier in the file;
+                 comparison operators, `as` casts, and visible scalar globals
+                 initialized earlier;
 ```
 
 Notes:
@@ -112,7 +115,7 @@ Notes:
 - A call names its callee with a `qualified-name` followed by `(`: the leading segments resolve to a namespace and the last names a function or template inside it. Structures also provide type-qualified factories and receiverless methods, and object expressions provide instance methods. Thus `std.print(x)` calls the `print` in `std`, and a bare `print(x)` calls the `print` visible from the current namespace (`#namespaces`, `expressions.md#names`).
 - Bracket indexing applies to raw pointers. Collections expose access through their declared methods.
 - Scalar global initializers must be constant-foldable and contain no calls. Record globals may call factories/functions and initialize in declaration order. Globals cannot contain safe references. See `statements.md#globals`.
-- Every program is compiled with `stdlib/std.erx` parsed first (auto-import), so std's declarations are part of the program and need no import of their own (`docs/std.md`).
+- Every program is compiled with `stdlib/std.erx` parsed first. Every module can use `std.…` directly ([Standard library](../std.md)).
 - Object literals are checked additionally: they assemble exactly the factory's own record type and are legal only inside that factory. See `statements.md#structures`.
 - The parser recognizes `?` after `ref mut` in conditional method results and borrows.
 - Nested type argument closers are interpreted by the parser even when the tokenizer emits a maximal-munch `>>` or `>>>` run. The operator whitelist remains unchanged outside type-argument positions.
@@ -150,6 +153,37 @@ outward to the root.
 - The standard library is the auto-imported `namespace std` (`docs/std.md`): its
   functions are part of every program and reached as `std.…`.
 
+## Modules
+
+Each source file is a module with its own root scope. Imports appear before
+all declarations, at file scope. `from` is contextual in an import clause.
+
+```ts
+import { parse, ParseError as ConfigError } from "./config.erx";
+import { net } from "../shared/network.erx";
+```
+
+- The module specifier is a literal path starting with `./` or `../` and ending
+  in `.erx`. It uses literal path characters and forward slash separators. Paths
+  resolve from the directory of the importing source file after canonicalization.
+  A compilation from stdin has no file to resolve relative imports against.
+- An import creates a binding for each listed export in the importing file's
+  root. `as` sets its local name. Duplicate root bindings are errors. Imported
+  names are visible in that file's nested namespaces through enclosing-scope
+  lookup. All modules have the implicit `std` root binding.
+- A declaration is private to its module unless marked `export`. An exported
+  namespace exposes its explicitly exported members, and the rule applies
+  recursively to nested namespaces. Structure members use the usual access
+  rules. Marking a function declaration `export` exposes its entire overload set
+  and any template under the same name. Template bodies use the declaring
+  module's scope. Imports bind the original functions, types, and globals,
+  regardless of any aliases. An imported global retains the original binding's
+  mutability and assignment rules.
+- A resolved file is compiled once per program. Import cycles are errors.
+  Global initialization visits dependencies before their importers, traversing
+  imports in source order and initializing each file's globals in declaration
+  order. The entry file supplies the program's [`main`](statements.md#functions).
+
 ## Operator set
 
 A tokenizer `Operator` token is legal only if its full text is one of:
@@ -183,6 +217,7 @@ Every keyword is reserved: it cannot be used as an `IDENT` (declaration or refer
 | `public` `private` | structure member visibility |
 | `destructor` | additional resource cleanup |
 | `namespace` | named scope for top-level declarations |
+| `import`, `export` | module bindings and visibility |
 | `if` | conditional block |
 | `else` | alternate branch of `if` |
 | `while` | loop |
@@ -201,12 +236,12 @@ Every keyword is reserved: it cannot be used as an `IDENT` (declaration or refer
 
 Type names, `true`, and `false` are reserved because they carry their meaning in type and literal position.
 
-`string`, `std`, `text`, … are ordinary identifiers, not reserved words: they may be used as names. `ptr` is the same kind of contextual name: it is a type in type position (`#grammar`) and an ordinary identifier elsewhere, so a variable may be called `ptr`. The standard library type for strings is `std.string` (see `types.md#literals`). `std` is claimed at the root by the auto-imported library (`docs/std.md`), so a program declaring its own top-level `std` is a duplicate-declaration error. The capability names `Ordered`, `Negatable`, `Arithmetic`, `Clonable`, `Movable` are ordinary identifiers too — they mean something only after `extends`/`&` in a `type-param`, and a template's type-parameter names are ordinary outside the declaration (`statements.md#templates`). One name carries its meaning without being reserved: `main` is the entry point — a rule on the name, see `statements.md#functions`. It may not be given a declaration of its own, and it does not stop the tokenizer.
+`string`, `std`, and `text` are ordinary identifiers. `ptr` is contextual in type position (`#grammar`). The standard library type for strings is `std.string` (see `types.md#literals`). The auto-imported library claims the name `std` at each module root (`docs/std.md`). The capability names `Ordered`, `Negatable`, `Arithmetic`, `Clonable`, and `Movable` have special meaning after `extends` or `&` in a `type-param`. The entry module's root `main` follows the [entry point rules](statements.md#functions).
 
 ## Semantics
 
 - **Value semantics and explicit borrowing.** Scalar values copy their bits; record lvalues copy through `Clonable`, and `move` transfers ownership explicitly. `ref` and `ref mut` create checked references; reference values copy the reference, not its target. Raw `ptr` remains an unchecked ownership mechanism underneath. See `types.md#references` and `statements.md#structures`.
-- **Scoping.** A `block` (and a `for`'s init) opens a scope; enclosing scopes are visible, inner names shadow outer ones. A name is in scope from its declaration to the end of its block. Globals are visible everywhere, including inside functions and other global initializers — but a global initializer may reference only globals **declared earlier** in the file. A `namespace` is a scope too, for top-level names only (`#namespaces`).
+- **Scoping.** A `block` (and a `for`'s init) opens a scope; enclosing scopes are visible, inner names shadow outer ones. A local name is in scope from its declaration to the end of its block. Globals follow module and namespace visibility. A global initializer can reference globals from an initialized dependency or globals declared earlier in its own file, subject to the initializer's typing rules. A `namespace` is a scope for top-level names (`#namespaces`).
 - **Definite assignment.** Every read of a variable is preceded, on every execution path, by a write (`let` initializer or an assignment). Parameters start initialized; `move` consumes their value just as it consumes a local. Scalar globals have constant initializers; record globals initialize through ordinary expressions. This is enforced statically; it never produces runtime behavior. Pointer reads and stores do not reach the check but cannot defeat it: `&x` is itself a *read*, so the address of an as-yet-unassigned local is the same `read before it is assigned` error as any other read, and a `*p = v` store writes a cell the checker cannot track, so it never counts as the write that satisfies a name.
 - **Bindings and moves.** `const` prevents rebinding, not moving. `let` may be initialized again after `move`; `const` may not. A local without an annotation needs an initializer, and every `const` needs one. Initialization state is checked over the CFG, including loop back edges. See `statements.md#bindings-and-moves`.
 - **RAII.** Initialized owners are destroyed on ordinary scope exits, returns, breaks, and continues. Local order is reverse initialization; field order is reverse declaration after the user destructor. Traps and immediate termination do not unwind. See `statements.md#destruction`.

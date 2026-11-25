@@ -74,7 +74,7 @@ Assignment evaluates and prepares its RHS, destroys the destination's previous o
 - **A function is identified by its (namespace-qualified) name plus its parameter types, and may be overloaded.** One name may carry several declarations — an **overload set** — as long as no two share the same parameter types; the return type is not part of the identity, so two declarations may not differ only in it. Declaring the same signature twice under one name is an error — `'f' is already declared`, the message a duplicate global gets too. The rule is per namespace (`#namespaces`): `a.f` and `b.f` are different functions with independent overload sets. A call picks its declaration by exact argument types, with no conversions between candidates (`expressions.md#typing-rules`).
 - Arguments are passed **by value** and evaluate left to right. Reading an earlier scalar argument is completed before a later argument can change its source. Record lvalues copy through `Clonable`; record temporaries and explicit `move` transfer to the callee. References copy their reference value.
 - A function sees only its own parameters/locals and the globals — never another function's locals.
-- **Entry point.** The program must declare exactly one `fn main(): i32` (no parameters), and the declaration is always at the root — no namespace may contain a `main`. Its return value is the process exit code — as is the `code` given to `primitive exit` if the program terminates that way (`docs/primitive.md`) — and it runs after all global initializers have run. `main` is a rule on the *name* (it is not a reserved word); no other function may be named `main`.
+- **Entry point.** The entry module must declare one `fn main(): i32` with no parameters at file scope. It runs after global initialization and its return value becomes the process exit code. A program that terminates through `primitive exit` uses that primitive's code (`docs/primitive.md`). An imported module can declare an ordinary function named `main` at file scope. A nested namespace cannot declare one.
 
 ## Templates
 
@@ -114,6 +114,6 @@ A `namespace NAME { … }` block (grammar: `language.md#grammar`; rules: `langua
 
 - The body's declarations see each other and their enclosing namespaces by bare name; anything else is reached qualified. This is how the stdlib's functions call themselves unqualified (`docs/std.md`).
 - A template declared in a namespace is a member of that namespace: its call site deduces and instantiates it there, and its body's bare names resolve in the namespace that declared it — `read_type` sees the same names (`docs/middleend/JIR.md`).
-- A global in a namespace is a global still: it is numbered with every other global in source order, its initializer runs before `main`, and it is the target of a qualified assignment (`n.g = 5;`).
-- `main` is declared only at the root; a namespace containing one is the entry-point error.
+- A global in a namespace participates in the same [initialization order](language.md#modules) as file-scope globals. A qualified assignment can target it (`n.g = 5;`) when the name is visible and the binding is writable.
+- A namespace containing `main` causes an entry-point error.
 - One kind of thing per name, per namespace (`language.md#namespaces`): a namespace may not share its name with a global or a function it contains, and it may not be reopened. The auto-imported `stdlib/std.erx` is the root namespace `std` talking (`main.cpp`), so a program that declares `namespace std` (or any other root `std`) again gets the duplicate-declaration error.

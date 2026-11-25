@@ -1,6 +1,6 @@
 # The standard library
 
-`stdlib/std.erx` **is** the standard library: ordinary erax source, compiled with every program. The driver parses it **before** the file it was given (auto-import), so its declarations are part of every program — the root `namespace std` is already there, and a program reaches it qualified (`std.print(x)`). When the import system arrives (`TODO.md`), auto-import goes away and std becomes an ordinary imported module — nothing in this file's *contents* changes, only how it gets in.
+`stdlib/std.erx` is the standard library: ordinary erax source compiled with every program. The driver parses it before the source modules. Every module can access its root namespace `std` through qualified names such as `std.print(x)`.
 
 The source of truth is `stdlib/std.erx` itself; it is embedded in the compiler at build time, so compiling never depends on files next to the source.
 

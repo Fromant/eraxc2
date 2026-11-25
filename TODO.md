@@ -80,24 +80,10 @@ Source-level additions that are out of scope for v1 — listed here so the langu
 
 ## Module system
 
-Use ES-style named imports with optional aliases and explicit exports.
-
-```ts
-import { parse, ParseError as ConfigError } from "./config.erx";
-import { net } from "./network.erx";
-```
-
-- Each file has its own root scope. Imports precede declarations and are visible in nested namespaces under the existing lookup rules. Duplicate root bindings report both locations. Use named bindings throughout.
-- Declarations are private by default. Use `export` for functions, structures, globals, namespaces and their public members. Structure member access follows existing rules. Export a function's overloads and optional template as one set. Imported templates resolve names in their declaring module.
-- Resolve relative paths from the importing file and require the exact filename including `.erx`. Use resolved file identity to share types and globals across importers. Reject cycles with the import chain. Initialize dependencies before importers, visit sibling imports in source order and preserve global declaration order within each file. Use the entry file's root `main`.
-- Resolve imports in the frontend and bind them to existing declarations using the shared JIR ID allocators. Aliases preserve declaration identity.
-
-Implementation order
-
-1. Implement relative imports and exports. Verify visibility, aliases, overloads, template resolution, shared identity in diamond dependencies, global initialization order and diagnostics.
-2. Route embedded std through the module loader while preserving automatic `std.print(...)` access. Resolve the compiler's `std.string` and `std.Result` hooks by declaration identity. Decide separately whether to require an explicit std import later.
-3. Add a manifest for local package dependencies and public entry points such as `"acme.http"`. Add named re-exports such as `export { Request, connect } from "./client.erx";`.
-4. Add version resolution, a lockfile and registry support. The package manager pins dependencies and the compiler consumes the resolved graph.
+- [x] Relative named imports and explicit exports ([module contract](docs/core/language.md#modules)).
+- [ ] Route embedded std through the module loader while preserving automatic `std.print(...)` access. Resolve the compiler's `std.string` and `std.Result` hooks by declaration identity. Decide separately whether to require an explicit std import later.
+- [ ] Add a manifest for local package dependencies and public entry points such as `"acme.http"`. Add named re-exports such as `export { Request, connect } from "./client.erx";`.
+- [ ] Add version resolution, a lockfile and registry support. The package manager pins dependencies and the compiler consumes the resolved graph.
 
 ## Backends
 

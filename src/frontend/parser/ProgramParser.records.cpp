@@ -126,7 +126,7 @@ namespace erax::frontend {
       return std::unexpected(name.error());
     }
     const auto qualified = qualified_name(context_.current_namespace(), *name);
-    RecordInfo* record = context_.find_record(qualified);
+    RecordInfo* record = context_.find_root_record(qualified);
     if (!record) {
       return std::unexpected(ParseError {"internal error: missing structure declaration", cursor.location()});
     }

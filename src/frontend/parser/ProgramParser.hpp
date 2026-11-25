@@ -16,6 +16,15 @@
 
 namespace erax::frontend {
 
+  struct ModuleImport {
+    std::string module;
+    std::string name;
+    std::string alias;
+    SourceLocation location;
+  };
+
+  using ModuleImports = std::unordered_map<std::string, std::vector<ModuleImport>>;
+
   /// Lowers a whole `.erx` file to a `Program`: the globals, the functions, and
   /// the CFG of every body. Like the tokenizer it is all-or-nothing, and like the
   /// tokenizer it builds no tree — a source file becomes JIR and nothing else.
@@ -34,7 +43,7 @@ namespace erax::frontend {
   /// one block, because `&&`, `||` and `^^` are eager.
   class ProgramParser {
 public:
-    explicit ProgramParser(const std::vector<Token>& tokens);
+    explicit ProgramParser(const std::vector<Token>& tokens, ModuleImports imports = {});
 
     using result = std::expected<middleend::Program, ParseError>;
     using step = std::expected<void, ParseError>;
@@ -42,6 +51,8 @@ public:
     result parse();
 
 private:
+    ModuleImports imports_;
+    step bind_imports(NameSpace& scope, const std::string& module);
     /// A function's name, its parameters, and its return type — everything a
     /// call needs before the function itself is parsed. A non-empty `type_params`
     /// makes it a template, whose parameter and return types may name them.

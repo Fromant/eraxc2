@@ -77,6 +77,11 @@ Every operand is `(kind, type, value)` — self-describing; nothing is resolved 
 
 ## Operations
 
+The frontend resolves [source imports](../core/language.md#modules) to the
+original declarations. Imported globals and functions use the same table IDs
+as references from their declaring module. The global table encodes the
+initialization order across modules.
+
 ### Data movement
 
 Source-level `move local` lowers to a `MOV` into a fresh result cell. Consumption,

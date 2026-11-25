@@ -27,6 +27,7 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
 endif()
 
 add_library(erax
+    src/frontend/ModuleLoader.cpp
     src/frontend/tokenizer/Tokenizer.cpp
     src/frontend/parser/SemType.cpp
     src/frontend/parser/Value.cpp

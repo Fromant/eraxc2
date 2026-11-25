@@ -31,3 +31,6 @@ target_link_libraries(erax_tests PRIVATE erax Catch2::Catch2WithMain)
 target_compile_definitions(erax_tests PRIVATE ERAX_EXAMPLES_DIR="${CMAKE_SOURCE_DIR}/examples")
 
 add_test(NAME erax_tests COMMAND erax_tests)
+add_test(NAME erax_modules
+    COMMAND "${CMAKE_COMMAND}" "-DERAXC=$<TARGET_FILE:eraxc>" "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/modules"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/Modules.test.cmake")

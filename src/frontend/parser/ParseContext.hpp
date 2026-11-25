@@ -9,6 +9,7 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include "SemType.hpp"
@@ -34,6 +35,8 @@ namespace erax::frontend {
     Private,
     Destructor,
     Namespace,
+    Import,
+    Export,
     If,
     Else,
     While,
@@ -342,12 +345,25 @@ private:
   /// (`docs/core/language.md#namespaces`). Names are resolved inside-out; a
   /// namespace's own members shadow an enclosing namespace's. The root namespace
   /// has an empty `path` and holds the program's top-level names.
+  struct NameSpace;
+
+  struct ImportBinding {
+    const NameSpace* source;
+    std::string name;
+    SourceLocation location;
+  };
+
   struct NameSpace {
     std::vector<std::string> path;
     std::unordered_map<std::string, GlobalInfo> globals;
     std::unordered_map<std::string, std::vector<FunctionInfo>> functions;
     std::unordered_map<std::string, TemplateInfo> templates;
     std::unordered_map<std::string, std::unique_ptr<NameSpace>> namespaces;
+    std::unordered_map<std::string, ImportBinding> imports;
+    std::unordered_set<std::string> exports;
+    // A namespace imported from another file exposes only its exported members.
+    std::unique_ptr<NameSpace> public_view;
+    const NameSpace* viewed_namespace = nullptr;
   };
 
   /// Which of the visible locals are assigned on entry to a loop: after the loop a
@@ -473,8 +489,11 @@ public:
     /// Resolves \p path (one identifier per segment) from the current namespace:
     /// the first segment searches outward, each later one is a direct member of the
     /// namespace before it. Null with a message when a segment names no namespace.
-    std::expected<NameSpace*, ParseError> resolve_namespace(const std::vector<std::string>& path,
-                                                            SourceLocation location) const;
+    std::expected<const NameSpace*, ParseError> resolve_namespace(const std::vector<std::string>& path,
+                                                                  SourceLocation location) const;
+    const NameSpace* find_module(const std::string& name) const noexcept;
+    bool at_entry_root() const noexcept;
+    bool at_file_root() const noexcept;
     /// Sets the active namespace to \p path from the root (for re-parsing a
     /// template's body), returning the previous path so it can be restored.
     std::vector<std::string> set_namespace_path(const std::vector<std::string>& path);
@@ -605,6 +624,8 @@ private:
     /// The root namespace holds the program's top-level names; `namespace_stack_`
     /// walks from it into the declaration currently being parsed.
     NameSpace root_namespace_;
+    bool in_file_scope() const noexcept;
+    RecordInfo* find_record_in(const NameSpace& ns, const std::string& name) const noexcept;
     std::vector<NameSpace*> namespace_stack_ {&root_namespace_};
     std::vector<Instantiation> instantiations_;
     /// The instantiation key (qualified name plus its type arguments) to its index
